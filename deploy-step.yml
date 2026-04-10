@@ -1,0 +1,31 @@
+# GitHub Actions step to trigger deployment after a successful release build.
+#
+# SETUP REQUIRED — Add these secrets to your GitHub repository:
+#   Settings → Secrets and variables → Actions → New repository secret
+#
+#   DEPLOY_WEBHOOK_SECRET  →  The bearer token (same as WEBHOOK_SECRET in /etc/auto-deploy.env)
+#   DEPLOY_WEBHOOK_URL     →  Your server URL, e.g. http://YOUR_SERVER_IP:9000
+#
+# HOW TO USE:
+#   Copy the step below into your existing workflow, inside the job that builds
+#   and publishes the release. It should run AFTER the release is published.
+#   Add `if: github.event_name == 'release'` if your workflow handles multiple triggers.
+
+- name: Trigger deployment
+  if: success()
+  run: |
+    HTTP_STATUS=$(curl -s -o /tmp/deploy-response.txt -w '%{http_code}' \
+      -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}/webhook" \
+      -H "Authorization: Bearer ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
+      -H "Content-Type: application/json" \
+      -d "{\"tag\": \"${{ github.ref_name }}\"}" \
+      --connect-timeout 10 \
+      --max-time 120)
+    echo "Deploy webhook response (HTTP $HTTP_STATUS):"
+    cat /tmp/deploy-response.txt
+    echo ""
+    if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+      echo "::error::Deployment failed with HTTP $HTTP_STATUS"
+      exit 1
+    fi
+    echo "Deployment triggered successfully"

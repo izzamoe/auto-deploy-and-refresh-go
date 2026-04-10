@@ -1,0 +1,16 @@
+[Unit]
+Description=Auto Deploy Webhook Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/auto-deploy
+ExecStart=/opt/auto-deploy/auto-deploy
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/etc/auto-deploy.env
+
+[Install]
+WantedBy=multi-user.target
