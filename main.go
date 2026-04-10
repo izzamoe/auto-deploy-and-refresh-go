@@ -35,6 +35,7 @@ type response struct {
 var deployMu sync.Mutex
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	cfg := loadConfig()
 
 	mux := http.NewServeMux()
@@ -99,8 +100,12 @@ func webhookHandler(cfg *Config) http.HandlerFunc {
 		}
 
 		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			writeJSON(w, http.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
+			return
+		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if authHeader == "" || !hmac.Equal([]byte(token), []byte(cfg.Secret)) {
+		if !hmac.Equal([]byte(token), []byte(cfg.Secret)) {
 			writeJSON(w, http.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
 			return
 		}
