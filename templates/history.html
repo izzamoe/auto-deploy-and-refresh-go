@@ -20,7 +20,7 @@
         <tbody>
             {{ if .Jobs }}
                 {{ range .Jobs }}
-                <tr>
+                <tr data-status="{{ .Status }}">
                     <td>
                         <strong>{{ .Tag }}</strong>
                         {{ if .RetryOfJobID }}
@@ -71,4 +71,13 @@
         </tbody>
     </table>
 </div>
+
+<script>
+(function() {
+    var active = document.querySelectorAll('[data-status="in_progress"],[data-status="pending"]');
+    if (active.length > 0) {
+        setTimeout(function() { window.location.reload(); }, 8000);
+    }
+})();
+</script>
 {{ end }}

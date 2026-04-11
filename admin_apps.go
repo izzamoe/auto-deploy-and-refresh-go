@@ -4,6 +4,7 @@ import (
 	"errors"
 	"html/template"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -137,7 +138,7 @@ func (h *AppAdminHandler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/admin/apps?flash=App+created+successfully", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/apps?flash=App+created+successfully&curl="+url.QueryEscape(secret)+"&appname="+url.QueryEscape(app.Name), http.StatusSeeOther)
 }
 
 func (h *AppAdminHandler) EditAppForm(w http.ResponseWriter, r *http.Request) {

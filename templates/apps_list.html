@@ -1,4 +1,50 @@
 {{ define "content" }}
+{{ if .CurlSecret }}
+<div style="background:#fffbeb;border:1px solid #fbbf24;border-radius:6px;padding:16px;margin-bottom:20px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <strong style="color:#92400e;">⚠ Save your webhook secret — it won't be shown again</strong>
+    </div>
+    <p style="font-size:0.875rem;color:#78350f;margin-bottom:10px;">Test webhook for <strong>{{ .CurlAppName }}</strong>:</p>
+    <pre id="curl-cmd" style="background:#111;color:#e5e7eb;padding:12px;border-radius:4px;font-size:0.75rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;margin-bottom:10px;">curl -s -w '\n%{http_code}' -X POST http://YOUR_SERVER:9000/webhook \
+  -H "Authorization: Bearer {{ .CurlSecret }}" \
+  -H "Content-Type: application/json" \
+  -d '{"tag":"v1.0.0"}'</pre>
+    <button onclick="copyCurlCmd()" class="btn btn-secondary" style="font-size:0.8rem;">Copy to Clipboard</button>
+</div>
+<script>
+function copyCurlCmd() {
+    var text = document.getElementById('curl-cmd').innerText;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+            var btn = event.target;
+            btn.textContent = 'Copied!';
+            setTimeout(function() { btn.textContent = 'Copy to Clipboard'; }, 2000);
+        }).catch(function() { fallbackCopy(text); });
+    } else {
+        fallbackCopy(text);
+    }
+}
+function fallbackCopy(text) {
+    var el = document.getElementById('curl-cmd');
+    var range = document.createRange();
+    range.selectNode(el);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    try { document.execCommand('copy'); } catch(e) {}
+    window.getSelection().removeAllRanges();
+}
+</script>
+{{ end }}
+<style>
+.btn-danger {
+    background-color: var(--accent-danger);
+    color: var(--text-inverse);
+    border-color: transparent;
+}
+.btn-danger:hover {
+    background-color: #c00000;
+}
+</style>
 <div class="page-header">
     <h1 class="page-title">Apps</h1>
     <a href="/admin/apps/new" class="btn btn-primary">Add New App</a>
@@ -14,6 +60,8 @@
                 <th>Repo</th>
                 <th>Artifact</th>
                 <th>Status</th>
+                <th>Last Deploy</th>
+                <th>Last Status</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -34,19 +82,50 @@
                         {{ end }}
                     </td>
                     <td>
+                        {{ if .LastDeployTag }}
+                            <span style="font-size:0.8rem;">{{ .LastDeployTag }}</span>
+                            {{ if .LastDeployTime }}
+                            <div style="font-size:0.7rem; color: var(--text-muted);">{{ .LastDeployTime.Format "Jan 02 15:04" }}</div>
+                            {{ end }}
+                        {{ else }}
+                            <span style="color:var(--text-muted);">-</span>
+                        {{ end }}
+                    </td>
+                    <td>
+                        {{ if .LastDeployStatus }}
+                            {{ if eq .LastDeployStatus "succeeded" }}
+                                <span class="badge active" data-status="{{ .LastDeployStatus }}">succeeded</span>
+                            {{ else if eq .LastDeployStatus "failed" }}
+                                <span class="badge failed" data-status="{{ .LastDeployStatus }}">failed</span>
+                            {{ else if eq .LastDeployStatus "in_progress" }}
+                                <span class="badge queued" style="background:#fff4d2;color:#b8860b;" data-status="{{ .LastDeployStatus }}">in_progress</span>
+                            {{ else if eq .LastDeployStatus "pending" }}
+                                <span class="badge queued" style="background:var(--status-disabled-bg);color:var(--status-disabled-fg);" data-status="{{ .LastDeployStatus }}">pending</span>
+                            {{ else }}
+                                <span class="badge disabled" data-status="{{ .LastDeployStatus }}">{{ .LastDeployStatus }}</span>
+                            {{ end }}
+                        {{ else }}
+                            <span style="color:var(--text-muted);">-</span>
+                        {{ end }}
+                    </td>
+                    <td>
                         <div style="display: flex; gap: 8px;">
                             <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
                             <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
                             <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" style="display:inline;">
                                 <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
                             </form>
+                            {{ if .Enabled }}
+                            <button type="button" class="btn btn-secondary" onclick="showDeployModal('{{ .ID }}', '{{ .Name }}')">Deploy</button>
+                            {{ end }}
+                            <button type="button" class="btn btn-danger" onclick="showDeleteModal('{{ .ID }}', '{{ .Name }}')">Delete</button>
                         </div>
                     </td>
                 </tr>
                 {{ end }}
             {{ else }}
                 <tr>
-                    <td colspan="7">
+                    <td colspan="9">
                         <div class="empty-state">
                             <p>No apps configured yet.</p>
                             <a href="/admin/apps/new" style="margin-top: 16px;" class="btn btn-primary">Create your first app</a>
@@ -57,4 +136,70 @@
         </tbody>
     </table>
 </div>
+
+<div id="delete-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:8px;padding:24px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.18);">
+        <h3 style="margin-bottom:12px;font-size:1.1rem;">Delete App</h3>
+        <p>Are you sure you want to delete <strong id="delete-app-name"></strong>?</p>
+        <p style="margin-top:8px;font-size:0.875rem;color:var(--text-muted);">This will permanently delete the app and all its deploy history.</p>
+        <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end;">
+            <button type="button" onclick="closeDeleteModal()" class="btn btn-secondary">Cancel</button>
+            <form id="delete-form" method="POST" action="" style="margin:0;">
+                <button type="submit" class="btn btn-danger">Delete</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div id="deploy-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:8px;padding:24px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.18);">
+        <h3 style="margin-bottom:12px;font-size:1.1rem;">Manual Deploy</h3>
+        <p>Deploy <strong id="deploy-app-name"></strong></p>
+        <form id="deploy-form" method="POST" action="" style="margin-top:16px;">
+            <label for="deploy-tag-input" style="display:block;font-size:0.875rem;font-weight:500;margin-bottom:6px;">Tag (e.g. v1.2.3)</label>
+            <input type="text" id="deploy-tag-input" name="tag" placeholder="v1.2.3" required
+                style="width:100%;height:36px;padding:0 8px;border:1px solid #eaeaea;border-radius:4px;font-size:0.875rem;font-family:inherit;">
+            <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+                <button type="button" onclick="closeDeployModal()" class="btn btn-secondary">Cancel</button>
+                <button type="submit" class="btn btn-primary">Deploy</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showDeleteModal(id, name) {
+    document.getElementById('delete-app-name').textContent = name;
+    document.getElementById('delete-form').action = '/admin/apps/' + id + '/delete';
+    var m = document.getElementById('delete-modal');
+    m.style.display = 'flex';
+}
+function closeDeleteModal() {
+    document.getElementById('delete-modal').style.display = 'none';
+}
+function showDeployModal(id, name) {
+    document.getElementById('deploy-app-name').textContent = name;
+    document.getElementById('deploy-form').action = '/admin/apps/' + id + '/deploy';
+    document.getElementById('deploy-tag-input').value = '';
+    var m = document.getElementById('deploy-modal');
+    m.style.display = 'flex';
+}
+function closeDeployModal() {
+    document.getElementById('deploy-modal').style.display = 'none';
+}
+// Close modals on backdrop click
+document.getElementById('delete-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeDeleteModal();
+});
+document.getElementById('deploy-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeDeployModal();
+});
+// Auto-refresh if any deploy is active
+(function() {
+    var active = document.querySelectorAll('[data-status="in_progress"],[data-status="pending"]');
+    if (active.length > 0) {
+        setTimeout(function() { window.location.reload(); }, 10000);
+    }
+})();
+</script>
 {{ end }}
