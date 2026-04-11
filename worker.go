@@ -66,7 +66,7 @@ func (w *Worker) loop(ctx context.Context) {
 			errMsg = err.Error()
 		}
 
-		if markErr := w.q.MarkDone(id, success, errMsg); markErr != nil {
+		if markErr := w.q.MarkDone(id, success, errMsg, nil); markErr != nil {
 			slog.Error("mark done failed", "id", id, "err", markErr)
 		}
 
@@ -78,23 +78,25 @@ func (w *Worker) loop(ctx context.Context) {
 	}
 }
 
-type CoordinatorRunner func(app *App, tag string) error
+type CoordinatorRunner func(app *App, jobID, tag string) (DownloadSummary, error)
 
 type Coordinator struct {
-	apps   *AppStore
-	q      *DeployQueue
-	runner CoordinatorRunner
-	wg     sync.WaitGroup
+	apps    *AppStore
+	q       *DeployQueue
+	runner  CoordinatorRunner
+	tracker *ProgressTracker
+	wg      sync.WaitGroup
 
 	mu         sync.Mutex
 	activeApps map[string]bool
 }
 
-func NewCoordinator(apps *AppStore, q *DeployQueue, runner CoordinatorRunner) *Coordinator {
+func NewCoordinator(apps *AppStore, q *DeployQueue, runner CoordinatorRunner, tracker *ProgressTracker) *Coordinator {
 	return &Coordinator{
 		apps:       apps,
 		q:          q,
 		runner:     runner,
+		tracker:    tracker,
 		activeApps: make(map[string]bool),
 	}
 }
@@ -105,6 +107,23 @@ func (c *Coordinator) Start(ctx context.Context) {
 		defer c.wg.Done()
 		c.schedule(ctx)
 	}()
+
+	if c.tracker != nil {
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					c.tracker.Cleanup()
+				}
+			}
+		}()
+	}
 }
 
 func (c *Coordinator) Wait() {
@@ -176,7 +195,7 @@ func (c *Coordinator) runDeploy(app App, jobID, tag string) {
 		c.mu.Unlock()
 	}()
 
-	err := c.runner(&app, tag)
+	summary, err := c.runner(&app, jobID, tag)
 	success := err == nil
 
 	var errMsg string
@@ -184,7 +203,12 @@ func (c *Coordinator) runDeploy(app App, jobID, tag string) {
 		errMsg = err.Error()
 	}
 
-	if markErr := c.q.MarkDone(jobID, success, errMsg); markErr != nil {
+	var summaryPtr *DownloadSummary
+	if summary.Bytes > 0 {
+		summaryPtr = &summary
+	}
+
+	if markErr := c.q.MarkDone(jobID, success, errMsg, summaryPtr); markErr != nil {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
 	}
 

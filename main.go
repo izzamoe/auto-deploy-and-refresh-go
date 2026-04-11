@@ -66,12 +66,15 @@ func main() {
 
 	admission := NewAdmissionService(appStore, q)
 
+	tracker := NewProgressTracker()
+	dlClient := NewDownloadClient()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	coordinator := NewCoordinator(appStore, q, func(app *App, tag string) error {
-		return deploy(app, tag)
-	})
+	coordinator := NewCoordinator(appStore, q, func(app *App, jobID, tag string) (DownloadSummary, error) {
+		return deploy(app, jobID, tag, tracker, dlClient)
+	}, tracker)
 	coordinator.Start(ctx)
 
 	adminHandler, err := NewAdminHandler(serviceCfg)
@@ -80,14 +83,16 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
-	appAdminHandler := NewAppAdminHandler(appStore, q, adminHandler.templates)
-	historyAdminHandler := NewHistoryAdminHandler(appStore, q, adminHandler.templates)
+	appAdminHandler := NewAppAdminHandler(appStore, q, adminHandler.templates, tracker)
+	historyAdminHandler := NewHistoryAdminHandler(appStore, q, adminHandler.templates, tracker)
+	progressAdminHandler := NewProgressAdminHandler(tracker)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /webhook", multiAppWebhookHandler(admission))
 	authMiddleware := BasicAuthMiddleware(serviceCfg.AdminUsername, serviceCfg.AdminPassword)
 	RegisterAdminAppRoutes(mux, appAdminHandler, authMiddleware)
 	RegisterAdminHistoryRoutes(mux, historyAdminHandler, authMiddleware)
+	RegisterAdminProgressRoutes(mux, progressAdminHandler, authMiddleware)
 
 	server := &http.Server{
 		Addr:    serviceCfg.ListenAddr,
@@ -163,26 +168,48 @@ func multiAppWebhookHandler(admission *AdmissionService) http.HandlerFunc {
 	}
 }
 
-func deploy(app *App, tag string) error {
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", app.GithubRepo, tag, app.ArtifactName)
-	tmpPath := app.BinaryPath + ".tmp"
-
-	// Download
-	slog.Info("downloading", "url", url, "tag", tag)
-	resp, err := http.Get(url)
+func downloadBinary(url, tmpPath string, tracker *ProgressTracker, appID string, client *http.Client) (DownloadSummary, error) {
+	slog.Info("downloading", "url", url)
+	resp, err := DownloadWithRetry(client, url, nil)
 	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
+		return DownloadSummary{}, fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
-	}
-
 	f, err := os.Create(tmpPath)
 	if err != nil {
-		return fmt.Errorf("create tmp file: %w", err)
+		return DownloadSummary{}, fmt.Errorf("create tmp file: %w", err)
 	}
+
+	reader := NewCountingReader(resp.Body, resp.ContentLength, func(downloaded, total int64, speedBPS float64) {
+		tracker.Update(appID, downloaded, total, speedBPS)
+	})
+
+	downloadStart := time.Now()
+	written, err := io.Copy(f, io.LimitReader(reader, 100*1024*1024))
+	if err != nil {
+		f.Close()
+		return DownloadSummary{}, fmt.Errorf("write tmp file: %w", err)
+	}
+	f.Close()
+
+	duration := time.Since(downloadStart)
+	var avgSpeed float64
+	if duration > 0 {
+		avgSpeed = float64(written) / duration.Seconds()
+	}
+
+	return DownloadSummary{
+		Bytes:      written,
+		DurationMs: duration.Milliseconds(),
+		SpeedBPS:   avgSpeed,
+	}, nil
+}
+
+func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.Client) (DownloadSummary, error) {
+	tracker.Start(app.ID, jobID, tag)
+
+	tmpPath := app.BinaryPath + ".tmp"
 
 	cleanup := true
 	defer func() {
@@ -191,76 +218,81 @@ func deploy(app *App, tag string) error {
 		}
 	}()
 
-	if _, err := io.Copy(f, io.LimitReader(resp.Body, 100*1024*1024)); err != nil {
-		f.Close()
-		return fmt.Errorf("write tmp file: %w", err)
+	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", app.GithubRepo, tag, app.ArtifactName)
+	summary, err := downloadBinary(url, tmpPath, tracker, app.ID, client)
+	if err != nil {
+		tracker.Fail(app.ID)
+		return DownloadSummary{}, err
 	}
-	f.Close()
 
-	// Validate ELF
 	ef, err := os.Open(tmpPath)
 	if err != nil {
-		return fmt.Errorf("open tmp for validation: %w", err)
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("open tmp for validation: %w", err)
 	}
 	magic := make([]byte, 4)
 	if _, err := io.ReadFull(ef, magic); err != nil {
 		ef.Close()
-		return fmt.Errorf("read magic bytes: %w", err)
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("read magic bytes: %w", err)
 	}
 	ef.Close()
 
 	if magic[0] != 0x7f || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F' {
-		return fmt.Errorf("invalid binary: not an ELF executable")
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("invalid binary: not an ELF executable")
 	}
 
-	// Chmod
 	if err := os.Chmod(tmpPath, 0755); err != nil {
-		return fmt.Errorf("chmod: %w", err)
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("chmod: %w", err)
 	}
 
-	// Backup existing binary if it exists
 	if _, err := os.Stat(app.BinaryPath); err == nil {
 		slog.Info("backup", "from", app.BinaryPath, "to", app.BinaryPath+".bak")
 		if err := os.Rename(app.BinaryPath, app.BinaryPath+".bak"); err != nil {
-			return fmt.Errorf("backup: %w", err)
+			tracker.Fail(app.ID)
+			return summary, fmt.Errorf("backup: %w", err)
 		}
 	}
 
-	// Replace
 	slog.Info("replacing binary")
 	cleanup = false
 	if err := os.Rename(tmpPath, app.BinaryPath); err != nil {
 		cleanup = true
-		return fmt.Errorf("replace binary: %w", err)
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("replace binary: %w", err)
 	}
 
-	// Restart service
 	slog.Info("restarting service", "service", app.ServiceName)
 	if out, err := exec.Command("systemctl", "restart", app.ServiceName).CombinedOutput(); err != nil {
-		return fmt.Errorf("restart service: %w: %s", err, string(out))
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("restart service: %w: %s", err, string(out))
 	}
 
-	// Health check
 	for i := 1; i <= 5; i++ {
 		time.Sleep(2 * time.Second)
 		out, err := exec.Command("systemctl", "is-active", app.ServiceName).CombinedOutput()
 		status := strings.TrimSpace(string(out))
 		slog.Info("health check", "attempt", i, "status", status)
 		if err == nil && status == "active" {
-			return nil
+			tracker.Finish(app.ID)
+			return summary, nil
 		}
 	}
 
-	// Rollback
 	slog.Error("rolling back", "reason", "service failed health check")
 	if err := os.Rename(app.BinaryPath+".bak", app.BinaryPath); err != nil {
-		return fmt.Errorf("rollback rename failed: %w", err)
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("rollback rename failed: %w", err)
 	}
 	if out, err := exec.Command("systemctl", "restart", app.ServiceName).CombinedOutput(); err != nil {
-		return fmt.Errorf("rollback restart failed: %w: %s", err, string(out))
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("rollback restart failed: %w: %s", err, string(out))
 	}
 
-	return fmt.Errorf("service failed to restart after deploy, rolled back")
+	tracker.Fail(app.ID)
+	return summary, fmt.Errorf("service failed to restart after deploy, rolled back")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

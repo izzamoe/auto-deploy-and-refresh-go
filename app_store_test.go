@@ -419,6 +419,9 @@ func newTestAppStoreWithJobs(t *testing.T) *AppStore {
 		trigger_type    TEXT NOT NULL DEFAULT 'webhook',
 		retry_of_job_id TEXT,
 		error_msg       TEXT,
+		download_bytes INTEGER NOT NULL DEFAULT 0,
+		download_duration_ms INTEGER NOT NULL DEFAULT 0,
+		download_speed_bps REAL NOT NULL DEFAULT 0,
 		created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
@@ -437,7 +440,7 @@ func TestAppStoreDeleteRemovesAppAndJobs(t *testing.T) {
 	}
 
 	_, err = store.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job1', 1, ?, 'v1.0.0', 'succeeded', 'webhook')`,
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job1', 1, ?, 'v1.0.0', 'succeeded', 'webhook', 0, 0, 0)`,
 		app.ID,
 	)
 	if err != nil {
@@ -467,7 +470,7 @@ func TestAppStoreDeleteBlockedByActiveJob(t *testing.T) {
 	app, _ := store.Create("testapp", "secret", "/bin/app", "app.service", "user/repo", "app-linux")
 
 	store.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job1', 1, ?, 'v1.0.0', 'in_progress', 'webhook')`,
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job1', 1, ?, 'v1.0.0', 'in_progress', 'webhook', 0, 0, 0)`,
 		app.ID,
 	)
 
@@ -484,7 +487,7 @@ func TestAppStoreListWithLastDeploy(t *testing.T) {
 	app2, _ := store.Create("app2", "secret2", "/bin/app2", "app2.service", "user/repo2", "art2")
 
 	store.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job1', 1, ?, 'v2.0.0', 'succeeded', 'webhook')`,
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job1', 1, ?, 'v2.0.0', 'succeeded', 'webhook', 0, 0, 0)`,
 		app1.ID,
 	)
 
@@ -512,8 +515,23 @@ func TestAppStoreListWithLastDeploy(t *testing.T) {
 	if result1.LastDeployStatus != "succeeded" {
 		t.Errorf("Expected app1 LastDeployStatus=succeeded, got %q", result1.LastDeployStatus)
 	}
+	if result1.LastJobID != "job1" {
+		t.Errorf("Expected app1 LastJobID=job1, got %q", result1.LastJobID)
+	}
+	if result1.LastJobStatus != "succeeded" {
+		t.Errorf("Expected app1 LastJobStatus=succeeded, got %q", result1.LastJobStatus)
+	}
+	if result1.LastDownloadBytes != 0 {
+		t.Errorf("Expected app1 LastDownloadBytes=0, got %d", result1.LastDownloadBytes)
+	}
+	if result1.LastDownloadSpeedBPS != 0 {
+		t.Errorf("Expected app1 LastDownloadSpeedBPS=0, got %f", result1.LastDownloadSpeedBPS)
+	}
 	if result2.LastDeployTag != "" {
 		t.Errorf("Expected app2 LastDeployTag empty, got %q", result2.LastDeployTag)
+	}
+	if result2.LastJobID != "" || result2.LastJobStatus != "" || result2.LastDownloadBytes != 0 || result2.LastDownloadSpeedBPS != 0 {
+		t.Errorf("Expected app2 last job fields zero values, got %+v", result2)
 	}
 	_ = app2
 }

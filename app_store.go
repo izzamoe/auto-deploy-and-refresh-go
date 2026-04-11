@@ -16,9 +16,14 @@ var ErrActiveDeployExists = errors.New("active deploy in progress")
 
 type AppWithLastDeploy struct {
 	App
-	LastDeployTag    string
-	LastDeployStatus string
-	LastDeployTime   *time.Time
+	LastDeployTag        string
+	LastDeployStatus     string
+	LastDeployTime       *time.Time
+	LastJobID            string
+	LastJobStatus        string
+	LastDownloadBytes    int64
+	LastDownloadSpeedBPS float64
+	LiveProgress         *ProgressSnapshot
 }
 
 type App struct {
@@ -281,10 +286,10 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 	rows, err := s.db.Query(`
 		SELECT a.id, a.name, a.webhook_secret_hash, a.binary_path, a.service_name,
 		       a.github_repo, a.artifact_name, a.enabled, a.created_at, a.updated_at,
-		       j.tag, j.status, j.created_at
+		       j.id, j.tag, j.status, j.download_bytes, j.download_speed_bps, j.created_at
 		FROM apps a
 		LEFT JOIN (
-		  SELECT app_id, tag, status, created_at,
+		  SELECT id, app_id, tag, status, download_bytes, download_speed_bps, created_at,
 		         ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY created_at DESC) as rn
 		  FROM deploy_jobs
 		) j ON j.app_id = a.id AND j.rn = 1
@@ -299,22 +304,34 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 	for rows.Next() {
 		var a AppWithLastDeploy
 		var enabled int
-		var tag, status sql.NullString
+		var jobID, tag, status sql.NullString
+		var downloadBytes sql.NullInt64
+		var downloadSpeed sql.NullFloat64
 		var deployedAt sql.NullTime
 		if err := rows.Scan(
 			&a.ID, &a.Name, &a.WebhookSecretHash, &a.BinaryPath,
 			&a.ServiceName, &a.GithubRepo, &a.ArtifactName,
 			&enabled, &a.CreatedAt, &a.UpdatedAt,
-			&tag, &status, &deployedAt,
+			&jobID, &tag, &status, &downloadBytes, &downloadSpeed, &deployedAt,
 		); err != nil {
 			return nil, fmt.Errorf("app_store: scan with last deploy: %w", err)
 		}
 		a.Enabled = enabled == 1
+		if jobID.Valid {
+			a.LastJobID = jobID.String
+		}
 		if tag.Valid {
 			a.LastDeployTag = tag.String
 		}
 		if status.Valid {
 			a.LastDeployStatus = status.String
+			a.LastJobStatus = status.String
+		}
+		if downloadBytes.Valid {
+			a.LastDownloadBytes = downloadBytes.Int64
+		}
+		if downloadSpeed.Valid {
+			a.LastDownloadSpeedBPS = downloadSpeed.Float64
 		}
 		if deployedAt.Valid {
 			t := deployedAt.Time

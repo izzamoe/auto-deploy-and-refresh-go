@@ -11,19 +11,22 @@ type HistoryAdminHandler struct {
 	store     *AppStore
 	queue     *DeployQueue
 	templates map[string]*template.Template
+	tracker   *ProgressTracker
 }
 
-func NewHistoryAdminHandler(store *AppStore, queue *DeployQueue, templates map[string]*template.Template) *HistoryAdminHandler {
+func NewHistoryAdminHandler(store *AppStore, queue *DeployQueue, templates map[string]*template.Template, tracker *ProgressTracker) *HistoryAdminHandler {
 	return &HistoryAdminHandler{
 		store:     store,
 		queue:     queue,
 		templates: templates,
+		tracker:   tracker,
 	}
 }
 
 type historyData struct {
 	App          *App
 	Jobs         []JobRecord
+	LiveProgress map[string]*ProgressSnapshot
 	Flash        string
 	FlashMessage string
 	FlashIsError bool
@@ -43,10 +46,23 @@ func (h *HistoryAdminHandler) HistoryHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	liveProgress := make(map[string]*ProgressSnapshot)
+	if h.tracker != nil {
+		for _, job := range jobs {
+			if job.Status != "in_progress" {
+				continue
+			}
+			if snap, ok := h.tracker.Snapshot(app.ID); ok {
+				liveProgress[job.ID] = snap
+			}
+		}
+	}
+
 	flash := r.URL.Query().Get("flash")
 	data := historyData{
 		App:          app,
 		Jobs:         jobs,
+		LiveProgress: liveProgress,
 		Flash:        flash,
 		FlashMessage: flash,
 		FlashIsError: strings.Contains(strings.ToLower(flash), "failed") || strings.Contains(strings.ToLower(flash), "error") || strings.Contains(strings.ToLower(flash), "cannot"),

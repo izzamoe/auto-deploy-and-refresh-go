@@ -27,27 +27,9 @@ func newTestAppAdminHandler(t *testing.T, store *AppStore) *AppAdminHandler {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
 
-	return NewAppAdminHandler(store, queue, tmpls)
+	return NewAppAdminHandler(store, queue, tmpls, NewProgressTracker())
 }
 
-func TestAdminAppsList(t *testing.T) {
-	store := newTestAppStoreWithJobs(t)
-	handler := newTestAppAdminHandler(t, store)
-
-	mux := http.NewServeMux()
-	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
-
-	req := httptest.NewRequest("GET", "/admin/apps", nil)
-	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected 200 OK, got %d", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), `id="apps-table"`) {
-		t.Errorf("Expected body to contain #apps-table, got:\n%s", rr.Body.String())
-	}
-}
 
 func TestAdminAppsDelete(t *testing.T) {
 	store := newTestAppStoreWithJobs(t)
@@ -76,7 +58,7 @@ func TestAdminAppsDeleteBlockedByActiveJob(t *testing.T) {
 	app, _ := store.Create("active-app", "sec2", "/bin2", "svc2", "repo2", "art2")
 
 	store.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('activejob', 1, ?, 'v1.0.0', 'in_progress', 'webhook')`,
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('activejob', 1, ?, 'v1.0.0', 'in_progress', 'webhook', 0, 0, 0)`,
 		app.ID,
 	)
 
@@ -327,5 +309,47 @@ func TestAdminAppsManualDeployEmptyTag(t *testing.T) {
 	loc := rr.Header().Get("Location")
 	if !strings.Contains(loc, "flash_error=1") {
 		t.Errorf("Expected flash_error in redirect for empty tag, got %q", loc)
+	}
+}
+
+func TestAdminAppsList(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+	app, _ := store.Create("Active Deploy App", "sec-test", "/bin", "svc", "repo", "art")
+	
+	store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job-123', 1, ?, 'v1.0.0', 'in_progress', 'webhook', 0, 0, 0)`,
+		app.ID,
+	)
+
+	handler := newTestAppAdminHandler(t, store)
+
+	// Set progress for the app
+	handler.tracker.Start(app.ID, "job-123", "v1.0.0")
+	handler.tracker.Update(app.ID, 450, 1000, 2500)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("GET", "/admin/apps", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected 200 OK, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	
+	// Check for DOM hooks
+	if !strings.Contains(body, `data-progress-job="job-123"`) {
+		t.Errorf("Expected body to contain data-progress-job, got:\n%s", body)
+	}
+	if !strings.Contains(body, `data-app-id="`+app.ID+`"`) {
+		t.Errorf("Expected body to contain data-app-id")
+	}
+	if !strings.Contains(body, `data-progress-percent`) {
+		t.Errorf("Expected body to contain data-progress-percent")
+	}
+	if !strings.Contains(body, `data-progress-speed`) {
+		t.Errorf("Expected body to contain data-progress-speed")
 	}
 }

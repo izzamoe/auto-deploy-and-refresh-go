@@ -3,9 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -283,5 +287,169 @@ func TestWebhookMethodNotAllowedReturns405(t *testing.T) {
 				t.Errorf("expected error=method not allowed, got %q", resp.Error)
 			}
 		})
+	}
+}
+
+func testApp(tmpDir string) *App {
+	return &App{
+		ID:           "test-app-id",
+		Name:         "test-app",
+		BinaryPath:   filepath.Join(tmpDir, "binary"),
+		ServiceName:  "test.service",
+		GithubRepo:   "owner/repo",
+		ArtifactName: "artifact",
+		Enabled:      true,
+	}
+}
+
+func TestDeployDownloadProgress(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 4096)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+
+	tracker := NewProgressTracker()
+	tracker.Start(app.ID, "job-1", "v1.0.0")
+	client := srv.Client()
+
+	tmpPath := filepath.Join(tmpDir, "download.tmp")
+	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, client)
+	if err != nil {
+		t.Fatalf("downloadBinary: %v", err)
+	}
+
+	if summary.Bytes != int64(len(body)) {
+		t.Errorf("summary.Bytes = %d, want %d", summary.Bytes, len(body))
+	}
+	if summary.DurationMs < 0 {
+		t.Errorf("summary.DurationMs = %d, want >= 0", summary.DurationMs)
+	}
+
+	snap, ok := tracker.Snapshot(app.ID)
+	if !ok {
+		t.Fatal("expected tracker snapshot for app")
+	}
+	if snap.DownloadedBytes != int64(len(body)) {
+		t.Errorf("tracker downloaded = %d, want %d", snap.DownloadedBytes, len(body))
+	}
+
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		t.Fatalf("read tmpPath: %v", err)
+	}
+	if len(data) != len(body) {
+		t.Errorf("file size = %d, want %d", len(data), len(body))
+	}
+}
+
+func TestDeployDownloadRetry(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Length", "5")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hello"))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+
+	tracker := NewProgressTracker()
+	tracker.Start(app.ID, "job-retry", "v1.0.0")
+	client := srv.Client()
+
+	tmpPath := filepath.Join(tmpDir, "download.tmp")
+	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, client)
+	if err != nil {
+		t.Fatalf("downloadBinary after retries: %v", err)
+	}
+
+	if summary.Bytes != 5 {
+		t.Errorf("summary.Bytes = %d, want 5", summary.Bytes)
+	}
+
+	if int(attempts.Load()) < 3 {
+		t.Errorf("expected at least 3 attempts, got %d", attempts.Load())
+	}
+}
+
+func TestDeployDownloadFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+
+	tracker := NewProgressTracker()
+	tracker.Start(app.ID, "job-fail", "v1.0.0")
+	client := srv.Client()
+
+	tmpPath := filepath.Join(tmpDir, "download.tmp")
+	_, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, client)
+	if err == nil {
+		t.Fatal("expected error from 404 server")
+	}
+	if !strings.Contains(err.Error(), "download failed") {
+		t.Errorf("error = %q, want to contain 'download failed'", err.Error())
+	}
+
+	if _, statErr := os.Stat(tmpPath); statErr == nil {
+		t.Error("expected temp file to not exist after download failure")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestDeployCleanupOnValidationFailure(t *testing.T) {
+	body := []byte("not-an-elf-binary")
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		rec.WriteHeader(http.StatusOK)
+		rec.Write(body)
+		return rec.Result(), nil
+	})
+	client := &http.Client{Transport: transport}
+
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	tracker := NewProgressTracker()
+
+	_, err := deploy(app, "job-elf-fail", "v1.0.0", tracker, client)
+	if err == nil {
+		t.Fatal("expected deploy to fail on ELF validation")
+	}
+	if !strings.Contains(err.Error(), "not an ELF executable") {
+		t.Errorf("error = %q, want to contain 'not an ELF executable'", err.Error())
+	}
+
+	snap, ok := tracker.Snapshot(app.ID)
+	if !ok {
+		t.Fatal("expected tracker snapshot")
+	}
+	if snap.Phase != PhaseFailed {
+		t.Errorf("phase = %q, want %q", snap.Phase, PhaseFailed)
+	}
+
+	tmpPath := app.BinaryPath + ".tmp"
+	if _, statErr := os.Stat(tmpPath); statErr == nil {
+		t.Error("expected temp file cleaned up after ELF validation failure")
 	}
 }

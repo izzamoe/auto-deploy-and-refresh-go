@@ -11,13 +11,15 @@ import (
 type AppAdminHandler struct {
 	store     *AppStore
 	queue     *DeployQueue
+	tracker   *ProgressTracker
 	templates map[string]*template.Template
 }
 
-func NewAppAdminHandler(store *AppStore, queue *DeployQueue, templates map[string]*template.Template) *AppAdminHandler {
+func NewAppAdminHandler(store *AppStore, queue *DeployQueue, templates map[string]*template.Template, tracker *ProgressTracker) *AppAdminHandler {
 	return &AppAdminHandler{
 		store:     store,
 		queue:     queue,
+		tracker:   tracker,
 		templates: templates,
 	}
 }
@@ -45,6 +47,13 @@ func (h *AppAdminHandler) ListApps(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Failed to list apps", http.StatusInternalServerError)
 		return
+	}
+	if h.tracker != nil {
+		for i := range apps {
+			if snapshot, ok := h.tracker.Snapshot(apps[i].ID); ok {
+				apps[i].LiveProgress = snapshot
+			}
+		}
 	}
 
 	flash := r.URL.Query().Get("flash")

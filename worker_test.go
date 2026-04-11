@@ -166,7 +166,7 @@ func newTestCoordinator(t *testing.T, runner CoordinatorRunner) (*Coordinator, *
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
-	c := NewCoordinator(apps, q, runner)
+	c := NewCoordinator(apps, q, runner, nil)
 	return c, apps, q
 }
 
@@ -176,7 +176,7 @@ func TestCoordinatorSerializesJobsPerApp(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
 
-	runner := func(app *App, tag string) error {
+	runner := func(app *App, jobID, tag string) (DownloadSummary, error) {
 		cur := running.Add(1)
 		for {
 			old := maxConcurrent.Load()
@@ -189,7 +189,7 @@ func TestCoordinatorSerializesJobsPerApp(t *testing.T) {
 		order = append(order, tag)
 		mu.Unlock()
 		running.Add(-1)
-		return nil
+		return DownloadSummary{}, nil
 	}
 
 	c, apps, q := newTestCoordinator(t, runner)
@@ -244,14 +244,14 @@ func TestCoordinatorAllowsDifferentAppsToProgress(t *testing.T) {
 	appARelease := make(chan struct{})
 	var appBDone atomic.Bool
 
-	runner := func(app *App, tag string) error {
+	runner := func(app *App, jobID, tag string) (DownloadSummary, error) {
 		if app.Name == "app-a" {
 			close(appAStarted)
 			<-appARelease
 		} else {
 			appBDone.Store(true)
 		}
-		return nil
+		return DownloadSummary{}, nil
 	}
 
 	c, apps, q := newTestCoordinator(t, runner)
@@ -297,11 +297,11 @@ func TestCoordinatorAllowsDifferentAppsToProgress(t *testing.T) {
 }
 
 func TestCoordinatorContinuesAfterFailure(t *testing.T) {
-	runner := func(app *App, tag string) error {
+	runner := func(app *App, jobID, tag string) (DownloadSummary, error) {
 		if tag == "v1" {
-			return fmt.Errorf("simulated failure")
+			return DownloadSummary{}, fmt.Errorf("simulated failure")
 		}
-		return nil
+		return DownloadSummary{}, nil
 	}
 
 	c, apps, q := newTestCoordinator(t, runner)
@@ -350,8 +350,8 @@ func TestCoordinatorContinuesAfterFailure(t *testing.T) {
 }
 
 func TestCoordinatorStopsOnContextCancel(t *testing.T) {
-	runner := func(app *App, tag string) error {
-		return nil
+	runner := func(app *App, jobID, tag string) (DownloadSummary, error) {
+		return DownloadSummary{}, nil
 	}
 
 	c, apps, _ := newTestCoordinator(t, runner)
@@ -374,5 +374,63 @@ func TestCoordinatorStopsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("coordinator did not stop within 2 seconds after context cancellation")
+	}
+}
+
+func TestCoordinatorSummaryPersisted(t *testing.T) {
+	wantSummary := DownloadSummary{Bytes: 4096, DurationMs: 200, SpeedBPS: 20480}
+
+	runner := func(app *App, jobID, tag string) (DownloadSummary, error) {
+		return wantSummary, nil
+	}
+
+	c, apps, q := newTestCoordinator(t, runner)
+	app, err := apps.Create("test-app", "secret1", "/bin/test1", "test1.service", "org/repo1", "artifact1")
+	if err != nil {
+		t.Fatalf("Create app: %v", err)
+	}
+
+	if err := q.Enqueue(app.ID, "v1"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c.Start(ctx)
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for job to succeed")
+		default:
+		}
+		items, err := q.ListByStatus("succeeded")
+		if err != nil {
+			t.Fatalf("ListByStatus: %v", err)
+		}
+		if len(items) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	cancel()
+	c.Wait()
+
+	items, _ := q.ListByStatus("succeeded")
+	if len(items) != 1 {
+		t.Fatalf("expected 1 succeeded job, got %d", len(items))
+	}
+
+	job := items[0]
+	if job.DownloadBytes != wantSummary.Bytes {
+		t.Errorf("DownloadBytes = %d, want %d", job.DownloadBytes, wantSummary.Bytes)
+	}
+	if job.DownloadDurationMs != wantSummary.DurationMs {
+		t.Errorf("DownloadDurationMs = %d, want %d", job.DownloadDurationMs, wantSummary.DurationMs)
+	}
+	if job.DownloadSpeedBPS != wantSummary.SpeedBPS {
+		t.Errorf("DownloadSpeedBPS = %v, want %v", job.DownloadSpeedBPS, wantSummary.SpeedBPS)
 	}
 }

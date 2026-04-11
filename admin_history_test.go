@@ -18,7 +18,7 @@ func newTestHistoryAdminHandler(t *testing.T, store *AppStore, queue *DeployQueu
 	}
 	tmpls["history.html"] = tmpl
 
-	return NewHistoryAdminHandler(store, queue, tmpls)
+	return NewHistoryAdminHandler(store, queue, tmpls, NewProgressTracker())
 }
 
 func setupHistoryTest(t *testing.T) (*sql.DB, *AppStore, *DeployQueue, *HistoryAdminHandler) {
@@ -47,7 +47,15 @@ func TestAdminHistoryList(t *testing.T) {
 		t.Fatalf("queue.Enqueue: %v", err)
 	}
 	jobID, _, _ := queue.DequeueNext(app.ID)
-	queue.MarkDone(jobID, true, "")
+	queue.MarkDone(jobID, true, "", nil)
+
+	if err := queue.Enqueue(app.ID, "v1.0.1"); err != nil {
+		t.Fatalf("queue.Enqueue: %v", err)
+	}
+	jobID2, _, _ := queue.DequeueNext(app.ID)
+
+	handler.tracker.Start(app.ID, jobID2, "v1.0.1")
+	handler.tracker.Update(app.ID, 50, 100, 10.5)
 
 	mux := http.NewServeMux()
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
@@ -67,6 +75,18 @@ func TestAdminHistoryList(t *testing.T) {
 	if !strings.Contains(body, "v1.0.0") {
 		t.Errorf("expected tag v1.0.0 in output")
 	}
+	if !strings.Contains(body, "v1.0.1") {
+		t.Errorf("expected tag v1.0.1 in output")
+	}
+	if !strings.Contains(body, `data-job-id="`+jobID2+`"`) {
+		t.Errorf("expected data-job-id attribute for row")
+	}
+	if !strings.Contains(body, `data-progress-percent`) {
+		t.Errorf("expected data-progress-percent for in_progress row")
+	}
+	if !strings.Contains(body, `data-progress-speed`) {
+		t.Errorf("expected data-progress-speed for in_progress row")
+	}
 }
 
 func TestAdminHistoryRetry(t *testing.T) {
@@ -76,7 +96,7 @@ func TestAdminHistoryRetry(t *testing.T) {
 
 	queue.Enqueue(app.ID, "v1.0.0")
 	jobID, _, _ := queue.DequeueNext(app.ID)
-	queue.MarkDone(jobID, false, "failed")
+	queue.MarkDone(jobID, false, "failed", nil)
 
 	mux := http.NewServeMux()
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
@@ -107,7 +127,7 @@ func TestAdminHistoryRetryDisabledApp(t *testing.T) {
 
 	queue.Enqueue(app.ID, "v1.0.0")
 	jobID, _, _ := queue.DequeueNext(app.ID)
-	queue.MarkDone(jobID, false, "failed")
+	queue.MarkDone(jobID, false, "failed", nil)
 
 	mux := http.NewServeMux()
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
@@ -132,7 +152,7 @@ func TestAdminHistoryRetryDuplicatePending(t *testing.T) {
 
 	queue.Enqueue(app.ID, "v1.0.0")
 	jobID, _, _ := queue.DequeueNext(app.ID)
-	queue.MarkDone(jobID, false, "failed")
+	queue.MarkDone(jobID, false, "failed", nil)
 
 	queue.Enqueue(app.ID, "v1.0.0")
 
