@@ -1,4 +1,4 @@
-.PHONY: build build-arm64 vet clean
+.PHONY: build build-arm64 vet clean test
 
 build:
 	go build -o auto-deploy .
@@ -11,3 +11,6 @@ vet:
 
 clean:
 	rm -f auto-deploy auto-deploy-arm64
+
+test:
+	go test ./...

@@ -3,8 +3,21 @@
 # SETUP REQUIRED — Add these secrets to your GitHub repository:
 #   Settings → Secrets and variables → Actions → New repository secret
 #
-#   DEPLOY_WEBHOOK_SECRET  →  The bearer token (same as WEBHOOK_SECRET in /etc/auto-deploy.env)
+#   DEPLOY_WEBHOOK_SECRET  →  The bearer token for your app
 #   DEPLOY_WEBHOOK_URL     →  Your server URL, e.g. http://YOUR_SERVER_IP:9000
+#
+# NOTE: In multi-app mode, each app has its own unique DEPLOY_WEBHOOK_SECRET.
+# The server identifies which app to deploy based on the secret provided.
+# Add apps and get their secrets via the admin UI at /admin/apps.
+#
+# RESPONSE CONTRACT:
+#   202 Accepted = deploy queued successfully (always for valid requests)
+#   200 OK       = tag already pending/running (duplicate — not re-queued)
+#   401 Unauthorized = invalid bearer token
+#   400 Bad Request  = missing or empty tag
+#   503 Service Unavailable = queue full
+#
+#   This step passes for any 2xx response.
 #
 # HOW TO USE:
 #   Copy the step below into your existing workflow, inside the job that builds

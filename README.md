@@ -1,26 +1,42 @@
 # auto-deploy
 
-A lightweight Go webhook receiver that automates binary deployment on your server.
+A lightweight Go service that automates binary deployments for multiple applications.
 When GitHub Actions publishes a release, it triggers this service to download the new binary,
 back up the old one, replace it, and restart the systemd service.
 
 ## How It Works
 
 GitHub Release → GitHub Actions (curl POST) → Webhook Service (:9000)
-  → Download binary from GitHub Releases
-  → Validate (ELF magic bytes)
-  → Backup current binary (.bak)
-  → Replace binary (atomic)
-  → Restart systemd service
-  → Health check (5 retries × 2s)
-  → Auto-rollback if health check fails
+
+1. **Webhook**: The service receives a `POST /webhook` with an app-specific Bearer token.
+2. **Resolution**: It resolves the application by the SHA256 hash of the token in its SQLite registry.
+3. **Queue**: If valid, the deployment is enqueued. The webhook returns `202 Accepted` immediately.
+4. **Coordination**: A background coordinator runs one deployment at a time per application.
+5. **Deployment**:
+   → Downloads the binary from GitHub Releases
+   → Validates the binary (ELF magic bytes)
+   → Backs up the current binary (.bak)
+   → Replaces the binary (atomically)
+   → Restarts the systemd service
+   → Performs a health check (5 retries × 2s)
+   → Automatically rolls back if the health check fails
+
+## Admin UI
+
+Manage your applications via the built-in Admin UI.
+- **Access**: `http://YOUR_SERVER:9000/admin/apps`
+- **Authentication**: Protected by HTTP Basic Auth using `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+- **Features**:
+  - Add, edit, enable, or disable applications.
+  - View deployment history and status for each app.
+  - Manually retry failed or successful deployments.
 
 ## Prerequisites
 
 - Go 1.21+ (for building)
 - Linux with systemd
 - Network access to `github.com` from the server
-- Root access (for writing to /root/pb/ and running systemctl)
+- Root access (for binary replacement and `systemctl` commands)
 
 ## Build
 
@@ -34,89 +50,88 @@ make build-arm64
 
 ## Server Setup
 
-```bash
-# 1. Copy binary to server
-scp auto-deploy-arm64 root@YOUR_SERVER:/opt/auto-deploy/auto-deploy
+1. **Copy binary to server**
+   ```bash
+   scp auto-deploy-arm64 root@YOUR_SERVER:/opt/auto-deploy/auto-deploy
+   ```
 
-# 2. Set up environment
-cp auto-deploy.env.example /etc/auto-deploy.env
-# Edit /etc/auto-deploy.env — set WEBHOOK_SECRET to a strong random token
-nano /etc/auto-deploy.env
+2. **Set up environment**
+   ```bash
+   cp auto-deploy.env.example /etc/auto-deploy.env
+   # Edit /etc/auto-deploy.env — ADMIN_PASSWORD is required
+   nano /etc/auto-deploy.env
+   ```
 
-# 3. Install systemd service
-cp auto-deploy.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now auto-deploy.service
+3. **Install systemd service**
+   ```bash
+   cp auto-deploy.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now auto-deploy.service
+   ```
 
-# 4. Verify it's running
-systemctl status auto-deploy.service
-```
+4. **Verify it's running**
+   ```bash
+   systemctl status auto-deploy.service
+   ```
 
 ## GitHub Setup
 
-Add these secrets to your GitHub repository:
-  Settings → Secrets and variables → Actions → New repository secret
+Each application configured in the Admin UI has a unique webhook secret.
+1. Create your application in the Admin UI.
+2. Add the following secrets to your GitHub repository (Settings → Secrets and variables → Actions):
+   - `DEPLOY_WEBHOOK_SECRET`: The secret token generated for the app.
+   - `DEPLOY_WEBHOOK_URL`: `http://YOUR_SERVER_IP:9000`
 
-  DEPLOY_WEBHOOK_SECRET  →  Same value as WEBHOOK_SECRET in /etc/auto-deploy.env
-  DEPLOY_WEBHOOK_URL     →  http://YOUR_SERVER_IP:9000
-
-Then copy the step from deploy-step.yml into your existing release workflow:
-
-```yaml
-- name: Trigger deployment
-  if: success()
-  run: |
-    HTTP_STATUS=$(curl -s -o /tmp/deploy-response.txt -w '%{http_code}' \
-      -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}/webhook" \
-      -H "Authorization: Bearer ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
-      -H "Content-Type: application/json" \
-      -d "{\"tag\": \"${{ github.ref_name }}\"}" \
-      --connect-timeout 10 \
-      --max-time 120)
-    echo "Deploy webhook response (HTTP $HTTP_STATUS):"
-    cat /tmp/deploy-response.txt
-    echo ""
-    if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
-      echo "::error::Deployment failed with HTTP $HTTP_STATUS"
-      exit 1
-    fi
-    echo "Deployment triggered successfully"
-```
+Refer to `deploy-step.yml` for the workflow snippet to include in your GitHub Actions.
 
 ## Environment Variables
 
+### Service Settings
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `WEBHOOK_SECRET` | — | ✅ Yes | Bearer token for auth |
-| `DEPLOY_BINARY_PATH` | `/root/pb/pocketbase` | No | Path to binary to replace |
-| `DEPLOY_SERVICE_NAME` | `pocketbase.service` | No | Systemd unit to restart |
 | `LISTEN_ADDR` | `:9000` | No | Address to listen on |
-| `GITHUB_REPO` | `izzamoe/backend-kas` | No | GitHub repo (owner/repo) |
-| `ARTIFACT_NAME` | `kas-linux-arm64` | No | Release artifact filename |
+| `DEPLOY_QUEUE_DB_PATH`| `deploy-queue.db` | No | SQLite file for registry and queue |
+| `DEPLOY_QUEUE_MAX` | `10` | No | Max pending deploys per app |
+| `ADMIN_USERNAME` | `admin` | No | Admin UI username |
+| `ADMIN_PASSWORD` | — | ✅ Yes | Admin UI password |
+
+### Bootstrap Settings (Legacy)
+These variables are only used on the first startup if the application registry is empty.
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `WEBHOOK_SECRET` | No | Initial app bearer token |
+| `DEPLOY_BINARY_PATH` | No | Initial app binary path |
+| `DEPLOY_SERVICE_NAME` | No | Initial app systemd service |
+| `GITHUB_REPO` | No | Initial app owner/repo |
+| `ARTIFACT_NAME` | No | Initial app artifact name |
 
 ## Testing
 
 ```bash
-# Check service status
-systemctl status auto-deploy.service
+# Run automated tests
+make test
 
-# Test auth rejection (should return 401)
+# Test with valid token (replace YOUR_APP_SECRET)
+# Expected response: 202 Accepted
 curl -s -w '\n%{http_code}' -X POST http://localhost:9000/webhook \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer YOUR_APP_SECRET" \
+  -H "Content-Type: application/json" \
   -d '{"tag":"v1.0.0"}'
 
-# Test with valid token (replace YOUR_SECRET)
+# Test unauthorized access
+# Expected response: 401 Unauthorized
 curl -s -w '\n%{http_code}' -X POST http://localhost:9000/webhook \
-  -H 'Authorization: Bearer YOUR_SECRET' \
-  -H 'Content-Type: application/json' \
+  -H "Content-Type: application/json" \
   -d '{"tag":"v1.0.0"}'
 ```
 
 ## Rollback
 
+If a deployment fails the health check, the service automatically restores the `.bak` file.
+To restore manually:
 ```bash
-# If deployment failed and you need to restore manually:
-systemctl stop pocketbase.service
-cp /root/pb/pocketbase.bak /root/pb/pocketbase
-systemctl start pocketbase.service
+systemctl stop your-service.service
+cp /path/to/binary.bak /path/to/binary
+systemctl start your-service.service
 ```
+

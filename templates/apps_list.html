@@ -1,0 +1,60 @@
+{{ define "content" }}
+<div class="page-header">
+    <h1 class="page-title">Apps</h1>
+    <a href="/admin/apps/new" class="btn btn-primary">Add New App</a>
+</div>
+
+<div class="table-container">
+    <table id="apps-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Service</th>
+                <th>Binary Path</th>
+                <th>Repo</th>
+                <th>Artifact</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ if .Apps }}
+                {{ range .Apps }}
+                <tr>
+                    <td><strong>{{ .Name }}</strong></td>
+                    <td>{{ .ServiceName }}</td>
+                    <td>{{ .BinaryPath }}</td>
+                    <td>{{ .GithubRepo }}</td>
+                    <td>{{ .ArtifactName }}</td>
+                    <td>
+                        {{ if .Enabled }}
+                            <span class="badge active">Active</span>
+                        {{ else }}
+                            <span class="badge disabled">Disabled</span>
+                        {{ end }}
+                    </td>
+                    <td>
+                        <div style="display: flex; gap: 8px;">
+                            <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
+                            <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
+                            <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" style="display:inline;">
+                                <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {{ end }}
+            {{ else }}
+                <tr>
+                    <td colspan="7">
+                        <div class="empty-state">
+                            <p>No apps configured yet.</p>
+                            <a href="/admin/apps/new" style="margin-top: 16px;" class="btn btn-primary">Create your first app</a>
+                        </div>
+                    </td>
+                </tr>
+            {{ end }}
+        </tbody>
+    </table>
+</div>
+{{ end }}

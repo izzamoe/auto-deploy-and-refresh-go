@@ -1,0 +1,74 @@
+{{ define "content" }}
+<div class="page-header">
+    <h1 class="page-title">{{ .App.Name }} History</h1>
+    <a href="/admin/apps" class="btn btn-secondary">Back to Apps</a>
+</div>
+
+<div class="table-container">
+    <table id="history-table">
+        <thead>
+            <tr>
+                <th>Tag</th>
+                <th>Status</th>
+                <th>Trigger</th>
+                <th>Error</th>
+                <th>Created</th>
+                <th>Updated</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ if .Jobs }}
+                {{ range .Jobs }}
+                <tr>
+                    <td>
+                        <strong>{{ .Tag }}</strong>
+                        {{ if .RetryOfJobID }}
+                        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: var(--space-1);">
+                            Retry of: {{ if gt (len .RetryOfJobID) 8 }}{{ slice .RetryOfJobID 0 8 }}{{ else }}{{ .RetryOfJobID }}{{ end }}
+                        </div>
+                        {{ end }}
+                    </td>
+                    <td>
+                        {{ if eq .Status "succeeded" }}
+                            <span class="badge active">succeeded</span>
+                        {{ else if eq .Status "failed" }}
+                            <span class="badge failed">failed</span>
+                        {{ else if eq .Status "in_progress" }}
+                            <span class="badge queued" style="background: #fff4d2; color: #b8860b;">in_progress</span>
+                        {{ else if eq .Status "pending" }}
+                            <span class="badge queued" style="background: var(--status-disabled-bg); color: var(--status-disabled-fg);">pending</span>
+                        {{ else }}
+                            <span class="badge disabled">{{ .Status }}</span>
+                        {{ end }}
+                    </td>
+                    <td>{{ .Trigger }}</td>
+                    <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; word-wrap: break-word;">
+                        {{ if .ErrorMsg }}{{ .ErrorMsg }}{{ else }}-{{ end }}
+                    </td>
+                    <td>{{ .CreatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
+                    <td>{{ .UpdatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
+                    <td>
+                        {{ if $.App.Enabled }}
+                            {{ if or (eq .Status "succeeded") (eq .Status "failed") }}
+                            <form method="POST" action="/admin/apps/{{ $.App.ID }}/retry/{{ .ID }}" style="margin: 0;">
+                                <button type="submit" class="btn btn-secondary retry-button">Retry</button>
+                            </form>
+                            {{ end }}
+                        {{ end }}
+                    </td>
+                </tr>
+                {{ end }}
+            {{ else }}
+                <tr>
+                    <td colspan="7">
+                        <div class="empty-state">
+                            <p>No deploy history for this app.</p>
+                        </div>
+                    </td>
+                </tr>
+            {{ end }}
+        </tbody>
+    </table>
+</div>
+{{ end }}
