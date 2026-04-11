@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"html/template"
 	"net/http"
 	"strings"
@@ -8,46 +9,55 @@ import (
 
 type AppAdminHandler struct {
 	store     *AppStore
+	queue     *DeployQueue
 	templates map[string]*template.Template
 }
 
-func NewAppAdminHandler(store *AppStore, templates map[string]*template.Template) *AppAdminHandler {
+func NewAppAdminHandler(store *AppStore, queue *DeployQueue, templates map[string]*template.Template) *AppAdminHandler {
 	return &AppAdminHandler{
 		store:     store,
+		queue:     queue,
 		templates: templates,
 	}
 }
 
 type appsListData struct {
-	Apps         []App
+	Apps         []AppWithLastDeploy
 	Flash        string
 	FlashMessage string
 	FlashIsError bool
+	CurlSecret   string
+	CurlAppName  string
 }
 
 type appFormData struct {
-	App    *App
-	Errors []string
-	IsEdit bool
+	App          *App
+	Errors       []string
+	IsEdit       bool
 	Flash        string
 	FlashMessage string
 	FlashIsError bool
 }
 
 func (h *AppAdminHandler) ListApps(w http.ResponseWriter, r *http.Request) {
-	apps, err := h.store.List()
+	apps, err := h.store.ListWithLastDeploy()
 	if err != nil {
 		http.Error(w, "Failed to list apps", http.StatusInternalServerError)
 		return
 	}
 
 	flash := r.URL.Query().Get("flash")
-	
+	flashError := r.URL.Query().Get("flash_error") == "1"
+	curlSecret := r.URL.Query().Get("curl")
+	curlAppName := r.URL.Query().Get("appname")
+
 	data := appsListData{
 		Apps:         apps,
 		Flash:        flash,
 		FlashMessage: flash,
-		FlashIsError: false, // Could inspect flash content or add error param, but keep simple
+		FlashIsError: flashError,
+		CurlSecret:   curlSecret,
+		CurlAppName:  curlAppName,
 	}
 
 	if err := h.templates["apps_list.html"].ExecuteTemplate(w, "base.html", data); err != nil {
@@ -82,12 +92,24 @@ func (h *AppAdminHandler) CreateApp(w http.ResponseWriter, r *http.Request) {
 	secret := r.FormValue("webhook_secret")
 
 	var errors []string
-	if app.Name == "" { errors = append(errors, "Name is required") }
-	if app.BinaryPath == "" { errors = append(errors, "Binary Path is required") }
-	if app.ServiceName == "" { errors = append(errors, "Service Name is required") }
-	if app.GithubRepo == "" { errors = append(errors, "GitHub Repo is required") }
-	if app.ArtifactName == "" { errors = append(errors, "Artifact Name is required") }
-	if secret == "" { errors = append(errors, "Webhook Secret is required") }
+	if app.Name == "" {
+		errors = append(errors, "Name is required")
+	}
+	if app.BinaryPath == "" {
+		errors = append(errors, "Binary Path is required")
+	}
+	if app.ServiceName == "" {
+		errors = append(errors, "Service Name is required")
+	}
+	if app.GithubRepo == "" {
+		errors = append(errors, "GitHub Repo is required")
+	}
+	if app.ArtifactName == "" {
+		errors = append(errors, "Artifact Name is required")
+	}
+	if secret == "" {
+		errors = append(errors, "Webhook Secret is required")
+	}
 
 	if len(errors) > 0 {
 		w.WriteHeader(http.StatusBadRequest)
@@ -161,11 +183,21 @@ func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
 	secret := r.FormValue("webhook_secret")
 
 	var errors []string
-	if updatedApp.Name == "" { errors = append(errors, "Name is required") }
-	if updatedApp.BinaryPath == "" { errors = append(errors, "Binary Path is required") }
-	if updatedApp.ServiceName == "" { errors = append(errors, "Service Name is required") }
-	if updatedApp.GithubRepo == "" { errors = append(errors, "GitHub Repo is required") }
-	if updatedApp.ArtifactName == "" { errors = append(errors, "Artifact Name is required") }
+	if updatedApp.Name == "" {
+		errors = append(errors, "Name is required")
+	}
+	if updatedApp.BinaryPath == "" {
+		errors = append(errors, "Binary Path is required")
+	}
+	if updatedApp.ServiceName == "" {
+		errors = append(errors, "Service Name is required")
+	}
+	if updatedApp.GithubRepo == "" {
+		errors = append(errors, "GitHub Repo is required")
+	}
+	if updatedApp.ArtifactName == "" {
+		errors = append(errors, "Artifact Name is required")
+	}
 
 	if len(errors) > 0 {
 		w.WriteHeader(http.StatusBadRequest)
@@ -213,12 +245,68 @@ func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/apps?flash=App+updated+successfully", http.StatusSeeOther)
 }
 
+func (h *AppAdminHandler) DeleteApp(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := h.store.Delete(id)
+	if err != nil {
+		if errors.Is(err, ErrActiveDeployExists) {
+			http.Redirect(w, r, "/admin/apps?flash=Cannot+delete+app+with+active+deploy&flash_error=1", http.StatusSeeOther)
+			return
+		}
+		http.Error(w, "Failed to delete app", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/apps?flash=App+deleted+successfully", http.StatusSeeOther)
+}
+
+func (h *AppAdminHandler) ManualDeployApp(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	app, err := h.store.Get(id)
+	if err != nil {
+		http.Error(w, "App not found", http.StatusNotFound)
+		return
+	}
+
+	if !app.Enabled {
+		http.Redirect(w, r, "/admin/apps?flash=Cannot+deploy+disabled+app&flash_error=1", http.StatusSeeOther)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	tag := r.FormValue("tag")
+	if tag == "" {
+		http.Redirect(w, r, "/admin/apps?flash=Tag+is+required&flash_error=1", http.StatusSeeOther)
+		return
+	}
+
+	err = h.queue.EnqueueManual(id, tag)
+	if err != nil {
+		if errors.Is(err, ErrDuplicate) {
+			http.Redirect(w, r, "/admin/apps/"+id+"/history?flash=Deploy+already+queued+for+this+tag", http.StatusSeeOther)
+			return
+		}
+		if errors.Is(err, ErrQueueFull) {
+			http.Redirect(w, r, "/admin/apps?flash=Queue+is+full&flash_error=1", http.StatusSeeOther)
+			return
+		}
+		http.Error(w, "Failed to queue deploy: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/admin/apps/"+id+"/history?flash=Manual+deploy+queued+for+"+tag, http.StatusSeeOther)
+}
+
 func (h *AppAdminHandler) ToggleApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	
+
 	// Determine enable/disable based on the path
 	enable := strings.HasSuffix(r.URL.Path, "/enable")
-	
+
 	if err := h.store.SetEnabled(id, enable); err != nil {
 		http.Error(w, "Failed to update app status", http.StatusInternalServerError)
 		return
@@ -237,6 +325,8 @@ func RegisterAdminAppRoutes(mux *http.ServeMux, handler *AppAdminHandler, middle
 	mux.Handle("POST /admin/apps/create", middleware(http.HandlerFunc(handler.CreateApp)))
 	mux.Handle("GET /admin/apps/{id}/edit", middleware(http.HandlerFunc(handler.EditAppForm)))
 	mux.Handle("POST /admin/apps/{id}/update", middleware(http.HandlerFunc(handler.UpdateApp)))
+	mux.Handle("POST /admin/apps/{id}/delete", middleware(http.HandlerFunc(handler.DeleteApp)))
 	mux.Handle("POST /admin/apps/{id}/enable", middleware(http.HandlerFunc(handler.ToggleApp)))
 	mux.Handle("POST /admin/apps/{id}/disable", middleware(http.HandlerFunc(handler.ToggleApp)))
+	mux.Handle("POST /admin/apps/{id}/deploy", middleware(http.HandlerFunc(handler.ManualDeployApp)))
 }

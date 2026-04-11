@@ -148,6 +148,35 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 	return err
 }
 
+func (q *DeployQueue) EnqueueManual(appID, tag string) error {
+	dup, err := q.IsDuplicate(appID, tag)
+	if err != nil {
+		return err
+	}
+	if dup {
+		return ErrDuplicate
+	}
+
+	count, err := q.PendingCount(appID)
+	if err != nil {
+		return err
+	}
+	if count >= q.maxPending {
+		return ErrQueueFull
+	}
+
+	jobID, err := generateJobID()
+	if err != nil {
+		return err
+	}
+
+	_, err = q.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'manual_deploy')`,
+		jobID, appID, tag,
+	)
+	return err
+}
+
 func (q *DeployQueue) DequeueNext(appID string) (id, tag string, err error) {
 	tx, err := q.db.Begin()
 	if err != nil {

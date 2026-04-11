@@ -80,7 +80,7 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
-	appAdminHandler := NewAppAdminHandler(appStore, adminHandler.templates)
+	appAdminHandler := NewAppAdminHandler(appStore, q, adminHandler.templates)
 	historyAdminHandler := NewHistoryAdminHandler(appStore, q, adminHandler.templates)
 
 	mux := http.NewServeMux()

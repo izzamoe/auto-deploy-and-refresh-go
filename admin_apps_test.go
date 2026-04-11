@@ -22,11 +22,16 @@ func newTestAppAdminHandler(t *testing.T, store *AppStore) *AppAdminHandler {
 		tmpls[page] = tmpl
 	}
 
-	return NewAppAdminHandler(store, tmpls)
+	queue, err := NewDeployQueue(store.db, 10)
+	if err != nil {
+		t.Fatalf("NewDeployQueue: %v", err)
+	}
+
+	return NewAppAdminHandler(store, queue, tmpls)
 }
 
 func TestAdminAppsList(t *testing.T) {
-	store := newTestAppStore(t)
+	store := newTestAppStoreWithJobs(t)
 	handler := newTestAppAdminHandler(t, store)
 
 	mux := http.NewServeMux()
@@ -41,6 +46,59 @@ func TestAdminAppsList(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `id="apps-table"`) {
 		t.Errorf("Expected body to contain #apps-table, got:\n%s", rr.Body.String())
+	}
+}
+
+func TestAdminAppsDelete(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+	app, _ := store.Create("del-app", "sec", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/delete", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Errorf("Expected 303, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+
+	_, err := store.Get(app.ID)
+	if err == nil {
+		t.Error("Expected app to be deleted")
+	}
+}
+
+func TestAdminAppsDeleteBlockedByActiveJob(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+	app, _ := store.Create("active-app", "sec2", "/bin2", "svc2", "repo2", "art2")
+
+	store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('activejob', 1, ?, 'v1.0.0', 'in_progress', 'webhook')`,
+		app.ID,
+	)
+
+	handler := newTestAppAdminHandler(t, store)
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/delete", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Errorf("Expected 303 redirect, got %d", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "flash_error=1") {
+		t.Errorf("Expected flash_error=1 in redirect, got %q", loc)
+	}
+
+	_, err := store.Get(app.ID)
+	if err != nil {
+		t.Error("App should still exist after blocked delete")
 	}
 }
 
@@ -194,5 +252,80 @@ func TestAdminAppsCreateValidationErrorsPreserveFormValues(t *testing.T) {
 	}
 	if !strings.Contains(body, `value="Preserved Name"`) {
 		t.Errorf("Expected body to contain preserved name value")
+	}
+}
+
+func TestAdminAppsManualDeploy(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("deploy-app", "sec", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("tag", "v1.0.0")
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/deploy", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Errorf("Expected 303, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "/history") {
+		t.Errorf("Expected redirect to history, got %q", loc)
+	}
+}
+
+func TestAdminAppsManualDeployDisabledApp(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("dis-app", "sec3", "/bin3", "svc3", "repo3", "art3")
+	store.SetEnabled(app.ID, false)
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("tag", "v1.0.0")
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/deploy", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Errorf("Expected 303, got %d", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "flash_error=1") {
+		t.Errorf("Expected flash_error in redirect, got %q", loc)
+	}
+}
+
+func TestAdminAppsManualDeployEmptyTag(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("tag-app", "sec4", "/bin4", "svc4", "repo4", "art4")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("tag", "")
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/deploy", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Errorf("Expected 303, got %d", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "flash_error=1") {
+		t.Errorf("Expected flash_error in redirect for empty tag, got %q", loc)
 	}
 }

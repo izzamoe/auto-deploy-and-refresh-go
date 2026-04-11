@@ -434,3 +434,25 @@ func TestQueueRejectsDuplicateWithinSameApp(t *testing.T) {
 		t.Errorf("duplicate within app2 = %v, want ErrDuplicate", err)
 	}
 }
+
+func TestEnqueueManual(t *testing.T) {
+	db := newTestDB(t)
+	q, err := NewDeployQueue(db, 10)
+	if err != nil {
+		t.Fatalf("NewDeployQueue: %v", err)
+	}
+
+	err = q.EnqueueManual("app1", "v1.0.0")
+	if err != nil {
+		t.Fatalf("EnqueueManual: %v", err)
+	}
+
+	var trigger string
+	err = db.QueryRow(`SELECT trigger_type FROM deploy_jobs WHERE app_id = ? AND tag = ?`, "app1", "v1.0.0").Scan(&trigger)
+	if err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if trigger != "manual_deploy" {
+		t.Errorf("Expected trigger_type=manual_deploy, got %q", trigger)
+	}
+}
