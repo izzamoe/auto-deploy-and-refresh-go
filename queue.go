@@ -74,6 +74,9 @@ func NewDeployQueue(db *sql.DB, maxPending int) (*DeployQueue, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("deploy_queue: create table: %w", err)
 	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_deploy_jobs_app_id ON deploy_jobs(app_id)`); err != nil {
+		return nil, fmt.Errorf("deploy_queue: create index: %w", err)
+	}
 
 	if legacyExists && !newExists {
 		rows, err := db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)

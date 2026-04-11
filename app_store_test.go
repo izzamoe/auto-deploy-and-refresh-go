@@ -406,3 +406,114 @@ func TestBootstrapSkipsWhenAppsExist(t *testing.T) {
 		t.Errorf("expected 1 app, got %d", len(apps))
 	}
 }
+
+func newTestAppStoreWithJobs(t *testing.T) *AppStore {
+	t.Helper()
+	store := newTestAppStore(t)
+	_, err := store.db.Exec(`CREATE TABLE IF NOT EXISTS deploy_jobs (
+		id              TEXT PRIMARY KEY,
+		seq             INTEGER NOT NULL,
+		app_id          TEXT NOT NULL,
+		tag             TEXT NOT NULL,
+		status          TEXT NOT NULL DEFAULT 'pending',
+		trigger_type    TEXT NOT NULL DEFAULT 'webhook',
+		retry_of_job_id TEXT,
+		error_msg       TEXT,
+		created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		t.Fatalf("create deploy_jobs table: %v", err)
+	}
+	return store
+}
+
+func TestAppStoreDeleteRemovesAppAndJobs(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+
+	app, err := store.Create("testapp", "secret", "/bin/app", "app.service", "user/repo", "app-linux")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, err = store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job1', 1, ?, 'v1.0.0', 'succeeded', 'webhook')`,
+		app.ID,
+	)
+	if err != nil {
+		t.Fatalf("insert job: %v", err)
+	}
+
+	err = store.Delete(app.ID)
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	_, err = store.Get(app.ID)
+	if err == nil {
+		t.Error("Expected app to be gone after delete")
+	}
+
+	var count int
+	store.db.QueryRow(`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ?`, app.ID).Scan(&count)
+	if count != 0 {
+		t.Errorf("Expected 0 jobs, got %d", count)
+	}
+}
+
+func TestAppStoreDeleteBlockedByActiveJob(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+
+	app, _ := store.Create("testapp", "secret", "/bin/app", "app.service", "user/repo", "app-linux")
+
+	store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job1', 1, ?, 'v1.0.0', 'in_progress', 'webhook')`,
+		app.ID,
+	)
+
+	err := store.Delete(app.ID)
+	if err != ErrActiveDeployExists {
+		t.Errorf("Expected ErrActiveDeployExists, got %v", err)
+	}
+}
+
+func TestAppStoreListWithLastDeploy(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+
+	app1, _ := store.Create("app1", "secret1", "/bin/app1", "app1.service", "user/repo1", "art1")
+	app2, _ := store.Create("app2", "secret2", "/bin/app2", "app2.service", "user/repo2", "art2")
+
+	store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job1', 1, ?, 'v2.0.0', 'succeeded', 'webhook')`,
+		app1.ID,
+	)
+
+	apps, err := store.ListWithLastDeploy()
+	if err != nil {
+		t.Fatalf("ListWithLastDeploy failed: %v", err)
+	}
+	if len(apps) != 2 {
+		t.Fatalf("Expected 2 apps, got %d", len(apps))
+	}
+
+	var result1, result2 AppWithLastDeploy
+	for _, a := range apps {
+		if a.ID == app1.ID {
+			result1 = a
+		}
+		if a.ID == app2.ID {
+			result2 = a
+		}
+	}
+
+	if result1.LastDeployTag != "v2.0.0" {
+		t.Errorf("Expected app1 LastDeployTag=v2.0.0, got %q", result1.LastDeployTag)
+	}
+	if result1.LastDeployStatus != "succeeded" {
+		t.Errorf("Expected app1 LastDeployStatus=succeeded, got %q", result1.LastDeployStatus)
+	}
+	if result2.LastDeployTag != "" {
+		t.Errorf("Expected app2 LastDeployTag empty, got %q", result2.LastDeployTag)
+	}
+	_ = app2
+}

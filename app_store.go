@@ -12,6 +12,14 @@ import (
 )
 
 var ErrDuplicateApp = errors.New("duplicate app: uniqueness constraint violated")
+var ErrActiveDeployExists = errors.New("active deploy in progress")
+
+type AppWithLastDeploy struct {
+	App
+	LastDeployTag    string
+	LastDeployStatus string
+	LastDeployTime   *time.Time
+}
 
 type App struct {
 	ID                string
@@ -236,6 +244,85 @@ func (s *AppStore) BootstrapIfEmpty(legacy *LegacyBootstrapConfig) (*App, error)
 	}
 
 	return s.Create("default", legacy.Secret, legacy.BinaryPath, legacy.ServiceName, legacy.GithubRepo, legacy.ArtifactName)
+}
+
+func (s *AppStore) Delete(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("app_store: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var activeCount int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND status = 'in_progress'`, id).Scan(&activeCount); err != nil {
+		return fmt.Errorf("app_store: check active deploys: %w", err)
+	}
+	if activeCount > 0 {
+		return ErrActiveDeployExists
+	}
+
+	if _, err := tx.Exec(`DELETE FROM deploy_jobs WHERE app_id = ?`, id); err != nil {
+		return fmt.Errorf("app_store: delete jobs: %w", err)
+	}
+
+	result, err := tx.Exec(`DELETE FROM apps WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("app_store: delete app: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("app_store: app %q not found", id)
+	}
+
+	return tx.Commit()
+}
+
+func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
+	rows, err := s.db.Query(`
+		SELECT a.id, a.name, a.webhook_secret_hash, a.binary_path, a.service_name,
+		       a.github_repo, a.artifact_name, a.enabled, a.created_at, a.updated_at,
+		       j.tag, j.status, j.created_at
+		FROM apps a
+		LEFT JOIN (
+		  SELECT app_id, tag, status, created_at,
+		         ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY created_at DESC) as rn
+		  FROM deploy_jobs
+		) j ON j.app_id = a.id AND j.rn = 1
+		ORDER BY a.created_at ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("app_store: list with last deploy: %w", err)
+	}
+	defer rows.Close()
+
+	var apps []AppWithLastDeploy
+	for rows.Next() {
+		var a AppWithLastDeploy
+		var enabled int
+		var tag, status sql.NullString
+		var deployedAt sql.NullTime
+		if err := rows.Scan(
+			&a.ID, &a.Name, &a.WebhookSecretHash, &a.BinaryPath,
+			&a.ServiceName, &a.GithubRepo, &a.ArtifactName,
+			&enabled, &a.CreatedAt, &a.UpdatedAt,
+			&tag, &status, &deployedAt,
+		); err != nil {
+			return nil, fmt.Errorf("app_store: scan with last deploy: %w", err)
+		}
+		a.Enabled = enabled == 1
+		if tag.Valid {
+			a.LastDeployTag = tag.String
+		}
+		if status.Valid {
+			a.LastDeployStatus = status.String
+		}
+		if deployedAt.Valid {
+			t := deployedAt.Time
+			a.LastDeployTime = &t
+		}
+		apps = append(apps, a)
+	}
+	return apps, rows.Err()
 }
 
 func isUniqueViolation(err error) bool {
