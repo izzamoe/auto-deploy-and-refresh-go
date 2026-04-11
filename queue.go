@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -15,15 +16,24 @@ var ErrDuplicate = errors.New("tag already pending or in progress")
 var ErrQueueFull = errors.New("deploy queue is full")
 
 type JobRecord struct {
-	ID           string
-	AppID        string
-	Tag          string
-	Status       string
-	Trigger      string
-	RetryOfJobID string
-	ErrorMsg     string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                 string
+	AppID              string
+	Tag                string
+	Status             string
+	Trigger            string
+	RetryOfJobID       string
+	ErrorMsg           string
+	DownloadBytes      int64
+	DownloadDurationMs int64
+	DownloadSpeedBPS   float64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type DownloadSummary struct {
+	Bytes      int64
+	DurationMs int64
+	SpeedBPS   float64
 }
 
 type DeployQueue struct {
@@ -68,11 +78,23 @@ func NewDeployQueue(db *sql.DB, maxPending int) (*DeployQueue, error) {
 		trigger_type    TEXT NOT NULL DEFAULT 'webhook',
 		retry_of_job_id TEXT,
 		error_msg       TEXT,
+		download_bytes INTEGER NOT NULL DEFAULT 0,
+		download_duration_ms INTEGER NOT NULL DEFAULT 0,
+		download_speed_bps REAL NOT NULL DEFAULT 0,
 		created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("deploy_queue: create table: %w", err)
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE deploy_jobs ADD COLUMN download_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE deploy_jobs ADD COLUMN download_duration_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE deploy_jobs ADD COLUMN download_speed_bps REAL NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return nil, fmt.Errorf("deploy_queue: migrate deploy_jobs: %w", err)
+		}
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_deploy_jobs_app_id ON deploy_jobs(app_id)`); err != nil {
 		return nil, fmt.Errorf("deploy_queue: create index: %w", err)
@@ -209,7 +231,7 @@ func (q *DeployQueue) DequeueNext(appID string) (id, tag string, err error) {
 	return id, tag, nil
 }
 
-func (q *DeployQueue) MarkDone(id string, success bool, errMsg string) error {
+func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *DownloadSummary) error {
 	status := "succeeded"
 	if !success {
 		status = "failed"
@@ -220,9 +242,17 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string) error {
 		nullMsg = &errMsg
 	}
 
+	var downloadBytes, downloadDurationMs int64
+	var downloadSpeedBPS float64
+	if summary != nil {
+		downloadBytes = summary.Bytes
+		downloadDurationMs = summary.DurationMs
+		downloadSpeedBPS = summary.SpeedBPS
+	}
+
 	_, err := q.db.Exec(
-		`UPDATE deploy_jobs SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		status, nullMsg, id,
+		`UPDATE deploy_jobs SET status = ?, error_msg = ?, download_bytes = ?, download_duration_ms = ?, download_speed_bps = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		status, nullMsg, downloadBytes, downloadDurationMs, downloadSpeedBPS, id,
 	)
 	return err
 }
@@ -257,7 +287,7 @@ func (q *DeployQueue) PendingCount(appID string) (int, error) {
 
 func (q *DeployQueue) ListHistory(appID string, limit int) ([]JobRecord, error) {
 	rows, err := q.db.Query(
-		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), created_at, updated_at
+		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), download_bytes, download_duration_ms, download_speed_bps, created_at, updated_at
 		 FROM deploy_jobs WHERE app_id = ? ORDER BY seq DESC LIMIT ?`,
 		appID, limit,
 	)
@@ -269,7 +299,7 @@ func (q *DeployQueue) ListHistory(appID string, limit int) ([]JobRecord, error) 
 	var items []JobRecord
 	for rows.Next() {
 		var item JobRecord
-		if err := rows.Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.DownloadBytes, &item.DownloadDurationMs, &item.DownloadSpeedBPS, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -313,9 +343,9 @@ func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, 
 func (q *DeployQueue) GetJob(jobID string) (*JobRecord, error) {
 	var item JobRecord
 	err := q.db.QueryRow(
-		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), created_at, updated_at
+		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), download_bytes, download_duration_ms, download_speed_bps, created_at, updated_at
 		 FROM deploy_jobs WHERE id = ?`, jobID,
-	).Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.CreatedAt, &item.UpdatedAt)
+	).Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.DownloadBytes, &item.DownloadDurationMs, &item.DownloadSpeedBPS, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +356,7 @@ func (q *DeployQueue) GetJob(jobID string) (*JobRecord, error) {
 // Kept for backward compatibility with worker_test.go.
 func (q *DeployQueue) ListByStatus(status string) ([]JobRecord, error) {
 	rows, err := q.db.Query(
-		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), created_at, updated_at
+		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), download_bytes, download_duration_ms, download_speed_bps, created_at, updated_at
 		 FROM deploy_jobs WHERE status = ? ORDER BY seq ASC`,
 		status,
 	)
@@ -338,7 +368,7 @@ func (q *DeployQueue) ListByStatus(status string) ([]JobRecord, error) {
 	var items []JobRecord
 	for rows.Next() {
 		var item JobRecord
-		if err := rows.Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.DownloadBytes, &item.DownloadDurationMs, &item.DownloadSpeedBPS, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

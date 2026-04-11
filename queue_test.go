@@ -209,7 +209,7 @@ func TestQueueDeduplicateCompletedAllowed(t *testing.T) {
 		t.Fatalf("DequeueNext tag = %q, want v1", tag)
 	}
 
-	if err := q.MarkDone(id, true, ""); err != nil {
+	if err := q.MarkDone(id, true, "", nil); err != nil {
 		t.Fatalf("MarkDone: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestQueueMarkDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DequeueNext: %v", err)
 	}
-	if err := q.MarkDone(id1, true, ""); err != nil {
+	if err := q.MarkDone(id1, true, "", nil); err != nil {
 		t.Fatalf("MarkDone success: %v", err)
 	}
 
@@ -260,7 +260,7 @@ func TestQueueMarkDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DequeueNext: %v", err)
 	}
-	if err := q.MarkDone(id2, false, "connection timeout"); err != nil {
+	if err := q.MarkDone(id2, false, "connection timeout", nil); err != nil {
 		t.Fatalf("MarkDone failure: %v", err)
 	}
 
@@ -300,6 +300,69 @@ func TestQueueHistoryOrdering(t *testing.T) {
 	}
 }
 
+func TestQueueMarkDoneSummary(t *testing.T) {
+	q := newTestQueue(t, 10)
+
+	if err := q.Enqueue("app1", "v1"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	id, _, err := q.DequeueNext("app1")
+	if err != nil {
+		t.Fatalf("DequeueNext: %v", err)
+	}
+
+	summary := &DownloadSummary{Bytes: 1234, DurationMs: 250, SpeedBPS: 4936}
+	if err := q.MarkDone(id, true, "", summary); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	job, err := q.GetJob(id)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.DownloadBytes != summary.Bytes {
+		t.Errorf("DownloadBytes = %d, want %d", job.DownloadBytes, summary.Bytes)
+	}
+	if job.DownloadDurationMs != summary.DurationMs {
+		t.Errorf("DownloadDurationMs = %d, want %d", job.DownloadDurationMs, summary.DurationMs)
+	}
+	if job.DownloadSpeedBPS != summary.SpeedBPS {
+		t.Errorf("DownloadSpeedBPS = %v, want %v", job.DownloadSpeedBPS, summary.SpeedBPS)
+	}
+}
+
+func TestQueueNoLiveProgress(t *testing.T) {
+	q := newTestQueue(t, 10)
+
+	if err := q.Enqueue("app1", "v1"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	id, _, err := q.DequeueNext("app1")
+	if err != nil {
+		t.Fatalf("DequeueNext: %v", err)
+	}
+
+	job, err := q.GetJob(id)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.DownloadBytes != 0 || job.DownloadDurationMs != 0 || job.DownloadSpeedBPS != 0 {
+		t.Fatalf("expected zero summary before MarkDone, got %+v", job)
+	}
+
+	if err := q.MarkDone(id, true, "", nil); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	job, err = q.GetJob(id)
+	if err != nil {
+		t.Fatalf("GetJob after MarkDone: %v", err)
+	}
+	if job.DownloadBytes != 0 || job.DownloadDurationMs != 0 || job.DownloadSpeedBPS != 0 {
+		t.Fatalf("expected zero summary with nil MarkDone, got %+v", job)
+	}
+}
+
 func TestQueueRetryCreatesNewRow(t *testing.T) {
 	q := newTestQueue(t, 10)
 
@@ -310,7 +373,7 @@ func TestQueueRetryCreatesNewRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DequeueNext: %v", err)
 	}
-	if err := q.MarkDone(origID, false, "deploy error"); err != nil {
+	if err := q.MarkDone(origID, false, "deploy error", nil); err != nil {
 		t.Fatalf("MarkDone: %v", err)
 	}
 
@@ -353,7 +416,7 @@ func TestQueueRetryRejectsDuplicatePending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DequeueNext: %v", err)
 	}
-	if err := q.MarkDone(origID, false, "error"); err != nil {
+	if err := q.MarkDone(origID, false, "error", nil); err != nil {
 		t.Fatalf("MarkDone: %v", err)
 	}
 

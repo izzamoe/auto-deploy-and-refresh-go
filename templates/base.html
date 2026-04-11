@@ -186,7 +186,7 @@
             background: var(--bg-surface);
             border: 1px solid var(--border-subtle);
             border-radius: var(--radius-md);
-            overflow: hidden;
+            overflow-x: auto;
             box-shadow: var(--shadow-sm);
         }
 
@@ -219,6 +219,28 @@
         }
 
         tr:hover td {
+            background-color: var(--bg-page);
+        }
+
+        /* Sticky last column */
+        th:last-child, td:last-child {
+            position: sticky;
+            right: 0;
+            z-index: 1;
+            box-shadow: -1px 0 0 var(--border-subtle);
+            white-space: nowrap;
+        }
+
+        th:last-child {
+            background-color: var(--bg-page);
+            z-index: 2;
+        }
+
+        td:last-child {
+            background-color: var(--bg-surface);
+        }
+
+        tr:hover td:last-child {
             background-color: var(--bg-page);
         }
 
@@ -373,9 +395,43 @@
             border: 1px dashed var(--border-subtle);
             border-radius: var(--radius-md);
         }
+
+        /* UI Primitives for Status and Progress */
+        .progress-bar-container { background: #e9ecef; border-radius: 4px; height: 8px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: #0d6efd; transition: width 0.3s ease; border-radius: 4px; }
+        
+        .stat-chip { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; background: #e9ecef; color: #495057; }
+        .stat-chip.stat-speed { background: #d1ecf1; color: #0c5460; }
+        .stat-chip.stat-percent { background: #d4edda; color: #155724; }
+        
+        .deploy-status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-in-progress { background: #cce5ff; color: #004085; }
+        .status-succeeded { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        
+        .meta-row { font-size: 0.8rem; color: #6c757d; margin-top: 2px; }
+        
+        .card-section { background: #fff; border: 1px solid #dee2e6; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px; }
     </style>
 </head>
 <body>
+    <!-- Template example for developer reference:
+    <div class="card-section" data-progress-job="job123">
+        <div class="page-header" style="margin-bottom: 8px;">
+            <div class="deploy-status-badge status-in-progress">In Progress</div>
+            <div class="meta-row">Tag: v1.2.3</div>
+        </div>
+        <div class="progress-bar-container" style="margin-bottom: 8px;">
+            <div class="progress-bar-fill" style="width: 45%;"></div>
+        </div>
+        <div>
+            <span class="stat-chip stat-percent">45%</span>
+            <span class="stat-chip stat-speed">2.4 MB/s</span>
+            <span class="meta-row" style="margin-left: 8px;">15 MB / 33 MB</span>
+        </div>
+    </div>
+    -->
     <header class="admin-header">
         <div class="layout-container header-content">
             <a href="/admin/apps" class="brand-logo">auto-deploy</a>
