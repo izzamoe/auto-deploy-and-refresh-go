@@ -44,97 +44,115 @@ function fallbackCopy(text) {
 .btn-danger:hover {
     background-color: #c00000;
 }
+.apps-grid {
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: 1fr;
+}
 </style>
 <div class="page-header">
     <h1 class="page-title">Apps</h1>
     <a href="/admin/apps/new" class="btn btn-primary">Add New App</a>
 </div>
 
-<div class="table-container">
-    <table id="apps-table">
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Service</th>
-                <th>Binary Path</th>
-                <th>Repo</th>
-                <th>Artifact</th>
-                <th>Status</th>
-                <th>Last Deploy</th>
-                <th>Last Status</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{ if .Apps }}
-                {{ range .Apps }}
-                <tr>
-                    <td><strong>{{ .Name }}</strong></td>
-                    <td>{{ .ServiceName }}</td>
-                    <td>{{ .BinaryPath }}</td>
-                    <td>{{ .GithubRepo }}</td>
-                    <td>{{ .ArtifactName }}</td>
-                    <td>
-                        {{ if .Enabled }}
-                            <span class="badge active">Active</span>
-                        {{ else }}
-                            <span class="badge disabled">Disabled</span>
-                        {{ end }}
-                    </td>
-                    <td>
-                        {{ if .LastDeployTag }}
-                            <span style="font-size:0.8rem;">{{ .LastDeployTag }}</span>
-                            {{ if .LastDeployTime }}
-                            <div style="font-size:0.7rem; color: var(--text-muted);">{{ .LastDeployTime.Format "Jan 02 15:04" }}</div>
-                            {{ end }}
-                        {{ else }}
-                            <span style="color:var(--text-muted);">-</span>
-                        {{ end }}
-                    </td>
-                    <td>
-                        {{ if .LastDeployStatus }}
-                            {{ if eq .LastDeployStatus "succeeded" }}
-                                <span class="badge active" data-status="{{ .LastDeployStatus }}">succeeded</span>
-                            {{ else if eq .LastDeployStatus "failed" }}
-                                <span class="badge failed" data-status="{{ .LastDeployStatus }}">failed</span>
-                            {{ else if eq .LastDeployStatus "in_progress" }}
-                                <span class="badge queued" style="background:#fff4d2;color:#b8860b;" data-status="{{ .LastDeployStatus }}">in_progress</span>
-                            {{ else if eq .LastDeployStatus "pending" }}
-                                <span class="badge queued" style="background:var(--status-disabled-bg);color:var(--status-disabled-fg);" data-status="{{ .LastDeployStatus }}">pending</span>
-                            {{ else }}
-                                <span class="badge disabled" data-status="{{ .LastDeployStatus }}">{{ .LastDeployStatus }}</span>
-                            {{ end }}
-                        {{ else }}
-                            <span style="color:var(--text-muted);">-</span>
-                        {{ end }}
-                    </td>
-                    <td>
-                        <div style="display: flex; gap: 8px;">
-                            <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
-                            <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
-                            <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" style="display:inline;">
-                                <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
-                            </form>
-                            {{ if .Enabled }}
-                            <button type="button" class="btn btn-secondary" onclick="showDeployModal('{{ .ID }}', '{{ .Name }}')">Deploy</button>
-                            {{ end }}
-                            <button type="button" class="btn btn-danger" onclick="showDeleteModal('{{ .ID }}', '{{ .Name }}')">Delete</button>
+<div class="apps-grid" id="apps-table">
+    {{ if .Apps }}
+        {{ range .Apps }}
+        <div class="card-section" 
+             {{ if .LastJobID }}data-progress-job="{{ .LastJobID }}"{{ end }}
+             data-app-id="{{ .ID }}" 
+             style="display: flex; flex-direction: column; gap: 16px;">
+            
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div>
+                    <h3 style="margin: 0; font-size: 1.25rem;">{{ .Name }}</h3>
+                    <div class="meta-row" style="margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">
+                        <span><strong>Service:</strong> {{ .ServiceName }}</span>
+                        <span><strong>Repo:</strong> {{ .GithubRepo }}</span>
+                        <span><strong>Binary:</strong> {{ .BinaryPath }}</span>
+                        <span><strong>Artifact:</strong> {{ .ArtifactName }}</span>
+                    </div>
+                </div>
+                <div>
+                    {{ if .Enabled }}
+                        <span class="badge active">Active</span>
+                    {{ else }}
+                        <span class="badge disabled">Disabled</span>
+                    {{ end }}
+                </div>
+            </div>
+
+            <!-- Deployment Status and Progress -->
+            <div style="background: var(--bg-page); padding: 12px; border-radius: 6px; border: 1px solid var(--border-subtle);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="deploy-status-badge 
+                            {{ if eq .LastDeployStatus "succeeded" }}status-succeeded
+                            {{ else if eq .LastDeployStatus "failed" }}status-failed
+                            {{ else if eq .LastDeployStatus "in_progress" }}status-in-progress
+                            {{ else if eq .LastDeployStatus "pending" }}status-pending
+                            {{ end }}" data-status="{{ .LastDeployStatus }}">
+                            {{ if .LastDeployStatus }}{{ .LastDeployStatus }}{{ else }}No deploys yet{{ end }}
+                        </span>
+                    </div>
+                </div>
+
+                {{ if and .LiveProgress (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}
+                    {{ if gt .LiveProgress.TotalBytes 0 }}
+                        <div class="progress-bar-container" style="margin-bottom: 8px;">
+                            <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
                         </div>
-                    </td>
-                </tr>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span class="stat-chip stat-percent" data-progress-percent>
+                                {{ .LiveProgress.DownloadedBytes }} / {{ .LiveProgress.TotalBytes }}
+                            </span>
+                            <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
+                            <span class="meta-row" style="margin: 0; display: none;" data-progress-bytes></span>
+                        </div>
+                    {{ else }}
+                        <div class="progress-bar-container" style="margin-bottom: 8px;">
+                            <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
+                        </div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span class="stat-chip stat-percent" data-progress-percent style="display: none;"></span>
+                            <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
+                            <span class="meta-row" style="margin: 0;" data-progress-bytes>
+                                {{ .LiveProgress.DownloadedBytes }} B
+                            </span>
+                        </div>
+                    {{ end }}
+                {{ else if .LastDeployStatus }}
+                    <div class="meta-row">
+                        {{ if .LastDeployTag }}<span>Tag: <strong>{{ .LastDeployTag }}</strong></span>{{ end }}
+                        {{ if .LastDeployTime }}&bull; <span>Time: {{ .LastDeployTime.Format "Jan 02 15:04" }}</span>{{ end }}
+                        {{ if gt .LastDownloadSpeedBPS 0.0 }}&bull; <span>Speed: {{ printf "%.0f" .LastDownloadSpeedBPS }} B/s</span>{{ end }}
+                        {{ if .LastDownloadBytes }}&bull; <span>Size: {{ .LastDownloadBytes }} B</span>{{ end }}
+                    </div>
+                {{ else }}
+                    <div class="meta-row">No deployment history.</div>
                 {{ end }}
-            {{ else }}
-                <tr>
-                    <td colspan="9">
-                        <div class="empty-state">
-                            <p>No apps configured yet.</p>
-                            <a href="/admin/apps/new" style="margin-top: 16px;" class="btn btn-primary">Create your first app</a>
-                        </div>
-                    </td>
-                </tr>
-            {{ end }}
-        </tbody>
-    </table>
+            </div>
+
+            <!-- Actions -->
+            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
+                <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
+                <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" style="margin: 0;">
+                    <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
+                </form>
+                {{ if .Enabled }}
+                <button type="button" class="btn btn-secondary" onclick="showDeployModal('{{ .ID }}', '{{ .Name }}')">Deploy</button>
+                {{ end }}
+                <button type="button" class="btn btn-danger" onclick="showDeleteModal('{{ .ID }}', '{{ .Name }}')">Delete</button>
+            </div>
+        </div>
+        {{ end }}
+    {{ else }}
+        <div class="empty-state card-section">
+            <p>No apps configured yet.</p>
+            <a href="/admin/apps/new" style="margin-top: 16px;" class="btn btn-primary">Create your first app</a>
+        </div>
+    {{ end }}
 </div>
 
 <div id="delete-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;">
@@ -194,12 +212,141 @@ document.getElementById('delete-modal').addEventListener('click', function(e) {
 document.getElementById('deploy-modal').addEventListener('click', function(e) {
     if (e.target === this) closeDeployModal();
 });
-// Auto-refresh if any deploy is active
+// Live SSE progress updates
 (function() {
-    var active = document.querySelectorAll('[data-status="in_progress"],[data-status="pending"]');
-    if (active.length > 0) {
-        setTimeout(function() { window.location.reload(); }, 10000);
+    var activeCards = document.querySelectorAll('[data-progress-job]');
+    if (!activeCards.length) return;
+
+    var es = null;
+    var receivedAnyUpdate = false;
+    var reloadTimer = null;
+    var fallbackTimer = null;
+    var terminalJobs = {};
+
+    function clearTimer(timer) {
+        if (timer) clearTimeout(timer);
+        return null;
     }
+
+    function scheduleReload(delayMs) {
+        if (reloadTimer) return;
+        reloadTimer = setTimeout(function() {
+            window.location.reload();
+        }, delayMs);
+    }
+
+    function formatBytes(n) {
+        if (!n || n <= 0) return '0 B';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var value = n;
+        var unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex++;
+        }
+        return unitIndex === 0 ? Math.round(value) + ' ' + units[unitIndex] : value.toFixed(1) + ' ' + units[unitIndex];
+    }
+
+    function formatSpeed(bps) {
+        if (!bps || bps <= 0) return '0 B/s';
+        if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(1) + ' MB/s';
+        if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
+        return Math.round(bps) + ' B/s';
+    }
+
+    function setHidden(el, hidden) {
+        if (!el) return;
+        el.style.display = hidden ? 'none' : '';
+    }
+
+    function updateContainer(container, snap) {
+        if (!container) return;
+
+        var percentEl = container.querySelector('[data-progress-percent]');
+        var speedEl = container.querySelector('[data-progress-speed]');
+        var bytesEl = container.querySelector('[data-progress-bytes]');
+        var bar = container.querySelector('.progress-bar-fill');
+        var total = Number(snap.total_bytes || 0);
+        var phase = snap.phase || '';
+        var downloaded = Number(snap.downloaded_bytes || 0);
+        var speed = Number(snap.speed_bps || 0);
+        var percent = total > 0 ? Math.max(0, Math.min(100, Math.floor((downloaded * 100) / total))) : 100;
+
+        if (terminalJobs[snap.job_id] && phase !== 'downloading') return;
+
+        if (bar) {
+            bar.style.width = percent + '%';
+            bar.style.opacity = total > 0 ? '' : '0.5';
+        }
+
+        if (phase === 'done' || phase === 'failed') {
+            terminalJobs[snap.job_id] = true;
+        }
+
+        if (speedEl) speedEl.textContent = formatSpeed(speed);
+
+        if (total > 0) {
+            if (percentEl) percentEl.textContent = percent + '%';
+            setHidden(percentEl, false);
+            setHidden(bytesEl, true);
+        } else {
+            if (bytesEl) bytesEl.textContent = formatBytes(downloaded);
+            setHidden(bytesEl, false);
+            setHidden(percentEl, true);
+        }
+    }
+
+    function closeStream() {
+        if (es) {
+            es.close();
+            es = null;
+        }
+        fallbackTimer = clearTimer(fallbackTimer);
+    }
+
+    es = new EventSource('/admin/progress/stream');
+    fallbackTimer = setTimeout(function() {
+        if (!receivedAnyUpdate) window.location.reload();
+    }, 15000);
+
+    es.onmessage = function(ev) {
+        receivedAnyUpdate = true;
+        fallbackTimer = clearTimer(fallbackTimer);
+
+        var snapshots = [];
+        try {
+            snapshots = JSON.parse(ev.data || '[]');
+        } catch (e) {
+            return;
+        }
+
+        if (!snapshots.length) {
+            closeStream();
+            scheduleReload(1000);
+            return;
+        }
+
+        var activeJobs = 0;
+        for (var i = 0; i < snapshots.length; i++) {
+            var snap = snapshots[i];
+            var container = document.querySelector('[data-progress-job="' + snap.job_id + '"]');
+            updateContainer(container, snap);
+            if (snap.phase === 'downloading') activeJobs++;
+        }
+
+        if (activeJobs === 0) {
+            closeStream();
+            scheduleReload(1000);
+        }
+    };
+
+    es.onerror = function() {
+        if (receivedAnyUpdate) return;
+        closeStream();
+        fallbackTimer = setTimeout(function() {
+            window.location.reload();
+        }, 2000);
+    };
 })();
 </script>
 {{ end }}

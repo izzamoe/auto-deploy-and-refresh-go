@@ -20,7 +20,7 @@
         <tbody>
             {{ if .Jobs }}
                 {{ range .Jobs }}
-                <tr data-status="{{ .Status }}">
+                <tr data-status="{{ .Status }}" data-job-id="{{ .ID }}">
                     <td>
                         <strong>{{ .Tag }}</strong>
                         {{ if .RetryOfJobID }}
@@ -31,19 +31,42 @@
                     </td>
                     <td>
                         {{ if eq .Status "succeeded" }}
-                            <span class="badge active">succeeded</span>
+                            <span class="deploy-status-badge status-succeeded">succeeded</span>
+                            {{ if and .DownloadBytes (gt .DownloadBytes 0) }}
+                            <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
+                                <span class="stat-chip stat-percent">{{ .DownloadBytes }} B</span>
+                                {{ if and .DownloadSpeedBPS (gt .DownloadSpeedBPS 0.0) }}
+                                <span class="stat-chip stat-speed">{{ printf "%.0f" .DownloadSpeedBPS }} B/s</span>
+                                {{ end }}
+                            </div>
+                            {{ end }}
                         {{ else if eq .Status "failed" }}
-                            <span class="badge failed">failed</span>
+                            <span class="deploy-status-badge status-failed">failed</span>
                         {{ else if eq .Status "in_progress" }}
-                            <span class="badge queued" style="background: #fff4d2; color: #b8860b;">in_progress</span>
+                            <span class="deploy-status-badge status-in-progress">in_progress</span>
+                            {{ $snap := index $.LiveProgress .ID }}
+                            <div style="margin-top: 8px;">
+                                <div class="progress-bar-container" style="margin-bottom: 4px;">
+                                    {{ if and $snap (gt $snap.TotalBytes 0) }}
+                                        <div class="progress-bar-fill" style="width: calc({{ $snap.DownloadedBytes }} * 100% / {{ $snap.TotalBytes }});"></div>
+                                    {{ else }}
+                                        <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
+                                    {{ end }}
+                                </div>
+                                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                                    <span class="stat-chip stat-percent" data-progress-percent{{ if or (not $snap) (eq $snap.TotalBytes 0) }} style="display:none;"{{ end }}></span>
+                                    <span class="stat-chip stat-speed" data-progress-speed>{{ if $snap }}{{ printf "%.0f" $snap.SpeedBPS }} B/s{{ else }}0 B/s{{ end }}</span>
+                                    <span class="meta-row" style="margin: 0;{{ if and $snap (gt $snap.TotalBytes 0) }}display:none;{{ end }}" data-progress-bytes>{{ if $snap }}{{ $snap.DownloadedBytes }} B{{ else }}0 B{{ end }}</span>
+                                </div>
+                            </div>
                         {{ else if eq .Status "pending" }}
-                            <span class="badge queued" style="background: var(--status-disabled-bg); color: var(--status-disabled-fg);">pending</span>
+                            <span class="deploy-status-badge status-pending">pending</span>
                         {{ else }}
-                            <span class="badge disabled">{{ .Status }}</span>
+                            <span class="deploy-status-badge status-disabled">{{ .Status }}</span>
                         {{ end }}
                     </td>
                     <td>{{ .Trigger }}</td>
-                    <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; word-wrap: break-word;">
+                    <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ if .ErrorMsg }}{{ .ErrorMsg }}{{ end }}">
                         {{ if .ErrorMsg }}{{ .ErrorMsg }}{{ else }}-{{ end }}
                     </td>
                     <td>{{ .CreatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
@@ -52,7 +75,7 @@
                         {{ if $.App.Enabled }}
                             {{ if or (eq .Status "succeeded") (eq .Status "failed") }}
                             <form method="POST" action="/admin/apps/{{ $.App.ID }}/retry/{{ .ID }}" style="margin: 0;">
-                                <button type="submit" class="btn btn-secondary retry-button">Retry</button>
+                                <button type="submit" class="btn btn-secondary retry-button" title="Deploy this tag again">↻ Retry Deploy</button>
                             </form>
                             {{ end }}
                         {{ end }}
@@ -74,10 +97,131 @@
 
 <script>
 (function() {
-    var active = document.querySelectorAll('[data-status="in_progress"],[data-status="pending"]');
-    if (active.length > 0) {
-        setTimeout(function() { window.location.reload(); }, 8000);
+    var activeRows = document.querySelectorAll('[data-job-id][data-status="in_progress"],[data-job-id][data-status="pending"]');
+    if (!activeRows.length) return;
+
+    var es = null;
+    var receivedAnyUpdate = false;
+    var reloadTimer = null;
+    var fallbackTimer = null;
+
+    function clearTimer(timer) {
+        if (timer) clearTimeout(timer);
+        return null;
     }
+
+    function scheduleReload(delayMs) {
+        if (reloadTimer) return;
+        reloadTimer = setTimeout(function() {
+            window.location.reload();
+        }, delayMs);
+    }
+
+    function formatBytes(n) {
+        if (!n || n <= 0) return '0 B';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var value = n;
+        var unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex++;
+        }
+        return unitIndex === 0 ? Math.round(value) + ' ' + units[unitIndex] : value.toFixed(1) + ' ' + units[unitIndex];
+    }
+
+    function formatSpeed(bps) {
+        if (!bps || bps <= 0) return '0 B/s';
+        if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(1) + ' MB/s';
+        if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
+        return Math.round(bps) + ' B/s';
+    }
+
+    function setHidden(el, hidden) {
+        if (!el) return;
+        el.style.display = hidden ? 'none' : '';
+    }
+
+    function updateRow(row, snap) {
+        if (!row) return;
+
+        var percentEl = row.querySelector('[data-progress-percent]');
+        var speedEl = row.querySelector('[data-progress-speed]');
+        var bytesEl = row.querySelector('[data-progress-bytes]');
+        var bar = row.querySelector('.progress-bar-fill');
+        var total = Number(snap.total_bytes || 0);
+        var downloaded = Number(snap.downloaded_bytes || 0);
+        var speed = Number(snap.speed_bps || 0);
+        var percent = total > 0 ? Math.max(0, Math.min(100, Math.floor((downloaded * 100) / total))) : 100;
+
+        if (bar) {
+            bar.style.width = percent + '%';
+            bar.style.opacity = total > 0 ? '' : '0.5';
+        }
+
+        if (speedEl) speedEl.textContent = formatSpeed(speed);
+
+        if (total > 0) {
+            if (percentEl) percentEl.textContent = percent + '%';
+            setHidden(percentEl, false);
+            setHidden(bytesEl, true);
+        } else {
+            if (bytesEl) bytesEl.textContent = formatBytes(downloaded);
+            setHidden(bytesEl, false);
+            setHidden(percentEl, true);
+        }
+    }
+
+    function closeStream() {
+        if (es) {
+            es.close();
+            es = null;
+        }
+        fallbackTimer = clearTimer(fallbackTimer);
+    }
+
+    es = new EventSource('/admin/progress/stream');
+    fallbackTimer = setTimeout(function() {
+        if (!receivedAnyUpdate) window.location.reload();
+    }, 15000);
+
+    es.onmessage = function(ev) {
+        receivedAnyUpdate = true;
+        fallbackTimer = clearTimer(fallbackTimer);
+
+        var snapshots = [];
+        try {
+            snapshots = JSON.parse(ev.data || '[]');
+        } catch (e) {
+            return;
+        }
+
+        if (!snapshots.length) {
+            closeStream();
+            scheduleReload(1000);
+            return;
+        }
+
+        var activeJobs = 0;
+        for (var i = 0; i < snapshots.length; i++) {
+            var snap = snapshots[i];
+            var row = document.querySelector('[data-job-id="' + snap.job_id + '"]');
+            updateRow(row, snap);
+            if (snap.phase === 'downloading') activeJobs++;
+        }
+
+        if (activeJobs === 0) {
+            closeStream();
+            scheduleReload(1000);
+        }
+    };
+
+    es.onerror = function() {
+        if (receivedAnyUpdate) return;
+        closeStream();
+        fallbackTimer = setTimeout(function() {
+            window.location.reload();
+        }, 2000);
+    };
 })();
 </script>
 {{ end }}
