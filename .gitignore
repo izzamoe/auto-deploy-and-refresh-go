@@ -1,0 +1,20 @@
+# Compiled binaries
+auto-deploy
+auto-deploy-arm64
+
+# Runtime data
+deploy-queue.db
+*.db
+
+# AI agent internal state
+.sisyphus/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# QA/test screenshots
+*.png
+
+# Environment files (keep .example)
+.env
+auto-deploy.env
