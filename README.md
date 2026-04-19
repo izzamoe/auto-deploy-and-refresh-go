@@ -111,6 +111,13 @@ These variables are only used on the first startup if the application registry i
 # Run automated tests
 make test
 
+# Install Playwright browser support for the local smoke harness
+npm ci
+npm run pw:install
+
+# Run the deterministic admin smoke tests
+npm run pw:smoke
+
 # Test with valid token (replace YOUR_APP_SECRET)
 # Expected response: 202 Accepted
 curl -s -w '\n%{http_code}' -X POST http://localhost:9000/webhook \
@@ -134,4 +141,3 @@ systemctl stop your-service.service
 cp /path/to/binary.bak /path/to/binary
 systemctl start your-service.service
 ```
-

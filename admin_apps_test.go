@@ -30,6 +30,85 @@ func newTestAppAdminHandler(t *testing.T, store *AppStore) *AppAdminHandler {
 	return NewAppAdminHandler(store, queue, tmpls, NewProgressTracker())
 }
 
+func TestAdminAppsListHTMXReturnsFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	_, _ = store.Create("Test App", "sec", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("GET", "/admin/apps", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "<!DOCTYPE html>") {
+		t.Fatalf("Expected HTMX fragment without full document, got %s", body)
+	}
+	if !strings.Contains(body, `id="apps-table"`) {
+		t.Fatalf("Expected HTMX apps fragment, got %s", body)
+	}
+}
+
+func TestAdminNewAppFormHTMXReturnsFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("GET", "/admin/apps/new", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "<!DOCTYPE html>") {
+		t.Fatalf("Expected HTMX fragment without full document, got %s", body)
+	}
+	if !strings.Contains(body, `id="app-form"`) {
+		t.Fatalf("Expected HTMX app form fragment, got %s", body)
+	}
+}
+
+func TestAdminEditAppFormHTMXReturnsFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("GET", "/admin/apps/"+app.ID+"/edit", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "<!DOCTYPE html>") {
+		t.Fatalf("Expected HTMX fragment without full document, got %s", body)
+	}
+	if !strings.Contains(body, `id="app-form"`) {
+		t.Fatalf("Expected HTMX app edit fragment, got %s", body)
+	}
+	if !strings.Contains(body, `data-testid="admin-flash"`) {
+		t.Fatalf("Expected HTMX edit fragment to retain flash container, got %s", body)
+	}
+	if strings.Contains(body, `hx-swap-oob="true"`) {
+		t.Fatalf("Expected HTMX GET fragment flash container to render in place, got %s", body)
+	}
+}
 
 func TestAdminAppsDelete(t *testing.T) {
 	store := newTestAppStoreWithJobs(t)
@@ -114,6 +193,139 @@ func TestAdminAppsCreate(t *testing.T) {
 	}
 	if len(apps) != 1 {
 		t.Errorf("Expected 1 app, got %d", len(apps))
+	}
+}
+
+func TestAdminAppsCreateHTMXUsesHXLocation(t *testing.T) {
+	store := newTestAppStore(t)
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("name", "test-app")
+	form.Add("binary_path", "/opt/test-app")
+	form.Add("service_name", "test-app.service")
+	form.Add("github_repo", "test/repo")
+	form.Add("artifact_name", "test-artifact")
+	form.Add("webhook_secret", "secret123")
+
+	req := httptest.NewRequest("POST", "/admin/apps/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for HTMX create, got %d", rr.Code)
+	}
+	if rr.Header().Get("Location") != "" {
+		t.Fatalf("Expected no raw redirect Location header, got %q", rr.Header().Get("Location"))
+	}
+	hxLocation := rr.Header().Get("HX-Location")
+	if !strings.Contains(hxLocation, "/admin/apps?flash=App+created+successfully") {
+		t.Fatalf("Expected HX-Location success navigation, got %q", hxLocation)
+	}
+}
+
+func TestAdminAppsCreateHTMXValidationErrorsReturnInlineFormFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("name", "Preserved Name")
+
+	req := httptest.NewRequest("POST", "/admin/apps/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 Bad Request, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "<div class=\"page-header\">") {
+		t.Fatalf("Expected inline form fragment without page header, got %s", body)
+	}
+	if !strings.Contains(body, `id="app-form"`) {
+		t.Fatalf("Expected inline app form fragment, got %s", body)
+	}
+	if !strings.Contains(body, `id="form-errors"`) {
+		t.Fatalf("Expected inline form errors, got %s", body)
+	}
+	if !strings.Contains(body, `value="Preserved Name"`) {
+		t.Fatalf("Expected preserved name value, got %s", body)
+	}
+	if !strings.Contains(body, `hx-target="#app-form"`) {
+		t.Fatalf("Expected HTMX form retargeting to stay on #app-form, got %s", body)
+	}
+	if got := rr.Header().Get("HX-Location"); got != "" {
+		t.Fatalf("Expected no HX-Location on validation error, got %q", got)
+	}
+}
+
+func TestAdminAppsToggleHTMXReturnsFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/disable", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for HTMX toggle, got %d", rr.Code)
+	}
+	if rr.Header().Get("Location") != "" {
+		t.Fatalf("Expected no raw redirect Location header, got %q", rr.Header().Get("Location"))
+	}
+	if got := rr.Header().Get("HX-Location"); got != "" {
+		t.Fatalf("Expected NO HX-Location for in-place toggle, got %q", got)
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, `id="apps-table"`) {
+		t.Fatalf("Expected HTMX apps fragment, got %s", body)
+	}
+	if !strings.Contains(body, `App disabled successfully`) {
+		t.Fatalf("Expected flash message in body, got %s", body)
+	}
+}
+
+func TestAdminAppsDeleteHTMXReturnsFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/delete", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for HTMX delete, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("HX-Location"); got != "" {
+		t.Fatalf("Expected NO HX-Location for in-place delete, got %q", got)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `id="apps-table"`) {
+		t.Fatalf("Expected HTMX apps fragment, got %s", body)
+	}
+	if !strings.Contains(body, `App deleted successfully`) {
+		t.Fatalf("Expected flash message in body, got %s", body)
 	}
 }
 
@@ -208,6 +420,89 @@ func TestAdminAppsEditLeavesSecretUnchangedWhenBlank(t *testing.T) {
 	}
 }
 
+func TestAdminAppsUpdateHTMXValidationErrorsReturnInlineFormFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("Original", "secret", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("name", "Updated Name")
+	form.Add("binary_path", "")
+	form.Add("service_name", "svc")
+	form.Add("github_repo", "repo")
+	form.Add("artifact_name", "art")
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/update", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 Bad Request, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "<div class=\"page-header\">") {
+		t.Fatalf("Expected inline edit form fragment without page header, got %s", body)
+	}
+	if !strings.Contains(body, `action="/admin/apps/`+app.ID+`/update"`) {
+		t.Fatalf("Expected update action in returned form, got %s", body)
+	}
+	if !strings.Contains(body, `value="Updated Name"`) {
+		t.Fatalf("Expected preserved updated name value, got %s", body)
+	}
+	if !strings.Contains(body, "Binary Path is required") {
+		t.Fatalf("Expected binary path validation message, got %s", body)
+	}
+	if got := rr.Header().Get("HX-Location"); got != "" {
+		t.Fatalf("Expected no HX-Location on validation error, got %q", got)
+	}
+}
+
+func TestAdminAppsUpdateHTMXUsesHXLocation(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("Test", "secret", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("name", "Updated Test")
+	form.Add("binary_path", "/opt/updated")
+	form.Add("service_name", "updated.service")
+	form.Add("github_repo", "updated/repo")
+	form.Add("artifact_name", "updated-artifact")
+	form.Add("webhook_secret", "")
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/update", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for HTMX update, got %d", rr.Code)
+	}
+	if rr.Header().Get("Location") != "" {
+		t.Fatalf("Expected no raw redirect Location header, got %q", rr.Header().Get("Location"))
+	}
+	if got := rr.Header().Get("HX-Location"); !strings.Contains(got, "/admin/apps?flash=App+updated+successfully") {
+		t.Fatalf("Expected HX-Location for update, got %q", got)
+	}
+
+	updated, err := store.Get(app.ID)
+	if err != nil {
+		t.Fatalf("failed to fetch updated app: %v", err)
+	}
+	if updated.Name != "Updated Test" {
+		t.Fatalf("Expected name to be updated, got %q", updated.Name)
+	}
+}
+
 func TestAdminAppsCreateValidationErrorsPreserveFormValues(t *testing.T) {
 	store := newTestAppStore(t)
 	handler := newTestAppAdminHandler(t, store)
@@ -234,6 +529,39 @@ func TestAdminAppsCreateValidationErrorsPreserveFormValues(t *testing.T) {
 	}
 	if !strings.Contains(body, `value="Preserved Name"`) {
 		t.Errorf("Expected body to contain preserved name value")
+	}
+}
+
+func TestAdminAppsManualDeployHTMXReturnsFragment(t *testing.T) {
+	store := newTestAppStore(t)
+	app, _ := store.Create("Deploy", "sec", "/bin", "svc", "repo", "art")
+	handler := newTestAppAdminHandler(t, store)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	form := url.Values{}
+	form.Add("tag", "v1.2.3")
+	form.Add("source", "list")
+
+	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/deploy", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for HTMX deploy, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("HX-Location"); got != "" {
+		t.Fatalf("Expected NO HX-Location for in-place list deploy, got %q", got)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `id="apps-table"`) {
+		t.Fatalf("Expected HTMX apps fragment, got %s", body)
+	}
+	if !strings.Contains(body, `Manual deploy queued`) {
+		t.Fatalf("Expected flash message in body, got %s", body)
 	}
 }
 
@@ -315,7 +643,7 @@ func TestAdminAppsManualDeployEmptyTag(t *testing.T) {
 func TestAdminAppsList(t *testing.T) {
 	store := newTestAppStoreWithJobs(t)
 	app, _ := store.Create("Active Deploy App", "sec-test", "/bin", "svc", "repo", "art")
-	
+
 	store.db.Exec(
 		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job-123', 1, ?, 'v1.0.0', 'in_progress', 'webhook', 0, 0, 0)`,
 		app.ID,
@@ -338,7 +666,7 @@ func TestAdminAppsList(t *testing.T) {
 		t.Errorf("Expected 200 OK, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	
+
 	// Check for DOM hooks
 	if !strings.Contains(body, `data-progress-job="job-123"`) {
 		t.Errorf("Expected body to contain data-progress-job, got:\n%s", body)
@@ -351,5 +679,50 @@ func TestAdminAppsList(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-progress-speed`) {
 		t.Errorf("Expected body to contain data-progress-speed")
+	}
+	if !strings.Contains(body, `id="apps-progress-subscription"`) {
+		t.Errorf("Expected body to contain apps progress subscription root")
+	}
+	if !strings.Contains(body, `sse-connect="/admin/progress/stream?`) {
+		t.Errorf("Expected body to contain HTMX SSE stream connection, got:\n%s", body)
+	}
+	if strings.Contains(body, `new EventSource(`) {
+		t.Errorf("Expected apps list template to avoid manual EventSource JS, got:\n%s", body)
+	}
+}
+
+func TestAdminAppsListTerminalJobClearsActiveMarker(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+	app, _ := store.Create("Settled Deploy App", "sec-test-2", "/bin2", "svc2", "repo2", "art2")
+
+	store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job-999', 1, ?, 'v2.0.0', 'succeeded', 'webhook', 4096, 1000, 512)`,
+		app.ID,
+	)
+
+	handler := newTestAppAdminHandler(t, store)
+	handler.tracker.Start(app.ID, "job-999", "v2.0.0")
+	handler.tracker.Update(app.ID, 2048, 4096, 256)
+	handler.tracker.Finish(app.ID)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("GET", "/admin/apps", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, `data-progress-job="job-999"`) {
+		t.Fatalf("Expected terminal app card to clear stale progress marker, got:\n%s", body)
+	}
+	if !strings.Contains(body, `status-succeeded`) {
+		t.Fatalf("Expected terminal app card to show succeeded state, got:\n%s", body)
+	}
+	if strings.Contains(body, `sse-connect="/admin/progress/stream?`) {
+		t.Fatalf("Expected terminal apps list to avoid SSE subscription markup, got:\n%s", body)
 	}
 }

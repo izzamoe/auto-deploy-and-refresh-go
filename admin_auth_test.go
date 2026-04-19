@@ -47,6 +47,26 @@ func TestAdminAuthRejectsWrongPassword(t *testing.T) {
 	}
 }
 
+func TestAdminAuthHTMXRequiresCredentialsWithWWWAuthenticate(t *testing.T) {
+	middleware := BasicAuthMiddleware("admin", "secret")
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/admin/apps", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 Unauthorized for HTMX request, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
+		t.Errorf("Expected WWW-Authenticate header on HTMX request, got %q", got)
+	}
+}
+
 func TestAdminAuthAcceptsCorrectCredentials(t *testing.T) {
 	middleware := BasicAuthMiddleware("admin", "secret")
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
