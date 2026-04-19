@@ -12,6 +12,11 @@ deploy-queue.db
 # Playwright MCP artifacts
 .playwright-mcp/
 
+# Playwright local harness artifacts
+node_modules/
+test-results/
+playwright-report/
+
 # QA/test screenshots
 *.png
 
