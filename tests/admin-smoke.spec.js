@@ -1,0 +1,389 @@
+const { test, expect } = require('@playwright/test');
+
+function baseURL() {
+  const value = process.env.PLAYWRIGHT_BASE_URL;
+  if (!value) {
+    throw new Error('PLAYWRIGHT_BASE_URL is not set');
+  }
+  return value;
+}
+
+function webhookSecret() {
+  const value = process.env.PLAYWRIGHT_WEBHOOK_SECRET;
+  if (!value) {
+    throw new Error('PLAYWRIGHT_WEBHOOK_SECRET is not set');
+  }
+  return value;
+}
+
+async function seedHistoryJob(request) {
+  const tag = `pw-history-${Date.now()}`;
+  const response = await request.post(`${baseURL()}/webhook`, {
+    headers: {
+      Authorization: `Bearer ${webhookSecret()}`
+    },
+    data: { tag }
+  });
+
+  expect(response.status()).toBe(202);
+
+  return tag;
+}
+
+async function newAuthenticatedContext(browser) {
+  return browser.newContext({
+    httpCredentials: {
+      username: process.env.PLAYWRIGHT_ADMIN_USERNAME,
+      password: process.env.PLAYWRIGHT_ADMIN_PASSWORD
+    }
+  });
+}
+
+async function createApp(page, suffix, namePrefix) {
+  const appName = `${namePrefix}-${suffix}`;
+  const webhookSecret = `${namePrefix}-secret-${suffix}`;
+  const serviceName = `${appName}.service`;
+  const binaryPath = `/opt/${appName}`;
+  const githubRepo = `example/${appName}`;
+  const artifactName = `${appName}-artifact`;
+
+  await page.goto(`${baseURL()}/admin/apps/new`);
+  await expect(page.getByRole('heading', { name: 'New App' })).toBeVisible();
+
+  await page.locator('#name').fill(appName);
+  await page.locator('#webhook_secret').fill(webhookSecret);
+  await page.locator('#service_name').fill(serviceName);
+  await page.locator('#binary_path').fill(binaryPath);
+  await page.locator('#github_repo').fill(githubRepo);
+  await page.locator('#artifact_name').fill(artifactName);
+
+  const [createRequest, createResponse] = await Promise.all([
+    page.waitForRequest('**/admin/apps/create'),
+    page.waitForResponse('**/admin/apps/create'),
+    page.locator('#submit-btn').click()
+  ]);
+
+  expect(createRequest.headers()['hx-request']).toBe('true');
+  expect(createResponse.status()).toBe(200);
+  expect(createResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+created+successfully');
+
+  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
+
+  const appCard = page.locator('[data-app-id]').filter({ hasText: appName }).first();
+  await expect(appCard).toBeVisible();
+
+  return {
+    appId: await appCard.getAttribute('data-app-id'),
+    appName,
+    webhookSecret,
+    serviceName,
+    binaryPath,
+    githubRepo,
+    artifactName
+  };
+}
+
+test('admin apps page loads with basic auth', async ({ browser }) => {
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+
+  await page.goto(`${baseURL()}/admin/apps`);
+
+  await expect(page.getByRole('heading', { name: 'Apps' })).toBeVisible();
+  await expect(page.locator('#apps-table')).toBeVisible();
+  await expect(page.locator('[data-app-id]')).toHaveCount(1);
+  await expect(page.locator('[data-app-id]').first()).toContainText('default');
+
+  await context.close();
+});
+
+test('admin apps page rejects requests without auth', async ({ request }) => {
+  const response = await request.get(`${baseURL()}/admin/apps`);
+
+  expect(response.status()).toBe(401);
+  expect(response.headers()['www-authenticate']).toBe('Basic realm="auto-deploy admin"');
+});
+
+test('history navigation supports deep links and retry updates stay in place', async ({ browser, request }) => {
+  const tag = await seedHistoryJob(request);
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+
+  await page.goto(`${baseURL()}/admin/apps`);
+  await expect(page.locator('[data-app-id]')).toHaveCount(1);
+
+  const appCard = page.locator('[data-app-id]').first();
+  const historyLink = appCard.getByRole('link', { name: 'History' });
+  const historyPath = await historyLink.getAttribute('href');
+
+  await historyLink.click();
+  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page.locator('#history-content')).toBeVisible();
+  await expect(page.locator('#history-table-region')).toBeVisible();
+
+  const statusRow = page.locator(`#history-table tr:has-text("${tag}")`).first();
+  await expect(statusRow).toBeVisible({ timeout: 30000 });
+  await expect(statusRow).toContainText(/failed|succeeded/i, { timeout: 30000 });
+
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page.locator('#history-content')).toBeVisible();
+  await expect(statusRow).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/admin\/apps$/);
+  await expect(page.locator('#apps-table')).toBeVisible();
+
+  await page.goForward();
+  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page.locator('#history-content')).toBeVisible();
+
+  const retryButton = statusRow.locator('.retry-button');
+  await expect(retryButton).toBeVisible();
+  await retryButton.click();
+
+  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page.locator('#flash')).toContainText('Retry queued');
+  await expect(page.locator('#history-progress-subscription [hx-ext="sse"]')).toHaveCount(1);
+  await expect(page.locator('#history-table tr[data-status="pending"]')).toContainText(tag);
+  const historyNavigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
+  await expect(page.locator('#history-table tr[data-status="pending"]')).toContainText(tag);
+  await expect(page.locator('#history-table tr[data-status="pending"]')).toHaveCount(0, { timeout: 30000 });
+  await expect(page.locator('#history-table tr[data-status="failed"], #history-table tr[data-status="succeeded"]').filter({ hasText: tag })).toHaveCount(2, { timeout: 30000 });
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(historyNavigationCount);
+  await expect(page.locator(`#history-table tr:has-text("${tag}")`)).toHaveCount(2, { timeout: 30000 });
+
+  await context.close();
+});
+
+test('apps list deploy settles live through HTMX SSE without reload', async ({ browser }) => {
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+  const tag = `pw-apps-${Date.now()}`;
+
+  await page.goto(`${baseURL()}/admin/apps`);
+  await expect(page.locator('[data-app-id]')).toHaveCount(1);
+
+  const appCard = page.locator('[data-app-id]').first();
+  await appCard.locator('input[name="tag"]').fill(tag);
+  await appCard.getByRole('button', { name: 'Deploy' }).click();
+
+  await expect(page.locator('#flash')).toContainText(`Manual deploy queued for ${tag}`);
+  await expect(page.locator('#apps-progress-subscription [hx-ext="sse"]')).toHaveCount(1);
+
+  const statusBadge = appCard.locator('[data-progress-region] .deploy-status-badge');
+  await expect(statusBadge).toContainText(/pending|in_progress/i);
+
+  const navigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
+  await expect(appCard).not.toHaveAttribute('data-progress-job', /.+/, { timeout: 30000 });
+  await expect(statusBadge).toContainText(/failed|succeeded/i, { timeout: 30000 });
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
+
+  await context.close();
+});
+
+test('apps list toggle and delete flows update in place without hard navigation', async ({ browser }) => {
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+  const suffix = `${Date.now()}`;
+  const appName = `playwright-toggle-delete-${suffix}`;
+
+  await page.goto(`${baseURL()}/admin/apps/new`);
+  await expect(page.getByRole('heading', { name: 'New App' })).toBeVisible();
+
+  await page.locator('#name').fill(appName);
+  await page.locator('#webhook_secret').fill(`playwright-toggle-secret-${suffix}`);
+  await page.locator('#service_name').fill(`playwright-toggle-${suffix}.service`);
+  await page.locator('#binary_path').fill(`/opt/playwright-toggle-${suffix}`);
+  await page.locator('#github_repo').fill('example/playwright-toggle-delete');
+  await page.locator('#artifact_name').fill(`playwright-toggle-artifact-${suffix}`);
+
+  const [createRequest, createResponse] = await Promise.all([
+    page.waitForRequest('**/admin/apps/create'),
+    page.waitForResponse('**/admin/apps/create'),
+    page.locator('#submit-btn').click()
+  ]);
+
+  expect(createRequest.headers()['hx-request']).toBe('true');
+  expect(createResponse.status()).toBe(200);
+  expect(createResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+created+successfully');
+
+  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
+  await expect(page.locator('#apps-table')).toBeVisible();
+
+  const appCard = page.locator('[data-app-id]').filter({ hasText: appName }).first();
+  await expect(appCard).toBeVisible();
+
+  const appId = await appCard.getAttribute('data-app-id');
+  const appsURL = page.url();
+  const navigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
+
+  const [disableRequest, disableResponse] = await Promise.all([
+    page.waitForRequest((request) => request.url().includes(`/admin/apps/${appId}/disable`) && request.method() === 'POST'),
+    page.waitForResponse((response) => response.url().includes(`/admin/apps/${appId}/disable`) && response.request().method() === 'POST'),
+    appCard.getByRole('button', { name: 'Disable' }).click()
+  ]);
+
+  expect(disableRequest.headers()['hx-request']).toBe('true');
+  expect(disableResponse.status()).toBe(200);
+  expect(disableResponse.headers()['hx-location']).toBeUndefined();
+  await expect(page).toHaveURL(appsURL);
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
+  await expect(page.locator('#flash')).toContainText('App disabled successfully');
+  await expect(page.locator(`#app-card-${appId}`)).toContainText('Disabled');
+  await expect(page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Enable' })).toBeVisible();
+
+  const [enableRequest, enableResponse] = await Promise.all([
+    page.waitForRequest((request) => request.url().includes(`/admin/apps/${appId}/enable`) && request.method() === 'POST'),
+    page.waitForResponse((response) => response.url().includes(`/admin/apps/${appId}/enable`) && response.request().method() === 'POST'),
+    page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Enable' }).click()
+  ]);
+
+  expect(enableRequest.headers()['hx-request']).toBe('true');
+  expect(enableResponse.status()).toBe(200);
+  expect(enableResponse.headers()['hx-location']).toBeUndefined();
+  await expect(page).toHaveURL(appsURL);
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
+  await expect(page.locator('#flash')).toContainText('App enabled successfully');
+  await expect(page.locator(`#app-card-${appId}`)).toContainText('Active');
+  await expect(page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Disable' })).toBeVisible();
+
+  const appCountBeforeDelete = await page.locator('[data-app-id]').count();
+  page.once('dialog', (dialog) => dialog.accept());
+  const [deleteRequest, deleteResponse] = await Promise.all([
+    page.waitForRequest((request) => request.url().includes(`/admin/apps/${appId}/delete`) && request.method() === 'POST'),
+    page.waitForResponse((response) => response.url().includes(`/admin/apps/${appId}/delete`) && response.request().method() === 'POST'),
+    page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Delete' }).click()
+  ]);
+
+  expect(deleteRequest.headers()['hx-request']).toBe('true');
+  expect(deleteResponse.status()).toBe(200);
+  expect(deleteResponse.headers()['hx-location']).toBeUndefined();
+  await expect(page).toHaveURL(appsURL);
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
+  await expect(page.locator('#flash')).toContainText('App deleted successfully');
+  await expect(page.locator(`#app-card-${appId}`)).toHaveCount(0);
+  await expect(page.locator('[data-app-id]')).toHaveCount(appCountBeforeDelete - 1);
+
+  await context.close();
+});
+
+test('new app form keeps values on HTMX validation and navigates on success', async ({ browser }) => {
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+
+  await page.goto(`${baseURL()}/admin/apps/new`);
+
+  await expect(page.getByRole('heading', { name: 'New App' })).toBeVisible();
+
+  await page.locator('#name').fill('playwright-inline-app');
+  await page.locator('#webhook_secret').fill('bootstrap-secret');
+  await page.locator('#service_name').fill('playwright-bootstrap.service');
+  await page.locator('#binary_path').fill('/tmp/playwright-bootstrap-binary');
+  await page.locator('#github_repo').fill('example/playwright-inline');
+  await page.locator('#artifact_name').fill('playwright-inline-artifact');
+
+  const [invalidRequest, invalidResponse] = await Promise.all([
+    page.waitForRequest('**/admin/apps/create'),
+    page.waitForResponse('**/admin/apps/create'),
+    page.locator('#submit-btn').click()
+  ]);
+
+  expect(invalidRequest.headers()['hx-request']).toBe('true');
+  expect(invalidResponse.status()).toBe(400);
+  await expect(page.locator('#form-errors')).toBeVisible();
+  await expect(page.locator('#name')).toHaveValue('playwright-inline-app');
+  await expect(page.locator('#form-errors')).toContainText('An app with this binary path, service name, or webhook secret already exists');
+
+  await page.locator('#webhook_secret').fill('playwright-created-secret');
+  await page.locator('#service_name').fill('playwright-inline.service');
+  await page.locator('#binary_path').fill('/opt/playwright-inline');
+  await page.locator('#github_repo').fill('example/playwright-inline');
+  await page.locator('#artifact_name').fill('playwright-inline-artifact');
+
+  const [successRequest, successResponse] = await Promise.all([
+    page.waitForRequest('**/admin/apps/create'),
+    page.waitForResponse('**/admin/apps/create'),
+    page.locator('#submit-btn').click()
+  ]);
+
+  expect(successRequest.headers()['hx-request']).toBe('true');
+  expect(successResponse.status()).toBe(200);
+  expect(successResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+created+successfully');
+  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
+  await expect(page.getByTestId('admin-flash')).toContainText('App created successfully');
+  await expect(page.locator('#apps-table')).toBeVisible();
+  await expect(page.locator('[data-app-id]').filter({ hasText: 'playwright-inline-app' }).first()).toBeVisible();
+
+  await context.close();
+});
+
+test('edit app keeps invalid HTMX submission local with inline errors', async ({ browser }) => {
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+
+  const conflictApp = await createApp(page, `${Date.now()}-conflict`, 'playwright-edit-conflict');
+  const editableApp = await createApp(page, `${Date.now()}-target`, 'playwright-edit-target');
+
+  await page.locator(`[data-app-id="${editableApp.appId}"]`).getByRole('link', { name: 'Edit' }).click();
+
+  await expect(page).toHaveURL(/\/admin\/apps\/[^/]+\/edit$/);
+  await expect(page.getByRole('heading', { name: 'Edit App' })).toBeVisible();
+
+  const navigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
+
+  await page.locator('#name').fill('playwright-edit-target-invalid');
+  await page.locator('#service_name').fill(conflictApp.serviceName);
+  await page.locator('#binary_path').fill(conflictApp.binaryPath);
+
+  const [invalidRequest, invalidResponse] = await Promise.all([
+    page.waitForRequest((request) => request.url().includes('/update') && request.method() === 'POST'),
+    page.waitForResponse((response) => response.url().includes('/update') && response.request().method() === 'POST'),
+    page.locator('#submit-btn').click()
+  ]);
+
+  expect(invalidRequest.headers()['hx-request']).toBe('true');
+  expect(invalidResponse.status()).toBe(400);
+  await expect(page).toHaveURL(/\/admin\/apps\/[^/]+\/update$/);
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
+  await expect(page.getByRole('heading', { name: 'Edit App' })).toBeVisible();
+  await expect(page.locator('#app-form')).toBeVisible();
+  await expect(page.locator('#form-errors')).toBeVisible();
+  await expect(page.locator('#form-errors')).toContainText('An app with this binary path or service name already exists');
+  await expect(page.locator('#name')).toHaveValue('playwright-edit-target-invalid');
+  await expect(page.locator('#service_name')).toHaveValue(conflictApp.serviceName);
+  await expect(page.locator('#binary_path')).toHaveValue(conflictApp.binaryPath);
+
+  await context.close();
+});
+
+test('edit app via boosted navigation shows success flash after HTMX redirect', async ({ browser }) => {
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+
+  const editableApp = await createApp(page, `${Date.now()}-success`, 'playwright-edit-success');
+
+  await page.locator(`[data-app-id="${editableApp.appId}"]`).getByRole('link', { name: 'Edit' }).click();
+
+  await expect(page).toHaveURL(/\/admin\/apps\/[^/]+\/edit$/);
+  await expect(page.getByRole('heading', { name: 'Edit App' })).toBeVisible();
+
+  await page.locator('#name').fill('playwright-edit-success-updated');
+
+  const [updateRequest, updateResponse] = await Promise.all([
+    page.waitForRequest((request) => request.url().includes('/update') && request.method() === 'POST'),
+    page.waitForResponse((response) => response.url().includes('/update') && response.request().method() === 'POST'),
+    page.locator('#submit-btn').click()
+  ]);
+
+  expect(updateRequest.headers()['hx-request']).toBe('true');
+  expect(updateResponse.status()).toBe(200);
+  expect(updateResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+updated+successfully');
+
+  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+updated\+successfully/);
+  await expect(page.getByTestId('admin-flash')).toContainText('App updated successfully');
+  await expect(page.locator('#apps-table')).toBeVisible();
+  await expect(page.locator(`[data-app-id="${editableApp.appId}"]`)).toContainText('playwright-edit-success-updated');
+
+  await context.close();
+});
