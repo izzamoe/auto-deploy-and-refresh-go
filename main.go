@@ -85,7 +85,7 @@ func main() {
 	}
 	appAdminHandler := NewAppAdminHandler(appStore, q, adminHandler.templates, tracker)
 	historyAdminHandler := NewHistoryAdminHandler(appStore, q, adminHandler.templates, tracker)
-	progressAdminHandler := NewProgressAdminHandler(tracker)
+	progressAdminHandler := NewProgressAdminHandler(tracker, appStore, q, adminHandler.templates)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /webhook", multiAppWebhookHandler(admission))

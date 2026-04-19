@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -26,6 +27,7 @@ func NewAppAdminHandler(store *AppStore, queue *DeployQueue, templates map[strin
 
 type appsListData struct {
 	Apps         []AppWithLastDeploy
+	ProgressStreamURL string
 	Flash        string
 	FlashMessage string
 	FlashIsError bool
@@ -42,6 +44,19 @@ type appFormData struct {
 	FlashIsError bool
 }
 
+func (h *AppAdminHandler) renderAppForm(w http.ResponseWriter, r *http.Request, data appFormData) {
+	if isHTMXRequest(r) && r.Method == http.MethodPost {
+		if err := h.templates["app_form.html"].ExecuteTemplate(w, "app-form", data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if err := renderAdminTemplate(w, r, h.templates["app_form.html"], data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func (h *AppAdminHandler) ListApps(w http.ResponseWriter, r *http.Request) {
 	apps, err := h.store.ListWithLastDeploy()
 	if err != nil {
@@ -50,7 +65,7 @@ func (h *AppAdminHandler) ListApps(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.tracker != nil {
 		for i := range apps {
-			if snapshot, ok := h.tracker.Snapshot(apps[i].ID); ok {
+			if snapshot, ok := activeSnapshotForApp(h.tracker, apps[i]); ok {
 				apps[i].LiveProgress = snapshot
 			}
 		}
@@ -62,15 +77,16 @@ func (h *AppAdminHandler) ListApps(w http.ResponseWriter, r *http.Request) {
 	curlAppName := r.URL.Query().Get("appname")
 
 	data := appsListData{
-		Apps:         apps,
-		Flash:        flash,
-		FlashMessage: flash,
-		FlashIsError: flashError,
-		CurlSecret:   curlSecret,
-		CurlAppName:  curlAppName,
+		Apps:              apps,
+		ProgressStreamURL: buildProgressStreamURL(activeAppIDsFromApps(apps), activeJobIDsFromApps(apps)),
+		Flash:             flash,
+		FlashMessage:      flash,
+		FlashIsError:      flashError,
+		CurlSecret:        curlSecret,
+		CurlAppName:       curlAppName,
 	}
 
-	if err := h.templates["apps_list.html"].ExecuteTemplate(w, "base.html", data); err != nil {
+	if err := renderAdminTemplate(w, r, h.templates["apps_list.html"], data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -81,9 +97,7 @@ func (h *AppAdminHandler) NewAppForm(w http.ResponseWriter, r *http.Request) {
 		Errors: nil,
 		IsEdit: false,
 	}
-	if err := h.templates["app_form.html"].ExecuteTemplate(w, "base.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	h.renderAppForm(w, r, data)
 }
 
 func (h *AppAdminHandler) CreateApp(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +137,7 @@ func (h *AppAdminHandler) CreateApp(w http.ResponseWriter, r *http.Request) {
 
 	if len(errors) > 0 {
 		w.WriteHeader(http.StatusBadRequest)
-		h.templates["app_form.html"].ExecuteTemplate(w, "base.html", appFormData{
+		h.renderAppForm(w, r, appFormData{
 			App:    app,
 			Errors: errors,
 			IsEdit: false,
@@ -139,7 +153,7 @@ func (h *AppAdminHandler) CreateApp(w http.ResponseWriter, r *http.Request) {
 			errors = append(errors, "Internal error creating app")
 		}
 		w.WriteHeader(http.StatusBadRequest)
-		h.templates["app_form.html"].ExecuteTemplate(w, "base.html", appFormData{
+		h.renderAppForm(w, r, appFormData{
 			App:    app,
 			Errors: errors,
 			IsEdit: false,
@@ -147,7 +161,7 @@ func (h *AppAdminHandler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/admin/apps?flash=App+created+successfully&curl="+url.QueryEscape(secret)+"&appname="+url.QueryEscape(app.Name), http.StatusSeeOther)
+	adminNavigate(w, r, "/admin/apps?flash=App+created+successfully&curl="+url.QueryEscape(secret)+"&appname="+url.QueryEscape(app.Name))
 }
 
 func (h *AppAdminHandler) EditAppForm(w http.ResponseWriter, r *http.Request) {
@@ -163,9 +177,7 @@ func (h *AppAdminHandler) EditAppForm(w http.ResponseWriter, r *http.Request) {
 		Errors: nil,
 		IsEdit: true,
 	}
-	if err := h.templates["app_form.html"].ExecuteTemplate(w, "base.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	h.renderAppForm(w, r, data)
 }
 
 func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +223,7 @@ func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
 
 	if len(errors) > 0 {
 		w.WriteHeader(http.StatusBadRequest)
-		h.templates["app_form.html"].ExecuteTemplate(w, "base.html", appFormData{
+		h.renderAppForm(w, r, appFormData{
 			App:    updatedApp,
 			Errors: errors,
 			IsEdit: true,
@@ -227,7 +239,7 @@ func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
 			errors = append(errors, "Internal error updating app")
 		}
 		w.WriteHeader(http.StatusBadRequest)
-		h.templates["app_form.html"].ExecuteTemplate(w, "base.html", appFormData{
+		h.renderAppForm(w, r, appFormData{
 			App:    updatedApp,
 			Errors: errors,
 			IsEdit: true,
@@ -240,7 +252,7 @@ func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
 			if err == ErrDuplicateApp {
 				errors = append(errors, "An app with this webhook secret already exists")
 				w.WriteHeader(http.StatusBadRequest)
-				h.templates["app_form.html"].ExecuteTemplate(w, "base.html", appFormData{
+				h.renderAppForm(w, r, appFormData{
 					App:    updatedApp,
 					Errors: errors,
 					IsEdit: true,
@@ -252,7 +264,45 @@ func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Redirect(w, r, "/admin/apps?flash=App+updated+successfully", http.StatusSeeOther)
+	adminNavigate(w, r, "/admin/apps?flash=App+updated+successfully")
+}
+
+func (h *AppAdminHandler) renderListInPlaceOrRedirect(w http.ResponseWriter, r *http.Request, flashMsg string, isError bool) {
+	if !isHTMXRequest(r) {
+		dest := "/admin/apps"
+		if flashMsg != "" {
+			dest += "?flash=" + url.QueryEscape(flashMsg)
+			if isError {
+				dest += "&flash_error=1"
+			}
+		}
+		http.Redirect(w, r, dest, http.StatusSeeOther)
+		return
+	}
+
+	apps, err := h.store.ListWithLastDeploy()
+	if err != nil {
+		http.Error(w, "Failed to list apps", http.StatusInternalServerError)
+		return
+	}
+	if h.tracker != nil {
+		for i := range apps {
+			if snapshot, ok := activeSnapshotForApp(h.tracker, apps[i]); ok {
+				apps[i].LiveProgress = snapshot
+			}
+		}
+	}
+
+	data := appsListData{
+		Apps:              apps,
+		ProgressStreamURL: buildProgressStreamURL(activeAppIDsFromApps(apps), activeJobIDsFromApps(apps)),
+		FlashMessage:      flashMsg,
+		FlashIsError:      isError,
+	}
+
+	if err := renderAdminTemplate(w, r, h.templates["apps_list.html"], data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (h *AppAdminHandler) DeleteApp(w http.ResponseWriter, r *http.Request) {
@@ -260,17 +310,35 @@ func (h *AppAdminHandler) DeleteApp(w http.ResponseWriter, r *http.Request) {
 	err := h.store.Delete(id)
 	if err != nil {
 		if errors.Is(err, ErrActiveDeployExists) {
-			http.Redirect(w, r, "/admin/apps?flash=Cannot+delete+app+with+active+deploy&flash_error=1", http.StatusSeeOther)
+			h.renderListInPlaceOrRedirect(w, r, "Cannot delete app with active deploy", true)
 			return
 		}
 		http.Error(w, "Failed to delete app", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/apps?flash=App+deleted+successfully", http.StatusSeeOther)
+	h.renderListInPlaceOrRedirect(w, r, "App deleted successfully", false)
 }
 
 func (h *AppAdminHandler) ManualDeployApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	source := r.FormValue("source")
+	isList := source == "list"
+
+	fail := func(msg string) {
+		if isList {
+			h.renderListInPlaceOrRedirect(w, r, msg, true)
+		} else {
+			adminNavigate(w, r, "/admin/apps/"+id+"/history?flash="+url.QueryEscape(msg)+"&flash_error=1")
+		}
+	}
+
+	success := func(msg string) {
+		if isList {
+			h.renderListInPlaceOrRedirect(w, r, msg, false)
+		} else {
+			adminNavigate(w, r, "/admin/apps/"+id+"/history?flash="+url.QueryEscape(msg))
+		}
+	}
 
 	app, err := h.store.Get(id)
 	if err != nil {
@@ -279,7 +347,7 @@ func (h *AppAdminHandler) ManualDeployApp(w http.ResponseWriter, r *http.Request
 	}
 
 	if !app.Enabled {
-		http.Redirect(w, r, "/admin/apps?flash=Cannot+deploy+disabled+app&flash_error=1", http.StatusSeeOther)
+		fail("Cannot deploy disabled app")
 		return
 	}
 
@@ -290,25 +358,25 @@ func (h *AppAdminHandler) ManualDeployApp(w http.ResponseWriter, r *http.Request
 
 	tag := r.FormValue("tag")
 	if tag == "" {
-		http.Redirect(w, r, "/admin/apps?flash=Tag+is+required&flash_error=1", http.StatusSeeOther)
+		fail("Tag is required")
 		return
 	}
 
 	err = h.queue.EnqueueManual(id, tag)
 	if err != nil {
 		if errors.Is(err, ErrDuplicate) {
-			http.Redirect(w, r, "/admin/apps/"+id+"/history?flash=Deploy+already+queued+for+this+tag", http.StatusSeeOther)
+			fail("Deploy already queued for this tag")
 			return
 		}
 		if errors.Is(err, ErrQueueFull) {
-			http.Redirect(w, r, "/admin/apps?flash=Queue+is+full&flash_error=1", http.StatusSeeOther)
+			fail("Queue is full")
 			return
 		}
 		http.Error(w, "Failed to queue deploy: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	http.Redirect(w, r, "/admin/apps/"+id+"/history?flash=Manual+deploy+queued+for+"+tag, http.StatusSeeOther)
+	success("Manual deploy queued for " + tag)
 }
 
 func (h *AppAdminHandler) ToggleApp(w http.ResponseWriter, r *http.Request) {
@@ -326,7 +394,7 @@ func (h *AppAdminHandler) ToggleApp(w http.ResponseWriter, r *http.Request) {
 	if !enable {
 		status = "disabled"
 	}
-	http.Redirect(w, r, "/admin/apps?flash=App+"+status+"+successfully", http.StatusSeeOther)
+	h.renderListInPlaceOrRedirect(w, r, "App "+status+" successfully", false)
 }
 
 func RegisterAdminAppRoutes(mux *http.ServeMux, handler *AppAdminHandler, middleware func(http.Handler) http.Handler) {
@@ -339,4 +407,75 @@ func RegisterAdminAppRoutes(mux *http.ServeMux, handler *AppAdminHandler, middle
 	mux.Handle("POST /admin/apps/{id}/enable", middleware(http.HandlerFunc(handler.ToggleApp)))
 	mux.Handle("POST /admin/apps/{id}/disable", middleware(http.HandlerFunc(handler.ToggleApp)))
 	mux.Handle("POST /admin/apps/{id}/deploy", middleware(http.HandlerFunc(handler.ManualDeployApp)))
+}
+
+func activeAppIDsFromApps(apps []AppWithLastDeploy) []string {
+	ids := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, app := range apps {
+		if app.ID == "" || !isActiveDeployStatus(app.LastDeployStatus) {
+			continue
+		}
+		if _, ok := seen[app.ID]; ok {
+			continue
+		}
+		seen[app.ID] = struct{}{}
+		ids = append(ids, app.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func activeJobIDsFromApps(apps []AppWithLastDeploy) []string {
+	ids := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, app := range apps {
+		if app.LastJobID == "" || !isActiveDeployStatus(app.LastDeployStatus) {
+			continue
+		}
+		if _, ok := seen[app.LastJobID]; ok {
+			continue
+		}
+		seen[app.LastJobID] = struct{}{}
+		ids = append(ids, app.LastJobID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func isActiveDeployStatus(status string) bool {
+	return status == "pending" || status == "in_progress"
+}
+
+func activeSnapshotForApp(tracker *ProgressTracker, app AppWithLastDeploy) (*ProgressSnapshot, bool) {
+	if tracker == nil || !isActiveDeployStatus(app.LastDeployStatus) || app.LastJobID == "" {
+		return nil, false
+	}
+	snapshot, ok := tracker.Snapshot(app.ID)
+	if !ok || snapshot.JobID != app.LastJobID {
+		return nil, false
+	}
+	return snapshot, true
+}
+
+func buildProgressStreamURL(appIDs, jobIDs []string) string {
+	if len(appIDs) == 0 && len(jobIDs) == 0 {
+		return ""
+	}
+	values := url.Values{}
+	for _, appID := range appIDs {
+		if appID != "" {
+			values.Add("app_id", appID)
+		}
+	}
+	for _, jobID := range jobIDs {
+		if jobID != "" {
+			values.Add("job_id", jobID)
+		}
+	}
+	encoded := values.Encode()
+	if encoded == "" {
+		return ""
+	}
+	return "/admin/progress/stream?" + encoded
 }

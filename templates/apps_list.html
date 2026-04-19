@@ -56,96 +56,10 @@ function fallbackCopy(text) {
 </div>
 
 <div class="apps-grid" id="apps-table">
+    {{ template "apps_progress_subscription" . }}
     {{ if .Apps }}
         {{ range .Apps }}
-        <div class="card-section" 
-             {{ if .LastJobID }}data-progress-job="{{ .LastJobID }}"{{ end }}
-             data-app-id="{{ .ID }}" 
-             style="display: flex; flex-direction: column; gap: 16px;">
-            
-            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                <div>
-                    <h3 style="margin: 0; font-size: 1.25rem;">{{ .Name }}</h3>
-                    <div class="meta-row" style="margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">
-                        <span><strong>Service:</strong> {{ .ServiceName }}</span>
-                        <span><strong>Repo:</strong> {{ .GithubRepo }}</span>
-                        <span><strong>Binary:</strong> {{ .BinaryPath }}</span>
-                        <span><strong>Artifact:</strong> {{ .ArtifactName }}</span>
-                    </div>
-                </div>
-                <div>
-                    {{ if .Enabled }}
-                        <span class="badge active">Active</span>
-                    {{ else }}
-                        <span class="badge disabled">Disabled</span>
-                    {{ end }}
-                </div>
-            </div>
-
-            <!-- Deployment Status and Progress -->
-            <div style="background: var(--bg-page); padding: 12px; border-radius: 6px; border: 1px solid var(--border-subtle);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="deploy-status-badge 
-                            {{ if eq .LastDeployStatus "succeeded" }}status-succeeded
-                            {{ else if eq .LastDeployStatus "failed" }}status-failed
-                            {{ else if eq .LastDeployStatus "in_progress" }}status-in-progress
-                            {{ else if eq .LastDeployStatus "pending" }}status-pending
-                            {{ end }}" data-status="{{ .LastDeployStatus }}">
-                            {{ if .LastDeployStatus }}{{ .LastDeployStatus }}{{ else }}No deploys yet{{ end }}
-                        </span>
-                    </div>
-                </div>
-
-                {{ if and .LiveProgress (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}
-                    {{ if gt .LiveProgress.TotalBytes 0 }}
-                        <div class="progress-bar-container" style="margin-bottom: 8px;">
-                            <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
-                        </div>
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <span class="stat-chip stat-percent" data-progress-percent>
-                                {{ .LiveProgress.DownloadedBytes }} / {{ .LiveProgress.TotalBytes }}
-                            </span>
-                            <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
-                            <span class="meta-row" style="margin: 0; display: none;" data-progress-bytes></span>
-                        </div>
-                    {{ else }}
-                        <div class="progress-bar-container" style="margin-bottom: 8px;">
-                            <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
-                        </div>
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <span class="stat-chip stat-percent" data-progress-percent style="display: none;"></span>
-                            <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
-                            <span class="meta-row" style="margin: 0;" data-progress-bytes>
-                                {{ .LiveProgress.DownloadedBytes }} B
-                            </span>
-                        </div>
-                    {{ end }}
-                {{ else if .LastDeployStatus }}
-                    <div class="meta-row">
-                        {{ if .LastDeployTag }}<span>Tag: <strong>{{ .LastDeployTag }}</strong></span>{{ end }}
-                        {{ if .LastDeployTime }}&bull; <span>Time: {{ .LastDeployTime.Format "Jan 02 15:04" }}</span>{{ end }}
-                        {{ if gt .LastDownloadSpeedBPS 0.0 }}&bull; <span>Speed: {{ printf "%.0f" .LastDownloadSpeedBPS }} B/s</span>{{ end }}
-                        {{ if .LastDownloadBytes }}&bull; <span>Size: {{ .LastDownloadBytes }} B</span>{{ end }}
-                    </div>
-                {{ else }}
-                    <div class="meta-row">No deployment history.</div>
-                {{ end }}
-            </div>
-
-            <!-- Actions -->
-            <div style="display: flex; gap: 8px; justify-content: flex-end;">
-                <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
-                <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
-                <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" style="margin: 0;">
-                    <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
-                </form>
-                {{ if .Enabled }}
-                <button type="button" class="btn btn-secondary" onclick="showDeployModal('{{ .ID }}', '{{ .Name }}')">Deploy</button>
-                {{ end }}
-                <button type="button" class="btn btn-danger" onclick="showDeleteModal('{{ .ID }}', '{{ .Name }}')">Delete</button>
-            </div>
-        </div>
+        {{ template "app_card" . }}
         {{ end }}
     {{ else }}
         <div class="empty-state card-section">
@@ -155,198 +69,191 @@ function fallbackCopy(text) {
     {{ end }}
 </div>
 
-<div id="delete-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:8px;padding:24px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.18);">
-        <h3 style="margin-bottom:12px;font-size:1.1rem;">Delete App</h3>
-        <p>Are you sure you want to delete <strong id="delete-app-name"></strong>?</p>
-        <p style="margin-top:8px;font-size:0.875rem;color:var(--text-muted);">This will permanently delete the app and all its deploy history.</p>
-        <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end;">
-            <button type="button" onclick="closeDeleteModal()" class="btn btn-secondary">Cancel</button>
-            <form id="delete-form" method="POST" action="" style="margin:0;">
-                <button type="submit" class="btn btn-danger">Delete</button>
-            </form>
+{{ end }}
+
+{{ define "apps_progress_subscription" }}
+<div id="apps-progress-subscription" style="display:none;">
+    {{ if .ProgressStreamURL }}
+    <div hx-ext="sse" hx-swap="none" sse-connect="{{ .ProgressStreamURL }}" sse-swap="progress"></div>
+    {{ end }}
+</div>
+{{ end }}
+
+{{ define "apps_progress_subscription_oob" }}
+<div id="apps-progress-subscription" hx-swap-oob="outerHTML" style="display:none;">
+    {{ if .URL }}
+    <div hx-ext="sse" hx-swap="none" sse-connect="{{ .URL }}" sse-swap="progress"></div>
+    {{ end }}
+</div>
+{{ end }}
+
+{{ define "app_card" }}
+<div class="card-section"
+     id="app-card-{{ .ID }}"
+     {{ if and .LastJobID (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}data-progress-job="{{ .LastJobID }}"{{ end }}
+     data-app-id="{{ .ID }}"
+     style="display: flex; flex-direction: column; gap: 16px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <div>
+            <h3 style="margin: 0; font-size: 1.25rem;">{{ .Name }}</h3>
+            <div class="meta-row" style="margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">
+                <span><strong>Service:</strong> {{ .ServiceName }}</span>
+                <span><strong>Repo:</strong> {{ .GithubRepo }}</span>
+                <span><strong>Binary:</strong> {{ .BinaryPath }}</span>
+                <span><strong>Artifact:</strong> {{ .ArtifactName }}</span>
+            </div>
+        </div>
+        <div>
+            {{ if .Enabled }}
+                <span class="badge active">Active</span>
+            {{ else }}
+                <span class="badge disabled">Disabled</span>
+            {{ end }}
         </div>
     </div>
-</div>
 
-<div id="deploy-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:8px;padding:24px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.18);">
-        <h3 style="margin-bottom:12px;font-size:1.1rem;">Manual Deploy</h3>
-        <p>Deploy <strong id="deploy-app-name"></strong></p>
-        <form id="deploy-form" method="POST" action="" style="margin-top:16px;">
-            <label for="deploy-tag-input" style="display:block;font-size:0.875rem;font-weight:500;margin-bottom:6px;">Tag (e.g. v1.2.3)</label>
-            <input type="text" id="deploy-tag-input" name="tag" placeholder="v1.2.3" required
-                style="width:100%;height:36px;padding:0 8px;border:1px solid #eaeaea;border-radius:4px;font-size:0.875rem;font-family:inherit;">
-            <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
-                <button type="button" onclick="closeDeployModal()" class="btn btn-secondary">Cancel</button>
-                <button type="submit" class="btn btn-primary">Deploy</button>
-            </div>
+    {{ template "app_progress_region" . }}
+
+    <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
+        <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
+        <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
+        <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
+              hx-post="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
+              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+            <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
+        </form>
+        {{ if .Enabled }}
+        <form method="POST" action="/admin/apps/{{ .ID }}/deploy"
+              hx-post="/admin/apps/{{ .ID }}/deploy"
+              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0; display: inline-flex; gap: 8px;">
+            <input type="hidden" name="source" value="list">
+            <input type="text" name="tag" placeholder="Tag (e.g. v1.2.3)" required style="width: 120px; height: 36px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+            <button type="submit" class="btn btn-primary">Deploy</button>
+        </form>
+        {{ end }}
+        <form method="POST" action="/admin/apps/{{ .ID }}/delete"
+              hx-post="/admin/apps/{{ .ID }}/delete"
+              hx-confirm="Are you sure you want to delete {{ .Name }}? This will permanently delete the app and all its deploy history."
+              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+            <button type="submit" class="btn btn-danger">Delete</button>
         </form>
     </div>
 </div>
+{{ end }}
 
-<script>
-function showDeleteModal(id, name) {
-    document.getElementById('delete-app-name').textContent = name;
-    document.getElementById('delete-form').action = '/admin/apps/' + id + '/delete';
-    var m = document.getElementById('delete-modal');
-    m.style.display = 'flex';
-}
-function closeDeleteModal() {
-    document.getElementById('delete-modal').style.display = 'none';
-}
-function showDeployModal(id, name) {
-    document.getElementById('deploy-app-name').textContent = name;
-    document.getElementById('deploy-form').action = '/admin/apps/' + id + '/deploy';
-    document.getElementById('deploy-tag-input').value = '';
-    var m = document.getElementById('deploy-modal');
-    m.style.display = 'flex';
-}
-function closeDeployModal() {
-    document.getElementById('deploy-modal').style.display = 'none';
-}
-// Close modals on backdrop click
-document.getElementById('delete-modal').addEventListener('click', function(e) {
-    if (e.target === this) closeDeleteModal();
-});
-document.getElementById('deploy-modal').addEventListener('click', function(e) {
-    if (e.target === this) closeDeployModal();
-});
-// Live SSE progress updates
-(function() {
-    var activeCards = document.querySelectorAll('[data-progress-job]');
-    if (!activeCards.length) return;
+{{ define "app_card_oob" }}
+<div class="card-section"
+     id="app-card-{{ .ID }}"
+     {{ if and .LastJobID (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}data-progress-job="{{ .LastJobID }}"{{ end }}
+     data-app-id="{{ .ID }}"
+     hx-swap-oob="outerHTML"
+     style="display: flex; flex-direction: column; gap: 16px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <div>
+            <h3 style="margin: 0; font-size: 1.25rem;">{{ .Name }}</h3>
+            <div class="meta-row" style="margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">
+                <span><strong>Service:</strong> {{ .ServiceName }}</span>
+                <span><strong>Repo:</strong> {{ .GithubRepo }}</span>
+                <span><strong>Binary:</strong> {{ .BinaryPath }}</span>
+                <span><strong>Artifact:</strong> {{ .ArtifactName }}</span>
+            </div>
+        </div>
+        <div>
+            {{ if .Enabled }}
+                <span class="badge active">Active</span>
+            {{ else }}
+                <span class="badge disabled">Disabled</span>
+            {{ end }}
+        </div>
+    </div>
 
-    var es = null;
-    var receivedAnyUpdate = false;
-    var reloadTimer = null;
-    var fallbackTimer = null;
-    var terminalJobs = {};
+    {{ template "app_progress_region" . }}
 
-    function clearTimer(timer) {
-        if (timer) clearTimeout(timer);
-        return null;
-    }
+    <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
+        <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
+        <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
+        <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
+              hx-post="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
+              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+            <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
+        </form>
+        {{ if .Enabled }}
+        <form method="POST" action="/admin/apps/{{ .ID }}/deploy"
+              hx-post="/admin/apps/{{ .ID }}/deploy"
+              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0; display: inline-flex; gap: 8px;">
+            <input type="hidden" name="source" value="list">
+            <input type="text" name="tag" placeholder="Tag (e.g. v1.2.3)" required style="width: 120px; height: 36px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+            <button type="submit" class="btn btn-primary">Deploy</button>
+        </form>
+        {{ end }}
+        <form method="POST" action="/admin/apps/{{ .ID }}/delete"
+              hx-post="/admin/apps/{{ .ID }}/delete"
+              hx-confirm="Are you sure you want to delete {{ .Name }}? This will permanently delete the app and all its deploy history."
+              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+            <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+    </div>
+</div>
+{{ end }}
 
-    function scheduleReload(delayMs) {
-        if (reloadTimer) return;
-        reloadTimer = setTimeout(function() {
-            window.location.reload();
-        }, delayMs);
-    }
+{{ define "app_progress_region" }}
+<div id="app-progress-{{ .ID }}" data-progress-region="{{ .ID }}" style="background: var(--bg-page); padding: 12px; border-radius: 6px; border: 1px solid var(--border-subtle);">
+    {{ template "app_progress_region_inner" . }}
+</div>
+{{ end }}
 
-    function formatBytes(n) {
-        if (!n || n <= 0) return '0 B';
-        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        var value = n;
-        var unitIndex = 0;
-        while (value >= 1024 && unitIndex < units.length - 1) {
-            value /= 1024;
-            unitIndex++;
-        }
-        return unitIndex === 0 ? Math.round(value) + ' ' + units[unitIndex] : value.toFixed(1) + ' ' + units[unitIndex];
-    }
+{{ define "app_progress_region_inner" }}
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="deploy-status-badge 
+                {{ if eq .LastDeployStatus "succeeded" }}status-succeeded
+                {{ else if eq .LastDeployStatus "failed" }}status-failed
+                {{ else if eq .LastDeployStatus "in_progress" }}status-in-progress
+                {{ else if eq .LastDeployStatus "pending" }}status-pending
+                {{ end }}" data-status="{{ .LastDeployStatus }}">
+                {{ if .LastDeployStatus }}{{ .LastDeployStatus }}{{ else }}No deploys yet{{ end }}
+            </span>
+        </div>
+    </div>
 
-    function formatSpeed(bps) {
-        if (!bps || bps <= 0) return '0 B/s';
-        if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(1) + ' MB/s';
-        if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
-        return Math.round(bps) + ' B/s';
-    }
+    {{ if and .LiveProgress (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}
+        {{ if gt .LiveProgress.TotalBytes 0 }}
+            <div class="progress-bar-container" style="margin-bottom: 8px;">
+                <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="stat-chip stat-percent" data-progress-percent>
+                    {{ .LiveProgress.DownloadedBytes }} / {{ .LiveProgress.TotalBytes }}
+                </span>
+                <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
+                <span class="meta-row" style="margin: 0; display: none;" data-progress-bytes></span>
+            </div>
+        {{ else }}
+            <div class="progress-bar-container" style="margin-bottom: 8px;">
+                <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="stat-chip stat-percent" data-progress-percent style="display: none;"></span>
+                <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
+                <span class="meta-row" style="margin: 0;" data-progress-bytes>
+                    {{ .LiveProgress.DownloadedBytes }} B
+                </span>
+            </div>
+        {{ end }}
+    {{ else if .LastDeployStatus }}
+        <div class="meta-row">
+            {{ if .LastDeployTag }}<span>Tag: <strong>{{ .LastDeployTag }}</strong></span>{{ end }}
+            {{ if .LastDeployTime }}&bull; <span>Time: {{ .LastDeployTime.Format "Jan 02 15:04" }}</span>{{ end }}
+            {{ if gt .LastDownloadSpeedBPS 0.0 }}&bull; <span>Speed: {{ printf "%.0f" .LastDownloadSpeedBPS }} B/s</span>{{ end }}
+            {{ if .LastDownloadBytes }}&bull; <span>Size: {{ .LastDownloadBytes }} B</span>{{ end }}
+        </div>
+    {{ else }}
+        <div class="meta-row">No deployment history.</div>
+    {{ end }}
+{{ end }}
 
-    function setHidden(el, hidden) {
-        if (!el) return;
-        el.style.display = hidden ? 'none' : '';
-    }
-
-    function updateContainer(container, snap) {
-        if (!container) return;
-
-        var percentEl = container.querySelector('[data-progress-percent]');
-        var speedEl = container.querySelector('[data-progress-speed]');
-        var bytesEl = container.querySelector('[data-progress-bytes]');
-        var bar = container.querySelector('.progress-bar-fill');
-        var total = Number(snap.total_bytes || 0);
-        var phase = snap.phase || '';
-        var downloaded = Number(snap.downloaded_bytes || 0);
-        var speed = Number(snap.speed_bps || 0);
-        var percent = total > 0 ? Math.max(0, Math.min(100, Math.floor((downloaded * 100) / total))) : 100;
-
-        if (terminalJobs[snap.job_id] && phase !== 'downloading') return;
-
-        if (bar) {
-            bar.style.width = percent + '%';
-            bar.style.opacity = total > 0 ? '' : '0.5';
-        }
-
-        if (phase === 'done' || phase === 'failed') {
-            terminalJobs[snap.job_id] = true;
-        }
-
-        if (speedEl) speedEl.textContent = formatSpeed(speed);
-
-        if (total > 0) {
-            if (percentEl) percentEl.textContent = percent + '%';
-            setHidden(percentEl, false);
-            setHidden(bytesEl, true);
-        } else {
-            if (bytesEl) bytesEl.textContent = formatBytes(downloaded);
-            setHidden(bytesEl, false);
-            setHidden(percentEl, true);
-        }
-    }
-
-    function closeStream() {
-        if (es) {
-            es.close();
-            es = null;
-        }
-        fallbackTimer = clearTimer(fallbackTimer);
-    }
-
-    es = new EventSource('/admin/progress/stream');
-    fallbackTimer = setTimeout(function() {
-        if (!receivedAnyUpdate) window.location.reload();
-    }, 15000);
-
-    es.onmessage = function(ev) {
-        receivedAnyUpdate = true;
-        fallbackTimer = clearTimer(fallbackTimer);
-
-        var snapshots = [];
-        try {
-            snapshots = JSON.parse(ev.data || '[]');
-        } catch (e) {
-            return;
-        }
-
-        if (!snapshots.length) {
-            closeStream();
-            scheduleReload(1000);
-            return;
-        }
-
-        var activeJobs = 0;
-        for (var i = 0; i < snapshots.length; i++) {
-            var snap = snapshots[i];
-            var container = document.querySelector('[data-progress-job="' + snap.job_id + '"]');
-            updateContainer(container, snap);
-            if (snap.phase === 'downloading') activeJobs++;
-        }
-
-        if (activeJobs === 0) {
-            closeStream();
-            scheduleReload(1000);
-        }
-    };
-
-    es.onerror = function() {
-        if (receivedAnyUpdate) return;
-        closeStream();
-        fallbackTimer = setTimeout(function() {
-            window.location.reload();
-        }, 2000);
-    };
-})();
-</script>
+{{ define "app_progress_region_oob" }}
+<div id="app-progress-{{ .ID }}" data-progress-region="{{ .ID }}" hx-swap-oob="outerHTML" style="background: var(--bg-page); padding: 12px; border-radius: 6px; border: 1px solid var(--border-subtle);">
+    {{ template "app_progress_region_inner" . }}
+</div>
 {{ end }}
