@@ -1,10 +1,18 @@
 {{ define "content" }}
+<div id="history-content" data-testid="history-content">
 <div class="page-header">
     <h1 class="page-title">{{ .App.Name }} History</h1>
     <a href="/admin/apps" class="btn btn-secondary">Back to Apps</a>
 </div>
 
-<div class="table-container">
+{{ template "history_progress_subscription" . }}
+
+{{ template "history_table_region" . }}
+</div>
+{{ end }}
+
+{{ define "history_table_region" }}
+<div class="table-container" id="history-table-region" data-testid="history-table-region">
     <table id="history-table">
         <thead>
             <tr>
@@ -18,69 +26,9 @@
             </tr>
         </thead>
         <tbody>
-            {{ if .Jobs }}
-                {{ range .Jobs }}
-                <tr data-status="{{ .Status }}" data-job-id="{{ .ID }}">
-                    <td>
-                        <strong>{{ .Tag }}</strong>
-                        {{ if .RetryOfJobID }}
-                        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: var(--space-1);">
-                            Retry of: {{ if gt (len .RetryOfJobID) 8 }}{{ slice .RetryOfJobID 0 8 }}{{ else }}{{ .RetryOfJobID }}{{ end }}
-                        </div>
-                        {{ end }}
-                    </td>
-                    <td>
-                        {{ if eq .Status "succeeded" }}
-                            <span class="deploy-status-badge status-succeeded">succeeded</span>
-                            {{ if and .DownloadBytes (gt .DownloadBytes 0) }}
-                            <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
-                                <span class="stat-chip stat-percent">{{ .DownloadBytes }} B</span>
-                                {{ if and .DownloadSpeedBPS (gt .DownloadSpeedBPS 0.0) }}
-                                <span class="stat-chip stat-speed">{{ printf "%.0f" .DownloadSpeedBPS }} B/s</span>
-                                {{ end }}
-                            </div>
-                            {{ end }}
-                        {{ else if eq .Status "failed" }}
-                            <span class="deploy-status-badge status-failed">failed</span>
-                        {{ else if eq .Status "in_progress" }}
-                            <span class="deploy-status-badge status-in-progress">in_progress</span>
-                            {{ $snap := index $.LiveProgress .ID }}
-                            <div style="margin-top: 8px;">
-                                <div class="progress-bar-container" style="margin-bottom: 4px;">
-                                    {{ if and $snap (gt $snap.TotalBytes 0) }}
-                                        <div class="progress-bar-fill" style="width: calc({{ $snap.DownloadedBytes }} * 100% / {{ $snap.TotalBytes }});"></div>
-                                    {{ else }}
-                                        <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
-                                    {{ end }}
-                                </div>
-                                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                                    <span class="stat-chip stat-percent" data-progress-percent{{ if or (not $snap) (eq $snap.TotalBytes 0) }} style="display:none;"{{ end }}></span>
-                                    <span class="stat-chip stat-speed" data-progress-speed>{{ if $snap }}{{ printf "%.0f" $snap.SpeedBPS }} B/s{{ else }}0 B/s{{ end }}</span>
-                                    <span class="meta-row" style="margin: 0;{{ if and $snap (gt $snap.TotalBytes 0) }}display:none;{{ end }}" data-progress-bytes>{{ if $snap }}{{ $snap.DownloadedBytes }} B{{ else }}0 B{{ end }}</span>
-                                </div>
-                            </div>
-                        {{ else if eq .Status "pending" }}
-                            <span class="deploy-status-badge status-pending">pending</span>
-                        {{ else }}
-                            <span class="deploy-status-badge status-disabled">{{ .Status }}</span>
-                        {{ end }}
-                    </td>
-                    <td>{{ .Trigger }}</td>
-                    <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ if .ErrorMsg }}{{ .ErrorMsg }}{{ end }}">
-                        {{ if .ErrorMsg }}{{ .ErrorMsg }}{{ else }}-{{ end }}
-                    </td>
-                    <td>{{ .CreatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
-                    <td>{{ .UpdatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
-                    <td>
-                        {{ if $.App.Enabled }}
-                            {{ if or (eq .Status "succeeded") (eq .Status "failed") }}
-                            <form method="POST" action="/admin/apps/{{ $.App.ID }}/retry/{{ .ID }}" style="margin: 0;">
-                                <button type="submit" class="btn btn-secondary retry-button" title="Deploy this tag again">↻ Retry Deploy</button>
-                            </form>
-                            {{ end }}
-                        {{ end }}
-                    </td>
-                </tr>
+            {{ if .Rows }}
+                {{ range .Rows }}
+                {{ template "history_row" . }}
                 {{ end }}
             {{ else }}
                 <tr>
@@ -94,134 +42,128 @@
         </tbody>
     </table>
 </div>
+{{ end }}
 
-<script>
-(function() {
-    var activeRows = document.querySelectorAll('[data-job-id][data-status="in_progress"],[data-job-id][data-status="pending"]');
-    if (!activeRows.length) return;
+{{ define "history_table_region_oob" }}
+<div class="table-container" id="history-table-region" data-testid="history-table-region" hx-swap-oob="outerHTML">
+    <table id="history-table">
+        <thead>
+            <tr>
+                <th>Tag</th>
+                <th>Status</th>
+                <th>Trigger</th>
+                <th>Error</th>
+                <th>Created</th>
+                <th>Updated</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ if .Rows }}
+                {{ range .Rows }}
+                {{ template "history_row" . }}
+                {{ end }}
+            {{ else }}
+                <tr>
+                    <td colspan="7">
+                        <div class="empty-state">
+                            <p>No deploy history for this app.</p>
+                        </div>
+                    </td>
+                </tr>
+            {{ end }}
+        </tbody>
+    </table>
+</div>
+{{ end }}
 
-    var es = null;
-    var receivedAnyUpdate = false;
-    var reloadTimer = null;
-    var fallbackTimer = null;
+{{ define "history_progress_subscription" }}
+<div id="history-progress-subscription" style="display:none;">
+    {{ if .ProgressStreamURL }}
+    <div hx-ext="sse" hx-swap="none" sse-connect="{{ .ProgressStreamURL }}" sse-swap="progress"></div>
+    {{ end }}
+</div>
+{{ end }}
 
-    function clearTimer(timer) {
-        if (timer) clearTimeout(timer);
-        return null;
-    }
+{{ define "history_progress_subscription_oob" }}
+<div id="history-progress-subscription" hx-swap-oob="outerHTML" style="display:none;">
+    {{ if .URL }}
+    <div hx-ext="sse" hx-swap="none" sse-connect="{{ .URL }}" sse-swap="progress"></div>
+    {{ end }}
+</div>
+{{ end }}
 
-    function scheduleReload(delayMs) {
-        if (reloadTimer) return;
-        reloadTimer = setTimeout(function() {
-            window.location.reload();
-        }, delayMs);
-    }
+{{ define "history_row" }}
+<tr id="history-row-{{ .Job.ID }}" data-status="{{ .Job.Status }}" data-job-id="{{ .Job.ID }}">
+    {{ template "history_row_cells" . }}
+</tr>
+{{ end }}
 
-    function formatBytes(n) {
-        if (!n || n <= 0) return '0 B';
-        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        var value = n;
-        var unitIndex = 0;
-        while (value >= 1024 && unitIndex < units.length - 1) {
-            value /= 1024;
-            unitIndex++;
-        }
-        return unitIndex === 0 ? Math.round(value) + ' ' + units[unitIndex] : value.toFixed(1) + ' ' + units[unitIndex];
-    }
+{{ define "history_row_cells" }}
+    <td>
+        <strong>{{ .Job.Tag }}</strong>
+        {{ if .Job.RetryOfJobID }}
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: var(--space-1);">
+            Retry of: {{ if gt (len .Job.RetryOfJobID) 8 }}{{ slice .Job.RetryOfJobID 0 8 }}{{ else }}{{ .Job.RetryOfJobID }}{{ end }}
+        </div>
+        {{ end }}
+    </td>
+    <td>
+        {{ if eq .Job.Status "succeeded" }}
+            <span class="deploy-status-badge status-succeeded">succeeded</span>
+            {{ if and .Job.DownloadBytes (gt .Job.DownloadBytes 0) }}
+            <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
+                <span class="stat-chip stat-percent">{{ .Job.DownloadBytes }} B</span>
+                {{ if and .Job.DownloadSpeedBPS (gt .Job.DownloadSpeedBPS 0.0) }}
+                <span class="stat-chip stat-speed">{{ printf "%.0f" .Job.DownloadSpeedBPS }} B/s</span>
+                {{ end }}
+            </div>
+            {{ end }}
+        {{ else if eq .Job.Status "failed" }}
+            <span class="deploy-status-badge status-failed">failed</span>
+        {{ else if eq .Job.Status "in_progress" }}
+            <span class="deploy-status-badge status-in-progress">in_progress</span>
+            <div style="margin-top: 8px;">
+                <div class="progress-bar-container" style="margin-bottom: 4px;">
+                    {{ if and .LiveProgress (gt .LiveProgress.TotalBytes 0) }}
+                        <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
+                    {{ else }}
+                        <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
+                    {{ end }}
+                </div>
+                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    <span class="stat-chip stat-percent" data-progress-percent{{ if or (not .LiveProgress) (eq .LiveProgress.TotalBytes 0) }} style="display:none;"{{ end }}></span>
+                    <span class="stat-chip stat-speed" data-progress-speed>{{ if .LiveProgress }}{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s{{ else }}0 B/s{{ end }}</span>
+                    <span class="meta-row" style="margin: 0;{{ if and .LiveProgress (gt .LiveProgress.TotalBytes 0) }}display:none;{{ end }}" data-progress-bytes>{{ if .LiveProgress }}{{ .LiveProgress.DownloadedBytes }} B{{ else }}0 B{{ end }}</span>
+                </div>
+            </div>
+        {{ else if eq .Job.Status "pending" }}
+            <span class="deploy-status-badge status-pending">pending</span>
+        {{ else }}
+            <span class="deploy-status-badge status-disabled">{{ .Job.Status }}</span>
+        {{ end }}
+    </td>
+    <td>{{ .Job.Trigger }}</td>
+    <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ end }}">
+        {{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ else }}-{{ end }}
+    </td>
+    <td>{{ .Job.CreatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
+    <td>{{ .Job.UpdatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
+    <td>
+        {{ if .AppEnabled }}
+            {{ if or (eq .Job.Status "succeeded") (eq .Job.Status "failed") }}
+            <form method="POST" action="/admin/apps/{{ .Job.AppID }}/retry/{{ .Job.ID }}" hx-post="/admin/apps/{{ .Job.AppID }}/retry/{{ .Job.ID }}" hx-target="#history-table-region" hx-swap="outerHTML" hx-push-url="false" style="margin: 0;">
+                <button type="submit" class="btn btn-secondary retry-button" data-testid="retry-button-{{ .Job.ID }}" title="Deploy this tag again">↻ Retry Deploy</button>
+            </form>
+            {{ end }}
+        {{ end }}
+    </td>
+{{ end }}
 
-    function formatSpeed(bps) {
-        if (!bps || bps <= 0) return '0 B/s';
-        if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(1) + ' MB/s';
-        if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
-        return Math.round(bps) + ' B/s';
-    }
-
-    function setHidden(el, hidden) {
-        if (!el) return;
-        el.style.display = hidden ? 'none' : '';
-    }
-
-    function updateRow(row, snap) {
-        if (!row) return;
-
-        var percentEl = row.querySelector('[data-progress-percent]');
-        var speedEl = row.querySelector('[data-progress-speed]');
-        var bytesEl = row.querySelector('[data-progress-bytes]');
-        var bar = row.querySelector('.progress-bar-fill');
-        var total = Number(snap.total_bytes || 0);
-        var downloaded = Number(snap.downloaded_bytes || 0);
-        var speed = Number(snap.speed_bps || 0);
-        var percent = total > 0 ? Math.max(0, Math.min(100, Math.floor((downloaded * 100) / total))) : 100;
-
-        if (bar) {
-            bar.style.width = percent + '%';
-            bar.style.opacity = total > 0 ? '' : '0.5';
-        }
-
-        if (speedEl) speedEl.textContent = formatSpeed(speed);
-
-        if (total > 0) {
-            if (percentEl) percentEl.textContent = percent + '%';
-            setHidden(percentEl, false);
-            setHidden(bytesEl, true);
-        } else {
-            if (bytesEl) bytesEl.textContent = formatBytes(downloaded);
-            setHidden(bytesEl, false);
-            setHidden(percentEl, true);
-        }
-    }
-
-    function closeStream() {
-        if (es) {
-            es.close();
-            es = null;
-        }
-        fallbackTimer = clearTimer(fallbackTimer);
-    }
-
-    es = new EventSource('/admin/progress/stream');
-    fallbackTimer = setTimeout(function() {
-        if (!receivedAnyUpdate) window.location.reload();
-    }, 15000);
-
-    es.onmessage = function(ev) {
-        receivedAnyUpdate = true;
-        fallbackTimer = clearTimer(fallbackTimer);
-
-        var snapshots = [];
-        try {
-            snapshots = JSON.parse(ev.data || '[]');
-        } catch (e) {
-            return;
-        }
-
-        if (!snapshots.length) {
-            closeStream();
-            scheduleReload(1000);
-            return;
-        }
-
-        var activeJobs = 0;
-        for (var i = 0; i < snapshots.length; i++) {
-            var snap = snapshots[i];
-            var row = document.querySelector('[data-job-id="' + snap.job_id + '"]');
-            updateRow(row, snap);
-            if (snap.phase === 'downloading') activeJobs++;
-        }
-
-        if (activeJobs === 0) {
-            closeStream();
-            scheduleReload(1000);
-        }
-    };
-
-    es.onerror = function() {
-        if (receivedAnyUpdate) return;
-        closeStream();
-        fallbackTimer = setTimeout(function() {
-            window.location.reload();
-        }, 2000);
-    };
-})();
-</script>
+{{ define "history_row_oob" }}
+<template>
+    <tr id="history-row-{{ .Job.ID }}" data-status="{{ .Job.Status }}" data-job-id="{{ .Job.ID }}" hx-swap-oob="outerHTML">
+        {{ template "history_row_cells" . }}
+    </tr>
+</template>
 {{ end }}
