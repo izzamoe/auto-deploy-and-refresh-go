@@ -1,6 +1,7 @@
 # Compiled binaries
 auto-deploy
 auto-deploy-arm64
+dist/
 
 # Runtime data
 deploy-queue.db

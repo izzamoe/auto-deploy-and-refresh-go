@@ -33,10 +33,11 @@ Manage your applications via the built-in Admin UI.
 
 ## Prerequisites
 
-- Go 1.21+ (for building)
 - Linux with systemd
+- Supported architectures: `amd64` (x86_64), `arm64` (aarch64)
 - Network access to `github.com` from the server
-- Root access (for binary replacement and `systemctl` commands)
+- Root access (required for `install.sh` and service management)
+- Go 1.21+ (only if building from source)
 
 ## Build
 
@@ -48,28 +49,60 @@ make build
 make build-arm64
 ```
 
+## Release And Installer Contract
+
+The repository contract for distributable releases is:
+
+- Release tags that installers and automation consume must match `v*`.
+- Linux release assets are exactly `auto-deploy_linux_amd64.zip` and `auto-deploy_linux_arm64.zip`.
+- Each release zip must contain the `auto-deploy` binary only. Runtime files are not bundled into the archive.
+- `install.sh` defaults to the latest stable GitHub release when no version is provided.
+- `install.sh vX.Y.Z` is the explicit version override and must reference a matching git tag.
+- The installer always places the binary at `/opt/auto-deploy/auto-deploy` and the service unit at `/etc/systemd/system/auto-deploy.service`.
+- The installer must run as `root` or through `sudo` because it writes system paths and manages `systemctl`.
+- On upgrade, the installer overwrites the binary and service unit, but preserves an existing `/etc/auto-deploy.env`.
+- `auto-deploy.service` and `auto-deploy.env.example` are fetched separately from `raw.githubusercontent.com` at the exact same ref/tag as the selected release asset.
+
+The machine-readable contract lives in `release-contract.sh`, and `install.sh` embeds the same defaults so a copied bootstrap script still works by itself.
+
+The CI release workflow uses the same contract in two modes: `workflow_dispatch` runs validation and packaging only, while matching `v*` tag pushes publish the GitHub release assets first and only then notify the downstream deploy webhook.
+
+## Install Or Upgrade
+
+The installer requires `root` privileges via `sudo`. It automatically detects your architecture, downloads the correct release, and configures systemd.
+
+```bash
+# Install the latest stable release
+curl -fsSL https://raw.githubusercontent.com/izzamoe/auto-deploy-and-refresh-go/master/install.sh | sudo sh
+
+# Install a specific tagged version
+curl -fsSL https://raw.githubusercontent.com/izzamoe/auto-deploy-and-refresh-go/master/install.sh | sudo sh -s -- v1.2.3
+```
+
+On upgrade, the installer overwrites the binary and service unit but preserves your existing `/etc/auto-deploy.env` configuration.
+
 ## Server Setup
 
-1. **Copy binary to server**
+The recommended way to set up the server is using the installer.
+
+1. **Run the installer**
    ```bash
-   scp auto-deploy-arm64 root@YOUR_SERVER:/opt/auto-deploy/auto-deploy
+   curl -fsSL https://raw.githubusercontent.com/izzamoe/auto-deploy-and-refresh-go/master/install.sh | sudo sh
    ```
 
-2. **Set up environment**
+2. **Configure the environment**
+   The installer creates a default `/etc/auto-deploy.env`. Edit it to set your required settings:
    ```bash
-   cp auto-deploy.env.example /etc/auto-deploy.env
-   # Edit /etc/auto-deploy.env — ADMIN_PASSWORD is required
-   nano /etc/auto-deploy.env
+   # ADMIN_PASSWORD is required
+   sudo nano /etc/auto-deploy.env
    ```
 
-3. **Install systemd service**
+3. **Restart the service**
    ```bash
-   cp auto-deploy.service /etc/systemd/system/
-   systemctl daemon-reload
-   systemctl enable --now auto-deploy.service
+   sudo systemctl restart auto-deploy.service
    ```
 
-4. **Verify it's running**
+4. **Verify status**
    ```bash
    systemctl status auto-deploy.service
    ```
@@ -83,6 +116,7 @@ Each application configured in the Admin UI has a unique webhook secret.
    - `DEPLOY_WEBHOOK_URL`: `http://YOUR_SERVER_IP:9000`
 
 Refer to `deploy-step.yml` for the workflow snippet to include in your GitHub Actions.
+If you use the repository release workflow, keep that webhook call after the GitHub release publish step so deployments only see already-published assets.
 
 ## Environment Variables
 
@@ -110,6 +144,32 @@ These variables are only used on the first startup if the application registry i
 ```bash
 # Run automated tests
 make test
+
+# Validate the full local release flow without publishing
+make release-validate-local
+
+# Or run the same workflow pieces manually
+make clean release
+python3 - <<'PY'
+import os, zipfile
+from pathlib import Path
+
+release_dir = Path('dist/release')
+for asset in sorted([os.environ.get('AUTO_DEPLOY_ASSET_AMD64', 'auto-deploy_linux_amd64.zip'), os.environ.get('AUTO_DEPLOY_ASSET_ARM64', 'auto-deploy_linux_arm64.zip')]):
+    with zipfile.ZipFile(release_dir / asset) as archive:
+        print(asset, archive.namelist())
+PY
+
+# Exercise the installer locally against file:// release fixtures
+AUTO_DEPLOY_GITHUB_API_BASE=file:///tmp/fake-release \
+AUTO_DEPLOY_GITHUB_DOWNLOAD_BASE=file:///tmp/fake-release \
+AUTO_DEPLOY_GITHUB_RAW_BASE=file:///tmp/fake-release \
+AUTO_DEPLOY_INSTALL_DIR=/tmp/auto-deploy/opt/auto-deploy \
+AUTO_DEPLOY_BINARY_PATH=/tmp/auto-deploy/opt/auto-deploy/auto-deploy \
+AUTO_DEPLOY_SERVICE_UNIT_PATH=/tmp/auto-deploy/etc/systemd/system/auto-deploy.service \
+AUTO_DEPLOY_ENV_PATH=/tmp/auto-deploy/etc/auto-deploy.env \
+AUTO_DEPLOY_SYSTEMD_DIR=/tmp/auto-deploy/systemd \
+./install.sh v1.2.3
 
 # Install Playwright browser support for the local smoke harness
 npm ci

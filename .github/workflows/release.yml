@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    outputs:
+      asset_amd64: ${{ steps.contract.outputs.asset_amd64 }}
+      asset_arm64: ${{ steps.contract.outputs.asset_arm64 }}
+      binary_name: ${{ steps.contract.outputs.binary_name }}
+      tag_glob: ${{ steps.contract.outputs.tag_glob }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Load release contract
+        id: contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./release-contract.sh
+          {
+            echo "asset_amd64=${AUTO_DEPLOY_ASSET_AMD64}"
+            echo "asset_arm64=${AUTO_DEPLOY_ASSET_ARM64}"
+            echo "binary_name=${AUTO_DEPLOY_BINARY_NAME}"
+            echo "tag_glob=${AUTO_DEPLOY_TAG_GLOB}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Pre-publish validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            case "${GITHUB_REF_NAME}" in
+              ${{ steps.contract.outputs.tag_glob }}) ;;
+              *)
+                echo "::error::Tag ${GITHUB_REF_NAME} does not match ${{ steps.contract.outputs.tag_glob }}"
+                exit 1
+                ;;
+            esac
+            echo "Validated publish-capable tag ${GITHUB_REF_NAME}."
+          else
+            echo "Manual dispatch runs validation and packaging only; publish job remains disabled by default."
+          fi
+
+      - name: Run tests
+        run: make test
+
+      - name: Build release archives
+        run: |
+          make clean
+          make release
+
+      - name: Validate packaged release assets
+        env:
+          AUTO_DEPLOY_ASSET_AMD64: ${{ steps.contract.outputs.asset_amd64 }}
+          AUTO_DEPLOY_ASSET_ARM64: ${{ steps.contract.outputs.asset_arm64 }}
+          AUTO_DEPLOY_BINARY_NAME: ${{ steps.contract.outputs.binary_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          release_dir = Path("dist/release")
+          expected = sorted([
+              os.environ["AUTO_DEPLOY_ASSET_AMD64"],
+              os.environ["AUTO_DEPLOY_ASSET_ARM64"],
+          ])
+          actual = sorted(path.name for path in release_dir.glob("*.zip"))
+
+          if actual != expected:
+              print(f"expected release assets {expected}, found {actual}", file=sys.stderr)
+              raise SystemExit(1)
+
+          for asset in expected:
+              archive_path = release_dir / asset
+              with zipfile.ZipFile(archive_path) as archive:
+                  names = archive.namelist()
+                  if names != [os.environ["AUTO_DEPLOY_BINARY_NAME"]]:
+                      print(
+                          f"{asset} must contain only {os.environ['AUTO_DEPLOY_BINARY_NAME']}, found {names}",
+                          file=sys.stderr,
+                      )
+                      raise SystemExit(1)
+
+          print("Validated release archive names and contents.")
+          PY
+
+      - name: Upload release archives for publish job
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-zips
+          path: |
+            dist/release/${{ steps.contract.outputs.asset_amd64 }}
+            dist/release/${{ steps.contract.outputs.asset_arm64 }}
+          if-no-files-found: error
+
+  publish-release:
+    if: github.event_name == 'push'
+    needs: build-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          name: release-zips
+          path: dist/release
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/release/${{ needs.build-release.outputs.asset_amd64 }}
+            dist/release/${{ needs.build-release.outputs.asset_arm64 }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Trigger deployment
+        if: success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          HTTP_STATUS=$(curl -s -o /tmp/deploy-response.txt -w '%{http_code}' \
+            -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}/webhook" \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag\": \"${{ github.ref_name }}\"}" \
+            --connect-timeout 10 \
+            --max-time 120)
+          echo "Deploy webhook response (HTTP $HTTP_STATUS):"
+          cat /tmp/deploy-response.txt
+          echo ""
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::Deployment failed with HTTP $HTTP_STATUS"
+            exit 1
+          fi
+          echo "Deployment triggered successfully"
