@@ -1,0 +1,13 @@
+{
+  "name": "auto-deploy-playwright",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "pw:install": "playwright install chromium",
+    "pw:smoke": "playwright test",
+    "test:playwright": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1"
+  }
+}
