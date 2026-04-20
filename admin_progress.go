@@ -64,6 +64,8 @@ func (h *ProgressAdminHandler) StreamProgress(w http.ResponseWriter, r *http.Req
 func (h *ProgressAdminHandler) renderStreamPayload(r *http.Request) (string, error) {
 	appIDs := uniqueSorted(r.URL.Query()["app_id"])
 	jobIDs := uniqueSorted(r.URL.Query()["job_id"])
+	hasRequestedFilters := len(appIDs) > 0 || len(jobIDs) > 0
+	requestedStreamURL := buildProgressStreamURL(appIDs, jobIDs)
 	if len(appIDs) == 0 && len(jobIDs) == 0 {
 		for _, snap := range h.tracker.SnapshotAll() {
 			appIDs = append(appIDs, snap.AppID)
@@ -91,11 +93,16 @@ func (h *ProgressAdminHandler) renderStreamPayload(r *http.Request) (string, err
 	}
 
 	state := progressStreamSubscriptionState(appIDs, jobIDs, h.store, h.queue)
-	if err := h.templates["apps_list.html"].ExecuteTemplate(&fragments, "apps_progress_subscription_oob", state); err != nil {
-		return "", err
+	if !hasRequestedFilters {
+		requestedStreamURL = state.URL
 	}
-	if err := h.templates["history.html"].ExecuteTemplate(&fragments, "history_progress_subscription_oob", state); err != nil {
-		return "", err
+	if state.URL != requestedStreamURL {
+		if err := h.templates["apps_list.html"].ExecuteTemplate(&fragments, "apps_progress_subscription_oob", state); err != nil {
+			return "", err
+		}
+		if err := h.templates["history.html"].ExecuteTemplate(&fragments, "history_progress_subscription_oob", state); err != nil {
+			return "", err
+		}
 	}
 
 	if fragments.Len() == 0 {

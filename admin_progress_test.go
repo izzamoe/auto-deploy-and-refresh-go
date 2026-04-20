@@ -151,6 +151,100 @@ func TestProgressStreamWithProgress(t *testing.T) {
 	if !strings.Contains(payload, "hx-swap-oob=\"outerHTML\"") {
 		t.Fatalf("expected OOB swap in payload, got %q", payload)
 	}
+	if strings.Contains(payload, `id="apps-progress-subscription"`) || strings.Contains(payload, `id="history-progress-subscription"`) {
+		t.Fatalf("expected steady-state progress payload to avoid subscription OOB churn, got %q", payload)
+	}
+}
+
+func TestProgressStreamNarrowedSubscriptionWhenTrackedJobsSetChanges(t *testing.T) {
+	tracker := NewProgressTracker()
+	store := newTestAppStoreWithJobs(t)
+	app, err := store.Create("Tracked App", "secret-4", "/tmp/bin-4", "tracked.service", "example/tracked", "tracked")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	queue, err := NewDeployQueue(store.db, 10)
+	if err != nil {
+		t.Fatalf("NewDeployQueue: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job-active', 1, ?, 'v1.0.0', 'in_progress', 'webhook')`, app.ID); err != nil {
+		t.Fatalf("insert active job: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job-done', 2, ?, 'v1.0.1', 'succeeded', 'webhook')`, app.ID); err != nil {
+		t.Fatalf("insert terminal job: %v", err)
+	}
+
+	tmpls := make(map[string]*template.Template)
+	for _, page := range []string{"apps_list.html", "history.html"} {
+		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
+		if err != nil {
+			t.Fatalf("parse %s: %v", page, err)
+		}
+		tmpls[page] = tmpl
+	}
+
+	tracker.Start(app.ID, "job-active", "v1.0.0")
+	tracker.Update(app.ID, 768, 1024, 120.0)
+
+	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
+	req := httptest.NewRequest("GET", "/admin/progress/stream?app_id="+app.ID+"&job_id=job-active&job_id=job-done", nil)
+	payload, err := handler.renderStreamPayload(req)
+	if err != nil {
+		t.Fatalf("renderStreamPayload: %v", err)
+	}
+	if !strings.Contains(payload, `id="apps-progress-subscription"`) {
+		t.Fatalf("expected apps subscription OOB when tracked jobs change, got %s", payload)
+	}
+	if !strings.Contains(payload, `id="history-progress-subscription"`) {
+		t.Fatalf("expected history subscription OOB when tracked jobs change, got %s", payload)
+	}
+	if !strings.Contains(payload, `sse-connect="/admin/progress/stream?app_id=`+app.ID+`&amp;job_id=job-active"`) {
+		t.Fatalf("expected narrowed SSE stream URL for active job only, got %s", payload)
+	}
+	if strings.Contains(payload, `job_id=job-done`) {
+		t.Fatalf("expected terminal job to be removed from subscription URL, got %s", payload)
+	}
+}
+
+func TestProgressStreamWithoutFiltersAvoidsSubscriptionOOBChurn(t *testing.T) {
+	tracker := NewProgressTracker()
+	store := newTestAppStoreWithJobs(t)
+	app, err := store.Create("Unfiltered App", "secret-5", "/tmp/bin-5", "unfiltered.service", "example/unfiltered", "unfiltered")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	queue, err := NewDeployQueue(store.db, 10)
+	if err != nil {
+		t.Fatalf("NewDeployQueue: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job-unfiltered', 1, ?, 'v1.0.2', 'in_progress', 'webhook')`, app.ID); err != nil {
+		t.Fatalf("insert active job: %v", err)
+	}
+
+	tmpls := make(map[string]*template.Template)
+	for _, page := range []string{"apps_list.html", "history.html"} {
+		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
+		if err != nil {
+			t.Fatalf("parse %s: %v", page, err)
+		}
+		tmpls[page] = tmpl
+	}
+
+	tracker.Start(app.ID, "job-unfiltered", "v1.0.2")
+	tracker.Update(app.ID, 900, 1200, 140.0)
+
+	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
+	req := httptest.NewRequest("GET", "/admin/progress/stream", nil)
+	payload, err := handler.renderStreamPayload(req)
+	if err != nil {
+		t.Fatalf("renderStreamPayload: %v", err)
+	}
+	if strings.Contains(payload, `id="apps-progress-subscription"`) || strings.Contains(payload, `id="history-progress-subscription"`) {
+		t.Fatalf("expected unfiltered steady-state stream to avoid subscription OOB churn, got %s", payload)
+	}
+	if !strings.Contains(payload, `id="app-card-`+app.ID+`"`) {
+		t.Fatalf("expected app card OOB payload for active app, got %s", payload)
+	}
 }
 
 func TestProgressStreamSettlesTerminalAppCardAndSubscription(t *testing.T) {
