@@ -67,7 +67,7 @@ func main() {
 	admission := NewAdmissionService(appStore, q)
 
 	tracker := NewProgressTracker()
-	dlClient := NewDownloadClient()
+	dlClient := NewDownloadClient(serviceCfg.DownloadDNS)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

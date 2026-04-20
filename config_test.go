@@ -26,11 +26,27 @@ func TestLoadServiceConfigDefaults(t *testing.T) {
 	if cfg.QueueMax != 10 {
 		t.Fatalf("expected default queue max, got %d", cfg.QueueMax)
 	}
+	if cfg.DownloadDNS != "1.1.1.1" {
+		t.Fatalf("expected default download DNS, got %q", cfg.DownloadDNS)
+	}
 	if cfg.AdminUsername != "admin" {
 		t.Fatalf("expected default admin username, got %q", cfg.AdminUsername)
 	}
 	if cfg.AdminPassword != "secret" {
 		t.Fatalf("expected admin password to be loaded, got %q", cfg.AdminPassword)
+	}
+}
+
+func TestLoadServiceConfigWithDownloadDNSOverride(t *testing.T) {
+	t.Setenv("DOWNLOAD_DNS", "9.9.9.9")
+	t.Setenv("ADMIN_PASSWORD", "hunter2")
+
+	cfg, err := LoadServiceConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DownloadDNS != "9.9.9.9" {
+		t.Fatalf("expected download DNS override, got %q", cfg.DownloadDNS)
 	}
 }
 

@@ -1,18 +1,19 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
-func NewDownloadClient() *http.Client {
+func NewDownloadClient(dnsServer string) *http.Client {
+	dialer := newDownloadDialer(dnsServer)
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout: 30 * time.Second,
-		}).DialContext,
+		DialContext:           dialer.DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		MaxIdleConnsPerHost:   10,
@@ -22,6 +23,35 @@ func NewDownloadClient() *http.Client {
 		Timeout:   10 * time.Minute,
 		Transport: transport,
 	}
+}
+
+func newDownloadDialer(dnsServer string) *net.Dialer {
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+
+	if normalizedDNS := normalizeDNSServer(dnsServer); normalizedDNS != "" {
+		dialer.Resolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				resolverDialer := &net.Dialer{Timeout: 30 * time.Second}
+				return resolverDialer.DialContext(ctx, network, normalizedDNS)
+			},
+		}
+	}
+
+	return dialer
+}
+
+func normalizeDNSServer(dnsServer string) string {
+	server := strings.TrimSpace(dnsServer)
+	if server == "" {
+		return ""
+	}
+
+	if _, _, err := net.SplitHostPort(server); err == nil {
+		return server
+	}
+
+	return net.JoinHostPort(server, "53")
 }
 
 var defaultSleep = time.Sleep

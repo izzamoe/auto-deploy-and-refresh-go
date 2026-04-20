@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -12,7 +13,7 @@ import (
 func noSleep(_ time.Duration) {}
 
 func TestNewDownloadClientHasBoundedTimeouts(t *testing.T) {
-	client := NewDownloadClient()
+	client := NewDownloadClient("1.1.1.1")
 	if client.Timeout == 0 {
 		t.Fatal("client.Timeout must be non-zero")
 	}
@@ -31,6 +32,48 @@ func TestNewDownloadClientHasBoundedTimeouts(t *testing.T) {
 	}
 	if tr.MaxIdleConnsPerHost == 0 {
 		t.Error("MaxIdleConnsPerHost must be non-zero")
+	}
+}
+
+func TestNormalizeDNSServerAddsDefaultPort(t *testing.T) {
+	if got := normalizeDNSServer("1.1.1.1"); got != "1.1.1.1:53" {
+		t.Fatalf("expected default port to be added, got %q", got)
+	}
+}
+
+func TestNormalizeDNSServerKeepsExplicitPort(t *testing.T) {
+	if got := normalizeDNSServer("1.1.1.1:5353"); got != "1.1.1.1:5353" {
+		t.Fatalf("expected explicit port to be preserved, got %q", got)
+	}
+}
+
+func TestNewDownloadClientUsesCustomResolver(t *testing.T) {
+	dialer := newDownloadDialer("1.1.1.1")
+	if dialer.Resolver == nil {
+		t.Fatal("expected custom resolver to be configured")
+	}
+	if dialer.Timeout != 30*time.Second {
+		t.Fatalf("expected dialer timeout to remain 30s, got %v", dialer.Timeout)
+	}
+	resolver := dialer.Resolver
+	if resolver == nil || !resolver.PreferGo {
+		t.Fatal("expected resolver to prefer Go DNS")
+	}
+	if _, ok := any(dialer.Resolver).(*net.Resolver); !ok {
+		t.Fatal("expected resolver to be *net.Resolver")
+	}
+	if resolver.Dial == nil {
+		t.Fatal("expected resolver Dial override to be configured")
+	}
+	if normalized := normalizeDNSServer("1.1.1.1"); normalized != "1.1.1.1:53" {
+		t.Fatalf("expected normalized DNS server, got %q", normalized)
+	}
+}
+
+func TestNewDownloadClientLeavesResolverUnsetWithoutDNS(t *testing.T) {
+	dialer := newDownloadDialer("")
+	if dialer.Resolver != nil {
+		t.Fatal("expected resolver to be unset when DNS is blank")
 	}
 }
 

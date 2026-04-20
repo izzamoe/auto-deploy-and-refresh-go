@@ -10,6 +10,7 @@ type ServiceConfig struct {
 	ListenAddr    string
 	QueueDBPath   string
 	QueueMax      int
+	DownloadDNS   string
 	AdminUsername string
 	AdminPassword string
 }
@@ -47,6 +48,7 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		ListenAddr:    envOrDefault("LISTEN_ADDR", ":9000"),
 		QueueDBPath:   queueDBPath,
 		QueueMax:      queueMax,
+		DownloadDNS:   envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
 		AdminUsername: username,
 		AdminPassword: password,
 	}, nil
