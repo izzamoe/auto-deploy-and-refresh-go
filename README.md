@@ -126,6 +126,7 @@ If you use the repository release workflow, keep that webhook call after the Git
 | `LISTEN_ADDR` | `:9000` | No | Address to listen on |
 | `DEPLOY_QUEUE_DB_PATH`| `deploy-queue.db` | No | SQLite file for registry and queue |
 | `DEPLOY_QUEUE_MAX` | `10` | No | Max pending deploys per app |
+| `DOWNLOAD_DNS` | `1.1.1.1` | No | DNS server used for downloader requests |
 | `ADMIN_USERNAME` | `admin` | No | Admin UI username |
 | `ADMIN_PASSWORD` | — | ✅ Yes | Admin UI password |
 
