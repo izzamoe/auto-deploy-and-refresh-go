@@ -67,7 +67,7 @@ Contract:
   - install path: ${AUTO_DEPLOY_INSTALL_DIR}
   - upgrade behavior: overwrite binary and service unit, preserve existing ${AUTO_DEPLOY_ENV_PATH}
   - runtime files fetched separately from raw.githubusercontent.com at the same tag
-  - systemd activation: systemctl daemon-reload && systemctl enable --now ${AUTO_DEPLOY_SERVICE_UNIT_NAME}
+  - systemd activation: systemctl daemon-reload && systemctl enable ${AUTO_DEPLOY_SERVICE_UNIT_NAME} && systemctl restart ${AUTO_DEPLOY_SERVICE_UNIT_NAME}
 EOF
 }
 
@@ -250,7 +250,9 @@ main() {
     fi
 
     "$AUTO_DEPLOY_SYSTEMCTL_BIN" daemon-reload
-    "$AUTO_DEPLOY_SYSTEMCTL_BIN" enable --now "$AUTO_DEPLOY_SERVICE_UNIT_NAME"
+    "$AUTO_DEPLOY_SYSTEMCTL_BIN" enable "$AUTO_DEPLOY_SERVICE_UNIT_NAME"
+    "$AUTO_DEPLOY_SYSTEMCTL_BIN" restart "$AUTO_DEPLOY_SERVICE_UNIT_NAME"
+    "$AUTO_DEPLOY_SYSTEMCTL_BIN" is-active --quiet "$AUTO_DEPLOY_SERVICE_UNIT_NAME" || fail "service failed to start: $AUTO_DEPLOY_SERVICE_UNIT_NAME"
 
     printf 'Installed %s to %s\n' "$version" "$AUTO_DEPLOY_BINARY_PATH"
 }
