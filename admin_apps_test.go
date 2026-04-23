@@ -758,6 +758,12 @@ func TestAdminAppsListShowsActivePhaseLabel(t *testing.T) {
 	if !strings.Contains(body, `Applying update`) {
 		t.Fatalf("Expected body to describe installing phase, got:\n%s", body)
 	}
+	if !strings.Contains(body, `status-installing`) {
+		t.Fatalf("Expected body to contain status-installing badge class, got:\n%s", body)
+	}
+	if !strings.Contains(body, ">installing<") && !strings.Contains(body, "installing") {
+		t.Fatalf("Expected body to show installing badge text, got:\n%s", body)
+	}
 	if strings.Contains(body, `data-progress-percent`) {
 		t.Fatalf("Expected installing phase to hide download percent UI, got:\n%s", body)
 	}

@@ -109,7 +109,9 @@
         {{ else if eq .Job.Status "failed" }}
             <span class="deploy-status-badge status-failed">failed</span>
         {{ else if eq .Job.Status "in_progress" }}
-            <span class="deploy-status-badge status-in-progress">in_progress</span>
+            <span class="deploy-status-badge {{ if and .LiveProgress (eq .LiveProgress.Phase "installing") }}status-installing{{ else }}status-in-progress{{ end }}">
+                {{ if and .LiveProgress (eq .LiveProgress.Phase "installing") }}installing{{ else }}in_progress{{ end }}
+            </span>
             {{ if .LiveProgress }}<div class="meta-row" data-progress-phase style="margin-top: 6px;">{{ template "progress_phase_text" .LiveProgress.Phase }}</div>{{ end }}
             <div style="margin-top: 8px;">
                 {{ if and .LiveProgress (eq .LiveProgress.Phase "downloading") }}

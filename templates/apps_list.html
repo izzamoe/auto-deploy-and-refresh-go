@@ -168,8 +168,8 @@ function fallbackCopy(text) {
 {{ define "app_progress_region_inner" }}
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-            <span class="deploy-status-badge {{ if eq .LastDeployStatus "succeeded" }}status-succeeded{{ else if eq .LastDeployStatus "failed" }}status-failed{{ else if eq .LastDeployStatus "in_progress" }}status-in-progress{{ else if eq .LastDeployStatus "pending" }}status-pending{{ end }}" data-status="{{ .LastDeployStatus }}">
-                {{ if .LastDeployStatus }}{{ .LastDeployStatus }}{{ else }}No deploys yet{{ end }}
+            <span class="deploy-status-badge {{ if eq .LastDeployStatus "succeeded" }}status-succeeded{{ else if eq .LastDeployStatus "failed" }}status-failed{{ else if eq .LastDeployStatus "in_progress" }}{{ if and .LiveProgress (eq .LiveProgress.Phase "installing") }}status-installing{{ else }}status-in-progress{{ end }}{{ else if eq .LastDeployStatus "pending" }}status-pending{{ end }}" data-status="{{ .LastDeployStatus }}">
+                {{ if eq .LastDeployStatus "in_progress" }}{{ if and .LiveProgress (eq .LiveProgress.Phase "installing") }}installing{{ else }}in_progress{{ end }}{{ else if .LastDeployStatus }}{{ .LastDeployStatus }}{{ else }}No deploys yet{{ end }}
             </span>
             {{ if and .LiveProgress (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}
             <span class="meta-row" data-progress-phase style="margin: 0;">{{ template "progress_phase_text" .LiveProgress.Phase }}</span>

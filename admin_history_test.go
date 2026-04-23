@@ -175,6 +175,12 @@ func TestAdminHistoryListShowsActivePhaseLabel(t *testing.T) {
 	if !strings.Contains(body, `Applying update`) {
 		t.Fatalf("expected history row phase label, got %s", body)
 	}
+	if !strings.Contains(body, `status-installing`) {
+		t.Fatalf("expected history row to use status-installing badge class, got %s", body)
+	}
+	if !strings.Contains(body, ">installing<") && !strings.Contains(body, "installing") {
+		t.Fatalf("expected history row to show installing badge text, got %s", body)
+	}
 	if strings.Contains(body, `data-progress-percent`) || strings.Contains(body, `data-progress-speed`) {
 		t.Fatalf("expected installing history row to hide stale download stats, got %s", body)
 	}
