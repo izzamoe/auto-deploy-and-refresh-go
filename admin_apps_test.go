@@ -726,3 +726,48 @@ func TestAdminAppsListTerminalJobClearsActiveMarker(t *testing.T) {
 		t.Fatalf("Expected terminal apps list to avoid SSE subscription markup, got:\n%s", body)
 	}
 }
+
+func TestAdminAppsListShowsActivePhaseLabel(t *testing.T) {
+	store := newTestAppStoreWithJobs(t)
+	app, _ := store.Create("Installing Deploy App", "sec-test-3", "/bin3", "svc3", "repo3", "art3")
+
+	store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job-installing', 1, ?, 'v3.0.0', 'in_progress', 'webhook', 1000, 0, 0)`,
+		app.ID,
+	)
+
+	handler := newTestAppAdminHandler(t, store)
+	handler.tracker.Start(app.ID, "job-installing", "v3.0.0")
+	handler.tracker.Update(app.ID, 1000, 1000, 2500)
+	handler.tracker.SetPhase(app.ID, PhaseInstalling)
+
+	mux := http.NewServeMux()
+	RegisterAdminAppRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("GET", "/admin/apps", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `data-progress-phase`) {
+		t.Fatalf("Expected body to contain data-progress-phase, got:\n%s", body)
+	}
+	if !strings.Contains(body, `Applying update`) {
+		t.Fatalf("Expected body to describe installing phase, got:\n%s", body)
+	}
+	if strings.Contains(body, `data-progress-percent`) {
+		t.Fatalf("Expected installing phase to hide download percent UI, got:\n%s", body)
+	}
+	if strings.Contains(body, `data-progress-speed`) {
+		t.Fatalf("Expected installing phase to hide stale speed UI, got:\n%s", body)
+	}
+	if strings.Contains(body, `data-progress-bytes`) {
+		t.Fatalf("Expected installing phase to hide download byte counters, got:\n%s", body)
+	}
+	if !strings.Contains(body, `Download complete. Restarting service and verifying health.`) {
+		t.Fatalf("Expected installing detail text, got:\n%s", body)
+	}
+}

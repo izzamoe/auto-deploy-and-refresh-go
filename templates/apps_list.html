@@ -36,19 +36,9 @@ function fallbackCopy(text) {
 </script>
 {{ end }}
 <style>
-.btn-danger {
-    background-color: var(--accent-danger);
-    color: var(--text-inverse);
-    border-color: transparent;
-}
-.btn-danger:hover {
-    background-color: #c00000;
-}
-.apps-grid {
-    display: grid;
-    gap: var(--space-4);
-    grid-template-columns: 1fr;
-}
+.btn-danger { background-color: var(--accent-danger); color: var(--text-inverse); border-color: transparent; }
+.btn-danger:hover { background-color: #c00000; }
+.apps-grid { display: grid; gap: var(--space-4); grid-template-columns: 1fr; }
 </style>
 <div class="page-header">
     <h1 class="page-title">Apps</h1>
@@ -68,7 +58,6 @@ function fallbackCopy(text) {
         </div>
     {{ end }}
 </div>
-
 {{ end }}
 
 {{ define "apps_progress_subscription" }}
@@ -104,37 +93,24 @@ function fallbackCopy(text) {
             </div>
         </div>
         <div>
-            {{ if .Enabled }}
-                <span class="badge active">Active</span>
-            {{ else }}
-                <span class="badge disabled">Disabled</span>
-            {{ end }}
+            {{ if .Enabled }}<span class="badge active">Active</span>{{ else }}<span class="badge disabled">Disabled</span>{{ end }}
         </div>
     </div>
-
     {{ template "app_progress_region" . }}
-
     <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
         <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
         <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
-        <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
-              hx-post="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
-              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+        <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" hx-post="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
             <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
         </form>
         {{ if .Enabled }}
-        <form method="POST" action="/admin/apps/{{ .ID }}/deploy"
-              hx-post="/admin/apps/{{ .ID }}/deploy"
-              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0; display: inline-flex; gap: 8px;">
+        <form method="POST" action="/admin/apps/{{ .ID }}/deploy" hx-post="/admin/apps/{{ .ID }}/deploy" hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0; display: inline-flex; gap: 8px;">
             <input type="hidden" name="source" value="list">
             <input type="text" name="tag" placeholder="Tag (e.g. v1.2.3)" required style="width: 120px; height: 36px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
             <button type="submit" class="btn btn-primary">Deploy</button>
         </form>
         {{ end }}
-        <form method="POST" action="/admin/apps/{{ .ID }}/delete"
-              hx-post="/admin/apps/{{ .ID }}/delete"
-              hx-confirm="Are you sure you want to delete {{ .Name }}? This will permanently delete the app and all its deploy history."
-              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+        <form method="POST" action="/admin/apps/{{ .ID }}/delete" hx-post="/admin/apps/{{ .ID }}/delete" hx-confirm="Are you sure you want to delete {{ .Name }}? This will permanently delete the app and all its deploy history." hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
             <button type="submit" class="btn btn-danger">Delete</button>
         </form>
     </div>
@@ -159,37 +135,24 @@ function fallbackCopy(text) {
             </div>
         </div>
         <div>
-            {{ if .Enabled }}
-                <span class="badge active">Active</span>
-            {{ else }}
-                <span class="badge disabled">Disabled</span>
-            {{ end }}
+            {{ if .Enabled }}<span class="badge active">Active</span>{{ else }}<span class="badge disabled">Disabled</span>{{ end }}
         </div>
     </div>
-
     {{ template "app_progress_region" . }}
-
     <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
         <a href="/admin/apps/{{ .ID }}/edit" class="btn btn-secondary">Edit</a>
         <a href="/admin/apps/{{ .ID }}/history" class="btn btn-secondary">History</a>
-        <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
-              hx-post="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}"
-              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+        <form method="POST" action="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" hx-post="/admin/apps/{{ .ID }}/{{ if .Enabled }}disable{{ else }}enable{{ end }}" hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
             <button type="submit" class="btn btn-secondary">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
         </form>
         {{ if .Enabled }}
-        <form method="POST" action="/admin/apps/{{ .ID }}/deploy"
-              hx-post="/admin/apps/{{ .ID }}/deploy"
-              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0; display: inline-flex; gap: 8px;">
+        <form method="POST" action="/admin/apps/{{ .ID }}/deploy" hx-post="/admin/apps/{{ .ID }}/deploy" hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0; display: inline-flex; gap: 8px;">
             <input type="hidden" name="source" value="list">
             <input type="text" name="tag" placeholder="Tag (e.g. v1.2.3)" required style="width: 120px; height: 36px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
             <button type="submit" class="btn btn-primary">Deploy</button>
         </form>
         {{ end }}
-        <form method="POST" action="/admin/apps/{{ .ID }}/delete"
-              hx-post="/admin/apps/{{ .ID }}/delete"
-              hx-confirm="Are you sure you want to delete {{ .Name }}? This will permanently delete the app and all its deploy history."
-              hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
+        <form method="POST" action="/admin/apps/{{ .ID }}/delete" hx-post="/admin/apps/{{ .ID }}/delete" hx-confirm="Are you sure you want to delete {{ .Name }}? This will permanently delete the app and all its deploy history." hx-target="#apps-table" hx-select="#apps-table" hx-swap="outerHTML" style="margin: 0;">
             <button type="submit" class="btn btn-danger">Delete</button>
         </form>
     </div>
@@ -204,41 +167,38 @@ function fallbackCopy(text) {
 
 {{ define "app_progress_region_inner" }}
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-            <span class="deploy-status-badge 
-                {{ if eq .LastDeployStatus "succeeded" }}status-succeeded
-                {{ else if eq .LastDeployStatus "failed" }}status-failed
-                {{ else if eq .LastDeployStatus "in_progress" }}status-in-progress
-                {{ else if eq .LastDeployStatus "pending" }}status-pending
-                {{ end }}" data-status="{{ .LastDeployStatus }}">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span class="deploy-status-badge {{ if eq .LastDeployStatus "succeeded" }}status-succeeded{{ else if eq .LastDeployStatus "failed" }}status-failed{{ else if eq .LastDeployStatus "in_progress" }}status-in-progress{{ else if eq .LastDeployStatus "pending" }}status-pending{{ end }}" data-status="{{ .LastDeployStatus }}">
                 {{ if .LastDeployStatus }}{{ .LastDeployStatus }}{{ else }}No deploys yet{{ end }}
             </span>
+            {{ if and .LiveProgress (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}
+            <span class="meta-row" data-progress-phase style="margin: 0;">{{ template "progress_phase_text" .LiveProgress.Phase }}</span>
+            {{ end }}
         </div>
     </div>
-
     {{ if and .LiveProgress (or (eq .LastDeployStatus "in_progress") (eq .LastDeployStatus "pending")) }}
-        {{ if gt .LiveProgress.TotalBytes 0 }}
-            <div class="progress-bar-container" style="margin-bottom: 8px;">
-                <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
-            </div>
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <span class="stat-chip stat-percent" data-progress-percent>
-                    {{ .LiveProgress.DownloadedBytes }} / {{ .LiveProgress.TotalBytes }}
-                </span>
-                <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
-                <span class="meta-row" style="margin: 0; display: none;" data-progress-bytes></span>
-            </div>
+        {{ if eq .LiveProgress.Phase "downloading" }}
+            {{ if gt .LiveProgress.TotalBytes 0 }}
+                <div class="progress-bar-container" style="margin-bottom: 8px;">
+                    <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <span class="stat-chip stat-percent" data-progress-percent>{{ .LiveProgress.DownloadedBytes }} / {{ .LiveProgress.TotalBytes }}</span>
+                    <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
+                    <span class="meta-row" style="margin: 0; display: none;" data-progress-bytes></span>
+                </div>
+            {{ else }}
+                <div class="progress-bar-container" style="margin-bottom: 8px;">
+                    <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <span class="stat-chip stat-percent" data-progress-percent style="display: none;"></span>
+                    <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
+                    <span class="meta-row" style="margin: 0;" data-progress-bytes>{{ .LiveProgress.DownloadedBytes }} B</span>
+                </div>
+            {{ end }}
         {{ else }}
-            <div class="progress-bar-container" style="margin-bottom: 8px;">
-                <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
-            </div>
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <span class="stat-chip stat-percent" data-progress-percent style="display: none;"></span>
-                <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
-                <span class="meta-row" style="margin: 0;" data-progress-bytes>
-                    {{ .LiveProgress.DownloadedBytes }} B
-                </span>
-            </div>
+            <div class="meta-row" data-progress-detail>{{ template "progress_phase_detail_text" .LiveProgress.Phase }}</div>
         {{ end }}
     {{ else if .LastDeployStatus }}
         <div class="meta-row">

@@ -93,6 +93,20 @@ func TestProgressTrackerFinish(t *testing.T) {
 	}
 }
 
+func TestProgressTrackerSetPhase(t *testing.T) {
+	pt := NewProgressTracker()
+	pt.Start("app1", "job1", "v1")
+	pt.SetPhase("app1", PhaseInstalling)
+
+	snap, ok := pt.Snapshot("app1")
+	if !ok {
+		t.Fatal("entry should still be readable after SetPhase")
+	}
+	if snap.Phase != PhaseInstalling {
+		t.Errorf("Phase = %q, want %q", snap.Phase, PhaseInstalling)
+	}
+}
+
 func TestProgressTrackerFail(t *testing.T) {
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")

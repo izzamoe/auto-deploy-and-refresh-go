@@ -141,6 +141,51 @@ func TestAdminHistoryListTerminalRowIgnoresStaleTrackerProgress(t *testing.T) {
 	}
 }
 
+func TestAdminHistoryListShowsActivePhaseLabel(t *testing.T) {
+	_, store, queue, handler := setupHistoryTest(t)
+
+	app, err := store.Create("Installing App", "phase-secret", "/bin/phase", "phase.service", "owner/phase", "artifact-phase")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+
+	if err := queue.Enqueue(app.ID, "v9.9.9"); err != nil {
+		t.Fatalf("queue.Enqueue: %v", err)
+	}
+	jobID, _, _ := queue.DequeueNext(app.ID)
+
+	handler.tracker.Start(app.ID, jobID, "v9.9.9")
+	handler.tracker.Update(app.ID, 2048, 2048, 512)
+	handler.tracker.SetPhase(app.ID, PhaseInstalling)
+
+	mux := http.NewServeMux()
+	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
+
+	req := httptest.NewRequest("GET", "/admin/apps/"+app.ID+"/history", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `data-progress-phase`) {
+		t.Fatalf("expected history row phase marker, got %s", body)
+	}
+	if !strings.Contains(body, `Applying update`) {
+		t.Fatalf("expected history row phase label, got %s", body)
+	}
+	if strings.Contains(body, `data-progress-percent`) || strings.Contains(body, `data-progress-speed`) {
+		t.Fatalf("expected installing history row to hide stale download stats, got %s", body)
+	}
+	if strings.Contains(body, `data-progress-bytes`) {
+		t.Fatalf("expected installing history row to hide download byte counters, got %s", body)
+	}
+	if !strings.Contains(body, `Download complete. Restarting service and verifying health.`) {
+		t.Fatalf("expected history row installing detail text, got %s", body)
+	}
+}
+
 func TestAdminHistoryListHTMXReturnsFragment(t *testing.T) {
 	_, store, queue, handler := setupHistoryTest(t)
 

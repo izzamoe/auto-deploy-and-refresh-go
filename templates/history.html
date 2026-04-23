@@ -6,7 +6,6 @@
 </div>
 
 {{ template "history_progress_subscription" . }}
-
 {{ template "history_table_region" . }}
 </div>
 {{ end }}
@@ -32,11 +31,7 @@
                 {{ end }}
             {{ else }}
                 <tr>
-                    <td colspan="7">
-                        <div class="empty-state">
-                            <p>No deploy history for this app.</p>
-                        </div>
-                    </td>
+                    <td colspan="7"><div class="empty-state"><p>No deploy history for this app.</p></div></td>
                 </tr>
             {{ end }}
         </tbody>
@@ -65,11 +60,7 @@
                 {{ end }}
             {{ else }}
                 <tr>
-                    <td colspan="7">
-                        <div class="empty-state">
-                            <p>No deploy history for this app.</p>
-                        </div>
-                    </td>
+                    <td colspan="7"><div class="empty-state"><p>No deploy history for this app.</p></div></td>
                 </tr>
             {{ end }}
         </tbody>
@@ -103,9 +94,7 @@
     <td>
         <strong>{{ .Job.Tag }}</strong>
         {{ if .Job.RetryOfJobID }}
-        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: var(--space-1);">
-            Retry of: {{ if gt (len .Job.RetryOfJobID) 8 }}{{ slice .Job.RetryOfJobID 0 8 }}{{ else }}{{ .Job.RetryOfJobID }}{{ end }}
-        </div>
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: var(--space-1);">Retry of: {{ if gt (len .Job.RetryOfJobID) 8 }}{{ slice .Job.RetryOfJobID 0 8 }}{{ else }}{{ .Job.RetryOfJobID }}{{ end }}</div>
         {{ end }}
     </td>
     <td>
@@ -114,28 +103,31 @@
             {{ if and .Job.DownloadBytes (gt .Job.DownloadBytes 0) }}
             <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
                 <span class="stat-chip stat-percent">{{ .Job.DownloadBytes }} B</span>
-                {{ if and .Job.DownloadSpeedBPS (gt .Job.DownloadSpeedBPS 0.0) }}
-                <span class="stat-chip stat-speed">{{ printf "%.0f" .Job.DownloadSpeedBPS }} B/s</span>
-                {{ end }}
+                {{ if and .Job.DownloadSpeedBPS (gt .Job.DownloadSpeedBPS 0.0) }}<span class="stat-chip stat-speed">{{ printf "%.0f" .Job.DownloadSpeedBPS }} B/s</span>{{ end }}
             </div>
             {{ end }}
         {{ else if eq .Job.Status "failed" }}
             <span class="deploy-status-badge status-failed">failed</span>
         {{ else if eq .Job.Status "in_progress" }}
             <span class="deploy-status-badge status-in-progress">in_progress</span>
+            {{ if .LiveProgress }}<div class="meta-row" data-progress-phase style="margin-top: 6px;">{{ template "progress_phase_text" .LiveProgress.Phase }}</div>{{ end }}
             <div style="margin-top: 8px;">
-                <div class="progress-bar-container" style="margin-bottom: 4px;">
-                    {{ if and .LiveProgress (gt .LiveProgress.TotalBytes 0) }}
-                        <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
-                    {{ else }}
-                        <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
-                    {{ end }}
-                </div>
-                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                    <span class="stat-chip stat-percent" data-progress-percent{{ if or (not .LiveProgress) (eq .LiveProgress.TotalBytes 0) }} style="display:none;"{{ end }}></span>
-                    <span class="stat-chip stat-speed" data-progress-speed>{{ if .LiveProgress }}{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s{{ else }}0 B/s{{ end }}</span>
-                    <span class="meta-row" style="margin: 0;{{ if and .LiveProgress (gt .LiveProgress.TotalBytes 0) }}display:none;{{ end }}" data-progress-bytes>{{ if .LiveProgress }}{{ .LiveProgress.DownloadedBytes }} B{{ else }}0 B{{ end }}</span>
-                </div>
+                {{ if and .LiveProgress (eq .LiveProgress.Phase "downloading") }}
+                    <div class="progress-bar-container" style="margin-bottom: 4px;">
+                        {{ if gt .LiveProgress.TotalBytes 0 }}
+                            <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
+                        {{ else }}
+                            <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
+                        {{ end }}
+                    </div>
+                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                        <span class="stat-chip stat-percent" data-progress-percent{{ if eq .LiveProgress.TotalBytes 0 }} style="display:none;"{{ end }}></span>
+                        <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
+                        <span class="meta-row" style="margin: 0;{{ if gt .LiveProgress.TotalBytes 0 }}display:none;{{ end }}" data-progress-bytes>{{ .LiveProgress.DownloadedBytes }} B</span>
+                    </div>
+                {{ else if .LiveProgress }}
+                    <div class="meta-row" data-progress-detail>{{ template "progress_phase_detail_text" .LiveProgress.Phase }}</div>
+                {{ end }}
             </div>
         {{ else if eq .Job.Status "pending" }}
             <span class="deploy-status-badge status-pending">pending</span>
@@ -144,9 +136,7 @@
         {{ end }}
     </td>
     <td>{{ .Job.Trigger }}</td>
-    <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ end }}">
-        {{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ else }}-{{ end }}
-    </td>
+    <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ end }}">{{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ else }}-{{ end }}</td>
     <td>{{ .Job.CreatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
     <td>{{ .Job.UpdatedAt.Format "Jan 02, 2006 15:04:05" }}</td>
     <td>

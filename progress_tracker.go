@@ -96,6 +96,21 @@ func (pt *ProgressTracker) Update(appID string, downloaded, total int64, speedBP
 	e.snapshot.UpdatedAt = pt.now()
 }
 
+// SetPhase updates the current non-terminal phase for appID.
+// Missing entries are ignored.
+func (pt *ProgressTracker) SetPhase(appID, phase string) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	e, ok := pt.entries[appID]
+	if !ok {
+		return
+	}
+
+	e.snapshot.Phase = phase
+	e.snapshot.UpdatedAt = pt.now()
+}
+
 // Finish marks the deployment for appID as done (success).
 // The entry remains readable until Cleanup removes it after the grace window.
 func (pt *ProgressTracker) Finish(appID string) {

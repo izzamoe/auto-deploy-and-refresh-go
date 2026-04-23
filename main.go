@@ -224,6 +224,7 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 		tracker.Fail(app.ID)
 		return DownloadSummary{}, err
 	}
+	tracker.SetPhase(app.ID, PhaseInstalling)
 
 	ef, err := os.Open(tmpPath)
 	if err != nil {
