@@ -1,12 +1,12 @@
 # auto-deploy
 
 A lightweight Go service that automates binary deployments for multiple applications.
-When GitHub Actions publishes a release, it triggers this service to download the new binary,
-back up the old one, replace it, and restart the systemd service.
+When a release workflow or manual operator calls the webhook, this service downloads the new binary,
+backs up the old one, replaces it, and restarts the systemd service.
 
 ## How It Works
 
-GitHub Release → GitHub Actions (curl POST) → Webhook Service (:9000)
+GitHub Release → Optional/manual webhook call → Webhook Service (:9000)
 
 1. **Webhook**: The service receives a `POST /webhook` with an app-specific Bearer token.
 2. **Resolution**: It resolves the application by the SHA256 hash of the token in its SQLite registry.
@@ -65,7 +65,7 @@ The repository contract for distributable releases is:
 
 The machine-readable contract lives in `release-contract.sh`, and `install.sh` embeds the same defaults so a copied bootstrap script still works by itself.
 
-The CI release workflow uses the same contract in two modes: `workflow_dispatch` runs validation and packaging only, while matching `v*` tag pushes publish the GitHub release assets first and only then notify the downstream deploy webhook.
+The CI release workflow uses the same contract in two modes: `workflow_dispatch` runs validation and packaging only, while matching `v*` tag pushes publish the GitHub release assets without notifying the downstream deploy webhook automatically.
 
 ## Install Or Upgrade
 
@@ -115,8 +115,8 @@ Each application configured in the Admin UI has a unique webhook secret.
    - `DEPLOY_WEBHOOK_SECRET`: The secret token generated for the app.
    - `DEPLOY_WEBHOOK_URL`: `http://YOUR_SERVER_IP:9000`
 
-Refer to `deploy-step.yml` for the workflow snippet to include in your GitHub Actions.
-If you use the repository release workflow, keep that webhook call after the GitHub release publish step so deployments only see already-published assets.
+Refer to `deploy-step.yml` for an optional/manual workflow snippet to include in a workflow that should notify this service.
+The repository release workflow does not include that webhook call automatically; if you copy the snippet into another workflow, keep it after the GitHub release publish step so deployments only see already-published assets.
 
 ## Environment Variables
 

@@ -1,6 +1,7 @@
-# GitHub Actions step to trigger deployment after a successful release build.
+# Optional/manual GitHub Actions step to trigger deployment after a successful release build.
+# This snippet is not enabled by this repository's release workflow by default.
 #
-# SETUP REQUIRED — Add these secrets to your GitHub repository:
+# OPTIONAL MANUAL SETUP — Add these secrets to the repository that will use this snippet:
 #   Settings → Secrets and variables → Actions → New repository secret
 #
 #   DEPLOY_WEBHOOK_SECRET  →  The bearer token for your app
@@ -20,8 +21,9 @@
 #   This step passes for any 2xx response.
 #
 # HOW TO USE:
-#   Copy the step below into your existing workflow, inside the job that builds
-#   and publishes the release. It should run AFTER the release is published.
+#   Copy the step below into your own workflow only when you explicitly want
+#   that workflow to notify the deploy service. It should run AFTER the release is published.
+#   The repository release workflow publishes assets but does not include this step automatically.
 #   Add `if: github.event_name == 'release'` if your workflow handles multiple triggers.
 
 - name: Trigger deployment
