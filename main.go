@@ -16,6 +16,17 @@ import (
 	"time"
 )
 
+var (
+	runSystemctl = func(name string, args ...string) ([]byte, error) {
+		cmdArgs := append([]string{name}, args...)
+		return exec.Command("systemctl", cmdArgs...).CombinedOutput()
+	}
+	renameFile             = os.Rename
+	deployHealthCheckSleep = time.Sleep
+)
+
+const maxArtifactBytes int64 = 100 * 1024 * 1024
+
 type response struct {
 	Status string `json:"status"`
 	Tag    string `json:"tag,omitempty"`
@@ -169,12 +180,22 @@ func multiAppWebhookHandler(admission *AdmissionService) http.HandlerFunc {
 }
 
 func downloadBinary(url, tmpPath string, tracker *ProgressTracker, appID string, client *http.Client) (DownloadSummary, error) {
+	return downloadBinaryWithMaxBytes(url, tmpPath, tracker, appID, client, maxArtifactBytes)
+}
+
+func downloadBinaryWithMaxBytes(url, tmpPath string, tracker *ProgressTracker, appID string, client *http.Client, maxBytes int64) (DownloadSummary, error) {
 	slog.Info("downloading", "url", url)
 	resp, err := DownloadWithRetry(client, url, nil)
 	if err != nil {
 		return DownloadSummary{}, fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if maxBytes < 0 {
+		return DownloadSummary{}, fmt.Errorf("download too large: invalid max bytes %d", maxBytes)
+	}
+	if resp.ContentLength > maxBytes {
+		return DownloadSummary{}, fmt.Errorf("download too large: content length %d exceeds max %d", resp.ContentLength, maxBytes)
+	}
 
 	f, err := os.Create(tmpPath)
 	if err != nil {
@@ -186,12 +207,30 @@ func downloadBinary(url, tmpPath string, tracker *ProgressTracker, appID string,
 	})
 
 	downloadStart := time.Now()
-	written, err := io.Copy(f, io.LimitReader(reader, 100*1024*1024))
+	probeLimit := maxBytes + 1
+	if probeLimit < maxBytes {
+		probeLimit = maxBytes
+	}
+	written, err := io.Copy(f, io.LimitReader(reader, probeLimit))
 	if err != nil {
-		f.Close()
+		cleanupRejectedDownload(f, tmpPath)
+		if resp.ContentLength >= 0 && written != resp.ContentLength {
+			return DownloadSummary{}, fmt.Errorf("download incomplete: wrote %d bytes, expected %d: %w", written, resp.ContentLength, err)
+		}
 		return DownloadSummary{}, fmt.Errorf("write tmp file: %w", err)
 	}
-	f.Close()
+	if written > maxBytes {
+		cleanupRejectedDownload(f, tmpPath)
+		return DownloadSummary{}, fmt.Errorf("download too large: wrote %d bytes, max %d", written, maxBytes)
+	}
+	if resp.ContentLength >= 0 && written != resp.ContentLength {
+		cleanupRejectedDownload(f, tmpPath)
+		return DownloadSummary{}, fmt.Errorf("download incomplete: wrote %d bytes, expected %d", written, resp.ContentLength)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return DownloadSummary{}, fmt.Errorf("write tmp file: %w", err)
+	}
 
 	duration := time.Since(downloadStart)
 	var avgSpeed float64
@@ -204,6 +243,40 @@ func downloadBinary(url, tmpPath string, tracker *ProgressTracker, appID string,
 		DurationMs: duration.Milliseconds(),
 		SpeedBPS:   avgSpeed,
 	}, nil
+}
+
+func cleanupRejectedDownload(f *os.File, tmpPath string) {
+	f.Close()
+	os.Remove(tmpPath)
+}
+
+func validateDownloadedArtifact(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("artifact validation: stat artifact: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("artifact validation: empty artifact")
+	}
+	if info.Size() < 4 {
+		return fmt.Errorf("artifact validation: too small: %d bytes", info.Size())
+	}
+
+	ef, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("artifact validation: open artifact: %w", err)
+	}
+	defer ef.Close()
+
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(ef, magic); err != nil {
+		return fmt.Errorf("artifact validation: read magic bytes: %w", err)
+	}
+	if magic[0] != 0x7f || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F' {
+		return fmt.Errorf("artifact validation: invalid binary: not an ELF executable")
+	}
+
+	return nil
 }
 
 func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.Client) (DownloadSummary, error) {
@@ -226,22 +299,9 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 	}
 	tracker.SetPhase(app.ID, PhaseInstalling)
 
-	ef, err := os.Open(tmpPath)
-	if err != nil {
+	if err := validateDownloadedArtifact(tmpPath); err != nil {
 		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("open tmp for validation: %w", err)
-	}
-	magic := make([]byte, 4)
-	if _, err := io.ReadFull(ef, magic); err != nil {
-		ef.Close()
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("read magic bytes: %w", err)
-	}
-	ef.Close()
-
-	if magic[0] != 0x7f || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F' {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("invalid binary: not an ELF executable")
+		return summary, err
 	}
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
@@ -249,31 +309,39 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 		return summary, fmt.Errorf("chmod: %w", err)
 	}
 
+	backupPath := app.BinaryPath + ".bak"
+	backupCreated := false
 	if _, err := os.Stat(app.BinaryPath); err == nil {
-		slog.Info("backup", "from", app.BinaryPath, "to", app.BinaryPath+".bak")
-		if err := os.Rename(app.BinaryPath, app.BinaryPath+".bak"); err != nil {
+		slog.Info("backup", "from", app.BinaryPath, "to", backupPath)
+		if err := renameFile(app.BinaryPath, backupPath); err != nil {
 			tracker.Fail(app.ID)
 			return summary, fmt.Errorf("backup: %w", err)
 		}
+		backupCreated = true
 	}
 
 	slog.Info("replacing binary")
 	cleanup = false
-	if err := os.Rename(tmpPath, app.BinaryPath); err != nil {
+	if err := renameFile(tmpPath, app.BinaryPath); err != nil {
 		cleanup = true
 		tracker.Fail(app.ID)
+		if backupCreated {
+			if restoreErr := renameFile(backupPath, app.BinaryPath); restoreErr != nil {
+				return summary, fmt.Errorf("replace binary: %w; restore backup: %v", err, restoreErr)
+			}
+		}
 		return summary, fmt.Errorf("replace binary: %w", err)
 	}
 
 	slog.Info("restarting service", "service", app.ServiceName)
-	if out, err := exec.Command("systemctl", "restart", app.ServiceName).CombinedOutput(); err != nil {
+	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
 		tracker.Fail(app.ID)
 		return summary, fmt.Errorf("restart service: %w: %s", err, string(out))
 	}
 
 	for i := 1; i <= 5; i++ {
-		time.Sleep(2 * time.Second)
-		out, err := exec.Command("systemctl", "is-active", app.ServiceName).CombinedOutput()
+		deployHealthCheckSleep(2 * time.Second)
+		out, err := runSystemctl("is-active", app.ServiceName)
 		status := strings.TrimSpace(string(out))
 		slog.Info("health check", "attempt", i, "status", status)
 		if err == nil && status == "active" {
@@ -283,11 +351,15 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 	}
 
 	slog.Error("rolling back", "reason", "service failed health check")
-	if err := os.Rename(app.BinaryPath+".bak", app.BinaryPath); err != nil {
+	if !backupCreated {
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("rollback unavailable: no previous binary backup")
+	}
+	if err := renameFile(backupPath, app.BinaryPath); err != nil {
 		tracker.Fail(app.ID)
 		return summary, fmt.Errorf("rollback rename failed: %w", err)
 	}
-	if out, err := exec.Command("systemctl", "restart", app.ServiceName).CombinedOutput(); err != nil {
+	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
 		tracker.Fail(app.ID)
 		return summary, fmt.Errorf("rollback restart failed: %w: %s", err, string(out))
 	}

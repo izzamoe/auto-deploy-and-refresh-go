@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -248,6 +252,85 @@ func TestDownloadWithRetryBackoffDurationsAreCorrect(t *testing.T) {
 		if got[i] != d {
 			t.Errorf("sleep[%d]: expected %v, got %v", i, d, got[i])
 		}
+	}
+}
+
+func TestDownloadBinaryTooLargeContentLengthIsRejected(t *testing.T) {
+	maxBytes := int64(32)
+	body := bytes.Repeat([]byte{'a'}, int(maxBytes))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(maxBytes+1))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	tmpPath := filepath.Join(t.TempDir(), "artifact.tmp")
+	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", &http.Client{}, maxBytes)
+	if err == nil {
+		t.Fatal("expected oversized Content-Length to be rejected")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected error to mention too large, got %q", err.Error())
+	}
+	assertNoSuccessfulDownloadArtifact(t, tmpPath)
+}
+
+func TestDownloadBinaryExceedsMaxBytesWhileStreamingIsRejected(t *testing.T) {
+	maxBytes := int64(32)
+	body := bytes.Repeat([]byte{'b'}, int(maxBytes+1))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	tmpPath := filepath.Join(t.TempDir(), "artifact.tmp")
+	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", &http.Client{}, maxBytes)
+	if err == nil {
+		t.Fatal("expected streamed body above maxBytes to be rejected")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected error to mention too large, got %q", err.Error())
+	}
+	assertNoSuccessfulDownloadArtifact(t, tmpPath)
+}
+
+func TestDownloadBinaryIncompleteContentLengthIsRejected(t *testing.T) {
+	maxBytes := int64(32)
+	body := bytes.Repeat([]byte{'c'}, int(maxBytes/2))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(maxBytes))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	tmpPath := filepath.Join(t.TempDir(), "artifact.tmp")
+	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", &http.Client{}, maxBytes)
+	if err == nil {
+		t.Fatal("expected incomplete response body to be rejected")
+	}
+	if !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("expected error to mention incomplete, got %q", err.Error())
+	}
+	assertNoSuccessfulDownloadArtifact(t, tmpPath)
+}
+
+func assertNoSuccessfulDownloadArtifact(t *testing.T, tmpPath string) {
+	t.Helper()
+	info, err := os.Stat(tmpPath)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("stat tmp artifact: %v", err)
+	}
+	if info.Mode()&0111 != 0 {
+		t.Fatalf("rejected tmp artifact must not be executable, mode=%v", info.Mode())
+	}
+	if info.Size() > 0 {
+		t.Fatalf("rejected tmp artifact should be removed or empty, size=%d", info.Size())
 	}
 }
 

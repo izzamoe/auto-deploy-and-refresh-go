@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func setupTestWebhook(t *testing.T) (http.HandlerFunc, string) {
@@ -451,5 +452,266 @@ func TestDeployCleanupOnValidationFailure(t *testing.T) {
 	tmpPath := app.BinaryPath + ".tmp"
 	if _, statErr := os.Stat(tmpPath); statErr == nil {
 		t.Error("expected temp file cleaned up after ELF validation failure")
+	}
+}
+
+func TestValidateDownloadedArtifactRejectsZeroLength(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty-artifact")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	err := validateDownloadedArtifact(path)
+	if err == nil {
+		t.Fatal("expected zero-length artifact to fail validation")
+	}
+	if !strings.Contains(err.Error(), "artifact validation") || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error = %q, want artifact validation empty error", err.Error())
+	}
+}
+
+func TestValidateDownloadedArtifactRejectsShortArtifact(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "short-artifact")
+	if err := os.WriteFile(path, []byte{0x7f, 'E', 'L'}, 0644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	err := validateDownloadedArtifact(path)
+	if err == nil {
+		t.Fatal("expected short artifact to fail validation")
+	}
+	if !strings.Contains(err.Error(), "artifact validation") || !strings.Contains(err.Error(), "too small") {
+		t.Errorf("error = %q, want artifact validation too small error", err.Error())
+	}
+}
+
+func TestValidateDownloadedArtifactRejectsNonELF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "non-elf-artifact")
+	if err := os.WriteFile(path, []byte("not-an-elf"), 0644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	err := validateDownloadedArtifact(path)
+	if err == nil {
+		t.Fatal("expected non-ELF artifact to fail validation")
+	}
+	if !strings.Contains(err.Error(), "not an ELF executable") {
+		t.Errorf("error = %q, want to contain 'not an ELF executable'", err.Error())
+	}
+}
+
+func TestValidateDownloadedArtifactAcceptsELFMagic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "elf-artifact")
+	if err := os.WriteFile(path, elfBinary("payload"), 0644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	if err := validateDownloadedArtifact(path); err != nil {
+		t.Fatalf("validate ELF artifact: %v", err)
+	}
+}
+
+func TestDeployInvalidELFLeavesOriginalBinaryUntouched(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	original := []byte("original-binary")
+	if err := os.WriteFile(app.BinaryPath, original, 0755); err != nil {
+		t.Fatalf("write original binary: %v", err)
+	}
+
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		t.Fatalf("systemctl should not run for invalid ELF")
+		return nil, nil
+	})
+
+	_, err := deploy(app, "job-invalid-elf", "v1.0.0", NewProgressTracker(), deployClientWithBody([]byte("not-an-elf")))
+	if err == nil {
+		t.Fatal("expected deploy to fail on invalid ELF")
+	}
+	if !strings.Contains(err.Error(), "not an ELF executable") {
+		t.Errorf("error = %q, want to contain 'not an ELF executable'", err.Error())
+	}
+	assertFileBytes(t, app.BinaryPath, original)
+	assertPathMissing(t, app.BinaryPath+".bak")
+	assertPathMissing(t, app.BinaryPath+".tmp")
+}
+
+func TestDeployShortArtifactLeavesOriginalBinaryUntouched(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	original := []byte("original-binary")
+	if err := os.WriteFile(app.BinaryPath, original, 0755); err != nil {
+		t.Fatalf("write original binary: %v", err)
+	}
+
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		t.Fatalf("systemctl should not run for short artifact")
+		return nil, nil
+	})
+	stubRename(t, func(oldpath, newpath string) error {
+		t.Fatalf("rename should not run before short artifact validation succeeds")
+		return nil
+	})
+
+	_, err := deploy(app, "job-short-artifact", "v1.0.0", NewProgressTracker(), deployClientWithBody([]byte{0x7f, 'E', 'L'}))
+	if err == nil {
+		t.Fatal("expected deploy to fail on short artifact")
+	}
+	if !strings.Contains(err.Error(), "artifact validation") || !strings.Contains(err.Error(), "too small") {
+		t.Errorf("error = %q, want artifact validation too small error", err.Error())
+	}
+	assertFileBytes(t, app.BinaryPath, original)
+	assertPathMissing(t, app.BinaryPath+".bak")
+	assertPathMissing(t, app.BinaryPath+".tmp")
+}
+
+func TestDeployReplaceFailureAfterBackupRestoresOriginalBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	original := []byte("original-binary")
+	if err := os.WriteFile(app.BinaryPath, original, 0755); err != nil {
+		t.Fatalf("write original binary: %v", err)
+	}
+
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		t.Fatalf("systemctl should not run when replacement fails")
+		return nil, nil
+	})
+	stubRename(t, func(oldpath, newpath string) error {
+		if oldpath == app.BinaryPath+".tmp" && newpath == app.BinaryPath {
+			return fmt.Errorf("forced replacement failure")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+
+	_, err := deploy(app, "job-replace-fail", "v1.0.0", NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")))
+	if err == nil {
+		t.Fatal("expected deploy to fail on replacement")
+	}
+	if !strings.Contains(err.Error(), "replace binary") {
+		t.Errorf("error = %q, want to contain 'replace binary'", err.Error())
+	}
+	assertFileBytes(t, app.BinaryPath, original)
+	assertPathMissing(t, app.BinaryPath+".bak")
+	assertPathMissing(t, app.BinaryPath+".tmp")
+}
+
+func TestDeployHealthFailureWithBackupRestoresPreviousBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	original := []byte("original-binary")
+	if err := os.WriteFile(app.BinaryPath, original, 0755); err != nil {
+		t.Fatalf("write original binary: %v", err)
+	}
+
+	stubDeploySleep(t)
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "restart":
+			return []byte("restarted"), nil
+		case "is-active":
+			return []byte("inactive\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected systemctl command %q", name)
+		}
+	})
+
+	_, err := deploy(app, "job-health-fail", "v1.0.0", NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")))
+	if err == nil {
+		t.Fatal("expected deploy to fail health checks")
+	}
+	if !strings.Contains(err.Error(), "rolled back") {
+		t.Errorf("error = %q, want to contain 'rolled back'", err.Error())
+	}
+	assertFileBytes(t, app.BinaryPath, original)
+	assertPathMissing(t, app.BinaryPath+".bak")
+	assertPathMissing(t, app.BinaryPath+".tmp")
+}
+
+func TestDeployHealthFailureNoBackupReturnsExplicitFailureWithoutRollbackClaim(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	deployed := elfBinary("new-binary")
+
+	stubDeploySleep(t)
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "restart":
+			return []byte("restarted"), nil
+		case "is-active":
+			return []byte("inactive\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected systemctl command %q", name)
+		}
+	})
+
+	_, err := deploy(app, "job-health-no-backup", "v1.0.0", NewProgressTracker(), deployClientWithBody(deployed))
+	if err == nil {
+		t.Fatal("expected deploy to fail health checks without backup")
+	}
+	if !strings.Contains(err.Error(), "rollback unavailable: no previous binary backup") {
+		t.Errorf("error = %q, want explicit missing-backup failure", err.Error())
+	}
+	if strings.Contains(err.Error(), "rolled back") {
+		t.Errorf("error = %q, must not claim rollback without backup", err.Error())
+	}
+	assertFileBytes(t, app.BinaryPath, deployed)
+	assertPathMissing(t, app.BinaryPath+".bak")
+	assertPathMissing(t, app.BinaryPath+".tmp")
+}
+
+func deployClientWithBody(body []byte) *http.Client {
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		rec.WriteHeader(http.StatusOK)
+		rec.Write(body)
+		return rec.Result(), nil
+	})
+	return &http.Client{Transport: transport}
+}
+
+func elfBinary(payload string) []byte {
+	return append([]byte{0x7f, 'E', 'L', 'F'}, []byte(payload)...)
+}
+
+func stubSystemctl(t *testing.T, fn func(string, ...string) ([]byte, error)) {
+	t.Helper()
+	original := runSystemctl
+	runSystemctl = fn
+	t.Cleanup(func() { runSystemctl = original })
+}
+
+func stubRename(t *testing.T, fn func(string, string) error) {
+	t.Helper()
+	original := renameFile
+	renameFile = fn
+	t.Cleanup(func() { renameFile = original })
+}
+
+func stubDeploySleep(t *testing.T) {
+	t.Helper()
+	original := deployHealthCheckSleep
+	deployHealthCheckSleep = func(time.Duration) {}
+	t.Cleanup(func() { deployHealthCheckSleep = original })
+}
+
+func assertFileBytes(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s = %q, want %q", path, got, want)
+	}
+}
+
+func assertPathMissing(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("expected %s to be absent", path)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat %s: %v", path, err)
 	}
 }
