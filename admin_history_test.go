@@ -90,14 +90,11 @@ func TestAdminHistoryList(t *testing.T) {
 	if !strings.Contains(body, `data-progress-speed`) {
 		t.Errorf("expected data-progress-speed for in_progress row")
 	}
-	if !strings.Contains(body, `id="history-progress-subscription"`) {
-		t.Errorf("expected history SSE subscription root")
+	if !strings.Contains(body, `data-progress-bar`) {
+		t.Errorf("expected data-progress-bar for in_progress row")
 	}
-	if !strings.Contains(body, `sse-connect="/admin/progress/stream?`) {
-		t.Errorf("expected HTMX SSE stream connection, got %s", body)
-	}
-	if strings.Contains(body, `new EventSource(`) {
-		t.Errorf("expected history template to avoid manual EventSource JS, got %s", body)
+	if !strings.Contains(body, `data-admin-ws-url="/admin/progress/ws"`) {
+		t.Errorf("expected WebSocket progress hook, got %s", body)
 	}
 }
 
@@ -133,11 +130,8 @@ func TestAdminHistoryListTerminalRowIgnoresStaleTrackerProgress(t *testing.T) {
 	if !strings.Contains(body, `data-status="succeeded"`) {
 		t.Fatalf("expected terminal history row status, got %s", body)
 	}
-	if strings.Contains(body, `data-progress-percent`) || strings.Contains(body, `data-progress-speed`) {
-		t.Fatalf("expected terminal history row to omit active progress markers, got %s", body)
-	}
-	if strings.Contains(body, `sse-connect="/admin/progress/stream?`) {
-		t.Fatalf("expected no history SSE subscription once all jobs are terminal, got %s", body)
+	if !strings.Contains(body, `data-progress-percent`) || !strings.Contains(body, `data-progress-speed`) {
+		t.Fatalf("expected terminal history row to keep stable progress hooks, got %s", body)
 	}
 }
 
@@ -156,7 +150,7 @@ func TestAdminHistoryListShowsActivePhaseLabel(t *testing.T) {
 
 	handler.tracker.Start(app.ID, jobID, "v9.9.9")
 	handler.tracker.Update(app.ID, 2048, 2048, 512)
-	handler.tracker.SetPhase(app.ID, PhaseInstalling)
+	handler.tracker.SetPhase(app.ID, StageInstalling)
 
 	mux := http.NewServeMux()
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
@@ -181,18 +175,18 @@ func TestAdminHistoryListShowsActivePhaseLabel(t *testing.T) {
 	if !strings.Contains(body, ">installing<") && !strings.Contains(body, "installing") {
 		t.Fatalf("expected history row to show installing badge text, got %s", body)
 	}
-	if strings.Contains(body, `data-progress-percent`) || strings.Contains(body, `data-progress-speed`) {
-		t.Fatalf("expected installing history row to hide stale download stats, got %s", body)
+	if !strings.Contains(body, `data-progress-percent`) || !strings.Contains(body, `data-progress-speed`) {
+		t.Fatalf("expected installing history row to keep stable download hooks, got %s", body)
 	}
-	if strings.Contains(body, `data-progress-bytes`) {
-		t.Fatalf("expected installing history row to hide download byte counters, got %s", body)
+	if !strings.Contains(body, `data-progress-bytes`) {
+		t.Fatalf("expected installing history row to keep stable byte hook, got %s", body)
 	}
 	if !strings.Contains(body, `Download complete. Restarting service and verifying health.`) {
 		t.Fatalf("expected history row installing detail text, got %s", body)
 	}
 }
 
-func TestAdminHistoryListHTMXReturnsFragment(t *testing.T) {
+func TestAdminHistoryListAdminUIReturnsFragment(t *testing.T) {
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -202,7 +196,7 @@ func TestAdminHistoryListHTMXReturnsFragment(t *testing.T) {
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
 
 	req := httptest.NewRequest("GET", "/admin/apps/"+app.ID+"/history", nil)
-	req.Header.Set("HX-Request", "true")
+	req.Header.Set(adminUIRequestHeader, "true")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -211,7 +205,7 @@ func TestAdminHistoryListHTMXReturnsFragment(t *testing.T) {
 	}
 	body := w.Body.String()
 	if strings.Contains(body, "<!DOCTYPE html>") {
-		t.Fatalf("expected HTMX history fragment, got full document: %s", body)
+		t.Fatalf("expected AdminUI history fragment, got full document: %s", body)
 	}
 	if !strings.Contains(body, `id="history-content"`) {
 		t.Fatalf("expected history content root, got %s", body)
@@ -251,7 +245,7 @@ func TestAdminHistoryRetry(t *testing.T) {
 	}
 }
 
-func TestAdminHistoryRetryHTMXReturnsUpdatedTableAndFlash(t *testing.T) {
+func TestAdminHistoryRetryAdminUIReturnsUpdatedTableAndFlash(t *testing.T) {
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -263,35 +257,35 @@ func TestAdminHistoryRetryHTMXReturnsUpdatedTableAndFlash(t *testing.T) {
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
 
 	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/retry/"+jobID, nil)
-	req.Header.Set("HX-Request", "true")
+	req.Header.Set(adminUIRequestHeader, "true")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for HTMX retry, got %d", w.Code)
+		t.Fatalf("expected 200 for AdminUI retry, got %d", w.Code)
 	}
 	if w.Header().Get("Location") != "" {
 		t.Fatalf("expected no raw redirect Location header, got %q", w.Header().Get("Location"))
 	}
-	if got := w.Header().Get("HX-Location"); got != "" {
-		t.Fatalf("expected in-place HTMX update instead of HX-Location, got %q", got)
+	if got := w.Header().Get(adminUILocationHeader); got != "" {
+		t.Fatalf("expected in-place AdminUI update instead of location header, got %q", got)
 	}
 	body := w.Body.String()
 	if !strings.Contains(body, `id="flash"`) {
-		t.Fatalf("expected OOB flash in HTMX retry response, got %s", body)
+		t.Fatalf("expected flash in AdminUI retry response, got %s", body)
 	}
 	if !strings.Contains(body, `id="history-table-region"`) {
-		t.Fatalf("expected history table region in HTMX retry response, got %s", body)
+		t.Fatalf("expected history table region in AdminUI retry response, got %s", body)
 	}
 	if !strings.Contains(body, `Retry queued`) {
-		t.Fatalf("expected retry success flash in HTMX retry response, got %s", body)
+		t.Fatalf("expected retry success flash in AdminUI retry response, got %s", body)
 	}
 	if !strings.Contains(body, `data-status="pending"`) {
-		t.Fatalf("expected pending retry row in HTMX retry response, got %s", body)
+		t.Fatalf("expected pending retry row in AdminUI retry response, got %s", body)
 	}
 }
 
-func TestAdminHistoryRetryHTMXDuplicateReturnsUpdatedTableAndErrorFlash(t *testing.T) {
+func TestAdminHistoryRetryAdminUIDuplicateReturnsUpdatedTableAndErrorFlash(t *testing.T) {
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -304,19 +298,19 @@ func TestAdminHistoryRetryHTMXDuplicateReturnsUpdatedTableAndErrorFlash(t *testi
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
 
 	req := httptest.NewRequest("POST", "/admin/apps/"+app.ID+"/retry/"+jobID, nil)
-	req.Header.Set("HX-Request", "true")
+	req.Header.Set(adminUIRequestHeader, "true")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for HTMX retry duplicate, got %d", w.Code)
+		t.Fatalf("expected 200 for AdminUI retry duplicate, got %d", w.Code)
 	}
 	body := w.Body.String()
 	if !strings.Contains(body, `Deploy already pending for this tag`) {
-		t.Fatalf("expected duplicate flash in HTMX retry response, got %s", body)
+		t.Fatalf("expected duplicate flash in AdminUI retry response, got %s", body)
 	}
 	if !strings.Contains(body, `flash-error`) {
-		t.Fatalf("expected error flash class in HTMX retry response, got %s", body)
+		t.Fatalf("expected error flash class in AdminUI retry response, got %s", body)
 	}
 }
 
@@ -348,7 +342,7 @@ func TestAdminHistoryRetryRejectsMismatchedJobApp(t *testing.T) {
 	}
 }
 
-func TestAdminHistoryRetryHTMXRejectsMismatchedJobApp(t *testing.T) {
+func TestAdminHistoryRetryAdminUIRejectsMismatchedJobApp(t *testing.T) {
 	_, store, queue, handler := setupHistoryTest(t)
 
 	appA, _ := store.Create("App A", "secret-a", "/bin/app-a", "app-a.service", "izzamoe/app-a", "artifact-a")
@@ -364,15 +358,15 @@ func TestAdminHistoryRetryHTMXRejectsMismatchedJobApp(t *testing.T) {
 	RegisterAdminHistoryRoutes(mux, handler, func(h http.Handler) http.Handler { return h })
 
 	req := httptest.NewRequest("POST", "/admin/apps/"+appA.ID+"/retry/"+jobID, nil)
-	req.Header.Set("HX-Request", "true")
+	req.Header.Set(adminUIRequestHeader, "true")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for HTMX mismatched app/job retry, got %d", w.Code)
+		t.Fatalf("expected 404 for AdminUI mismatched app/job retry, got %d", w.Code)
 	}
 	if body := w.Body.String(); !strings.Contains(body, "Job not found") {
-		t.Fatalf("expected job not found body for HTMX mismatch, got %s", body)
+		t.Fatalf("expected job not found body for AdminUI mismatch, got %s", body)
 	}
 }
 

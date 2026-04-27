@@ -445,8 +445,8 @@ func TestDeployCleanupOnValidationFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tracker snapshot")
 	}
-	if snap.Phase != PhaseFailed {
-		t.Errorf("phase = %q, want %q", snap.Phase, PhaseFailed)
+	if snap.Phase != StageFailed {
+		t.Errorf("phase = %q, want %q", snap.Phase, StageFailed)
 	}
 
 	tmpPath := app.BinaryPath + ".tmp"
@@ -660,6 +660,179 @@ func TestDeployHealthFailureNoBackupReturnsExplicitFailureWithoutRollbackClaim(t
 	assertPathMissing(t, app.BinaryPath+".tmp")
 }
 
+func TestDeploySuccessStageLifecycle(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	if err := os.WriteFile(app.BinaryPath, []byte("original-binary"), 0755); err != nil {
+		t.Fatalf("write original binary: %v", err)
+	}
+
+	tracker := NewProgressTracker()
+	var stages []string
+	recordStage := func(label string) {
+		t.Helper()
+		snap, ok := tracker.Snapshot(app.ID)
+		if !ok {
+			t.Fatalf("missing tracker snapshot at %s", label)
+		}
+		stages = append(stages, snap.Phase)
+	}
+
+	stubDeploySleep(t)
+	stubChmod(t, func(path string, mode os.FileMode) error {
+		recordStage("validating")
+		return os.Chmod(path, mode)
+	})
+	stubRename(t, func(oldpath, newpath string) error {
+		switch {
+		case oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak":
+			recordStage("backup")
+		case oldpath == app.BinaryPath+".tmp" && newpath == app.BinaryPath:
+			recordStage("install")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "restart":
+			recordStage("restart")
+			return []byte("restarted"), nil
+		case "is-active":
+			recordStage("healthcheck")
+			return []byte("active\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected systemctl command %q", name)
+		}
+	})
+
+	if _, err := deploy(app, "job-success", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary"))); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+
+	snap, ok := tracker.Snapshot(app.ID)
+	if !ok {
+		t.Fatal("expected terminal tracker snapshot")
+	}
+	if snap.Phase != StageSucceeded {
+		t.Fatalf("terminal phase = %q, want %q", snap.Phase, StageSucceeded)
+	}
+
+	want := []string{StageValidating, StageBackingUp, StageInstalling, StageRestarting, StageHealthcheck}
+	if !equalStrings(stages, want) {
+		t.Fatalf("stages = %v, want %v", stages, want)
+	}
+}
+
+func TestDeployFailureStageLifecycle(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	if err := os.WriteFile(app.BinaryPath, []byte("original-binary"), 0755); err != nil {
+		t.Fatalf("write original binary: %v", err)
+	}
+
+	tracker := NewProgressTracker()
+	var stages []string
+	recordStage := func(label string) {
+		t.Helper()
+		snap, ok := tracker.Snapshot(app.ID)
+		if !ok {
+			t.Fatalf("missing tracker snapshot at %s", label)
+		}
+		stages = append(stages, snap.Phase)
+	}
+
+	stubDeploySleep(t)
+	stubChmod(t, func(path string, mode os.FileMode) error {
+		recordStage("validating")
+		return os.Chmod(path, mode)
+	})
+	stubRename(t, func(oldpath, newpath string) error {
+		switch {
+		case oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak":
+			recordStage("backup")
+		case oldpath == app.BinaryPath+".tmp" && newpath == app.BinaryPath:
+			recordStage("install")
+		case oldpath == app.BinaryPath+".bak" && newpath == app.BinaryPath:
+			recordStage("rollback")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "restart":
+			if len(stages) > 0 && stages[len(stages)-1] == StageRollback {
+				recordStage("rollback restart")
+			} else {
+				recordStage("restart")
+			}
+			return []byte("restarted"), nil
+		case "is-active":
+			recordStage("healthcheck")
+			return []byte("inactive\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected systemctl command %q", name)
+		}
+	})
+
+	_, err := deploy(app, "job-failed", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")))
+	if err == nil {
+		t.Fatal("expected deploy to fail health checks")
+	}
+
+	snap, ok := tracker.Snapshot(app.ID)
+	if !ok {
+		t.Fatal("expected terminal tracker snapshot")
+	}
+	if snap.Phase != StageFailed {
+		t.Fatalf("terminal phase = %q, want %q", snap.Phase, StageFailed)
+	}
+
+	want := []string{
+		StageValidating,
+		StageBackingUp,
+		StageInstalling,
+		StageRestarting,
+		StageHealthcheck,
+		StageHealthcheck,
+		StageHealthcheck,
+		StageHealthcheck,
+		StageHealthcheck,
+		StageRollback,
+		StageRollback,
+	}
+	if !equalStrings(stages, want) {
+		t.Fatalf("stages = %v, want %v", stages, want)
+	}
+}
+
+func TestDeployChmodFailureSetsFailedAfterValidating(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	tracker := NewProgressTracker()
+	stubChmod(t, func(path string, mode os.FileMode) error {
+		snap, ok := tracker.Snapshot(app.ID)
+		if !ok {
+			t.Fatal("expected tracker snapshot before chmod")
+		}
+		if snap.Phase != StageValidating {
+			t.Fatalf("phase before chmod = %q, want %q", snap.Phase, StageValidating)
+		}
+		return fmt.Errorf("forced chmod failure")
+	})
+
+	_, err := deploy(app, "job-chmod-fail", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")))
+	if err == nil {
+		t.Fatal("expected deploy to fail chmod")
+	}
+	snap, ok := tracker.Snapshot(app.ID)
+	if !ok {
+		t.Fatal("expected tracker snapshot")
+	}
+	if snap.Phase != StageFailed {
+		t.Fatalf("phase = %q, want %q", snap.Phase, StageFailed)
+	}
+}
+
 func deployClientWithBody(body []byte) *http.Client {
 	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		rec := httptest.NewRecorder()
@@ -669,6 +842,18 @@ func deployClientWithBody(body []byte) *http.Client {
 		return rec.Result(), nil
 	})
 	return &http.Client{Transport: transport}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func elfBinary(payload string) []byte {
@@ -687,6 +872,13 @@ func stubRename(t *testing.T, fn func(string, string) error) {
 	original := renameFile
 	renameFile = fn
 	t.Cleanup(func() { renameFile = original })
+}
+
+func stubChmod(t *testing.T, fn func(string, os.FileMode) error) {
+	t.Helper()
+	original := chmodFile
+	chmodFile = fn
+	t.Cleanup(func() { chmodFile = original })
 }
 
 func stubDeploySleep(t *testing.T) {

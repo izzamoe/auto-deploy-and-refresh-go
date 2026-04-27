@@ -5,7 +5,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 )
 
@@ -27,7 +26,6 @@ func NewAppAdminHandler(store *AppStore, queue *DeployQueue, templates map[strin
 
 type appsListData struct {
 	Apps         []AppWithLastDeploy
-	ProgressStreamURL string
 	Flash        string
 	FlashMessage string
 	FlashIsError bool
@@ -45,7 +43,7 @@ type appFormData struct {
 }
 
 func (h *AppAdminHandler) renderAppForm(w http.ResponseWriter, r *http.Request, data appFormData) {
-	if isHTMXRequest(r) && r.Method == http.MethodPost {
+	if isAdminUIRequest(r) && r.Method == http.MethodPost {
 		if err := h.templates["app_form.html"].ExecuteTemplate(w, "app-form", data); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
@@ -77,13 +75,12 @@ func (h *AppAdminHandler) ListApps(w http.ResponseWriter, r *http.Request) {
 	curlAppName := r.URL.Query().Get("appname")
 
 	data := appsListData{
-		Apps:              apps,
-		ProgressStreamURL: buildProgressStreamURL(activeAppIDsFromApps(apps), activeJobIDsFromApps(apps)),
-		Flash:             flash,
-		FlashMessage:      flash,
-		FlashIsError:      flashError,
-		CurlSecret:        curlSecret,
-		CurlAppName:       curlAppName,
+		Apps:         apps,
+		Flash:        flash,
+		FlashMessage: flash,
+		FlashIsError: flashError,
+		CurlSecret:   curlSecret,
+		CurlAppName:  curlAppName,
 	}
 
 	if err := renderAdminTemplate(w, r, h.templates["apps_list.html"], data); err != nil {
@@ -161,7 +158,7 @@ func (h *AppAdminHandler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminNavigate(w, r, "/admin/apps?flash=App+created+successfully&curl="+url.QueryEscape(secret)+"&appname="+url.QueryEscape(app.Name))
+	adminUINavigate(w, r, "/admin/apps?flash=App+created+successfully&curl="+url.QueryEscape(secret)+"&appname="+url.QueryEscape(app.Name))
 }
 
 func (h *AppAdminHandler) EditAppForm(w http.ResponseWriter, r *http.Request) {
@@ -264,11 +261,11 @@ func (h *AppAdminHandler) UpdateApp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	adminNavigate(w, r, "/admin/apps?flash=App+updated+successfully")
+	adminUINavigate(w, r, "/admin/apps?flash=App+updated+successfully")
 }
 
 func (h *AppAdminHandler) renderListInPlaceOrRedirect(w http.ResponseWriter, r *http.Request, flashMsg string, isError bool) {
-	if !isHTMXRequest(r) {
+	if !isAdminUIRequest(r) {
 		dest := "/admin/apps"
 		if flashMsg != "" {
 			dest += "?flash=" + url.QueryEscape(flashMsg)
@@ -294,10 +291,9 @@ func (h *AppAdminHandler) renderListInPlaceOrRedirect(w http.ResponseWriter, r *
 	}
 
 	data := appsListData{
-		Apps:              apps,
-		ProgressStreamURL: buildProgressStreamURL(activeAppIDsFromApps(apps), activeJobIDsFromApps(apps)),
-		FlashMessage:      flashMsg,
-		FlashIsError:      isError,
+		Apps:         apps,
+		FlashMessage: flashMsg,
+		FlashIsError: isError,
 	}
 
 	if err := renderAdminTemplate(w, r, h.templates["apps_list.html"], data); err != nil {
@@ -328,7 +324,7 @@ func (h *AppAdminHandler) ManualDeployApp(w http.ResponseWriter, r *http.Request
 		if isList {
 			h.renderListInPlaceOrRedirect(w, r, msg, true)
 		} else {
-			adminNavigate(w, r, "/admin/apps/"+id+"/history?flash="+url.QueryEscape(msg)+"&flash_error=1")
+			adminUINavigate(w, r, "/admin/apps/"+id+"/history?flash="+url.QueryEscape(msg)+"&flash_error=1")
 		}
 	}
 
@@ -336,7 +332,7 @@ func (h *AppAdminHandler) ManualDeployApp(w http.ResponseWriter, r *http.Request
 		if isList {
 			h.renderListInPlaceOrRedirect(w, r, msg, false)
 		} else {
-			adminNavigate(w, r, "/admin/apps/"+id+"/history?flash="+url.QueryEscape(msg))
+			adminUINavigate(w, r, "/admin/apps/"+id+"/history?flash="+url.QueryEscape(msg))
 		}
 	}
 
@@ -409,40 +405,6 @@ func RegisterAdminAppRoutes(mux *http.ServeMux, handler *AppAdminHandler, middle
 	mux.Handle("POST /admin/apps/{id}/deploy", middleware(http.HandlerFunc(handler.ManualDeployApp)))
 }
 
-func activeAppIDsFromApps(apps []AppWithLastDeploy) []string {
-	ids := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, app := range apps {
-		if app.ID == "" || !isActiveDeployStatus(app.LastDeployStatus) {
-			continue
-		}
-		if _, ok := seen[app.ID]; ok {
-			continue
-		}
-		seen[app.ID] = struct{}{}
-		ids = append(ids, app.ID)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-func activeJobIDsFromApps(apps []AppWithLastDeploy) []string {
-	ids := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, app := range apps {
-		if app.LastJobID == "" || !isActiveDeployStatus(app.LastDeployStatus) {
-			continue
-		}
-		if _, ok := seen[app.LastJobID]; ok {
-			continue
-		}
-		seen[app.LastJobID] = struct{}{}
-		ids = append(ids, app.LastJobID)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
 func isActiveDeployStatus(status string) bool {
 	return status == "pending" || status == "in_progress"
 }
@@ -456,26 +418,4 @@ func activeSnapshotForApp(tracker *ProgressTracker, app AppWithLastDeploy) (*Pro
 		return nil, false
 	}
 	return snapshot, true
-}
-
-func buildProgressStreamURL(appIDs, jobIDs []string) string {
-	if len(appIDs) == 0 && len(jobIDs) == 0 {
-		return ""
-	}
-	values := url.Values{}
-	for _, appID := range appIDs {
-		if appID != "" {
-			values.Add("app_id", appID)
-		}
-	}
-	for _, jobID := range jobIDs {
-		if jobID != "" {
-			values.Add("job_id", jobID)
-		}
-	}
-	encoded := values.Encode()
-	if encoded == "" {
-		return ""
-	}
-	return "/admin/progress/stream?" + encoded
 }

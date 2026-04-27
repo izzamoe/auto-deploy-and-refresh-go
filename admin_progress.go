@@ -1,19 +1,20 @@
 package main
 
 import (
-	"bytes"
-	"fmt"
+	"context"
 	"html/template"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 type ProgressAdminHandler struct {
-	tracker *ProgressTracker
-	store   *AppStore
-	queue   *DeployQueue
+	tracker   *ProgressTracker
+	store     *AppStore
+	queue     *DeployQueue
 	templates map[string]*template.Template
 }
 
@@ -21,180 +22,121 @@ func NewProgressAdminHandler(tracker *ProgressTracker, store *AppStore, queue *D
 	return &ProgressAdminHandler{tracker: tracker, store: store, queue: queue, templates: templates}
 }
 
-func (h *ProgressAdminHandler) StreamProgress(w http.ResponseWriter, r *http.Request) {
-	// SSE stays on the same auth contract as admin HTML routes: unauthorized
-	// requests are rejected by middleware with 401 + WWW-Authenticate before the
-	// stream starts, while authorized requests always receive an event stream.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+func (h *ProgressAdminHandler) ProgressWebSocket(w http.ResponseWriter, r *http.Request) {
+	c, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer c.CloseNow()
+
+	ctx := c.CloseRead(context.Background())
+	lastFrames := make(map[string]string)
+	if !h.writeMatchingProgressFrames(ctx, c, r, lastFrames) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Connection", "keep-alive")
-
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	lastPayload := ""
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			payload, err := h.renderStreamPayload(r)
-			if err != nil {
-				continue
+			if !h.writeMatchingProgressFrames(ctx, c, r, lastFrames) {
+				return
 			}
-			if payload == lastPayload {
-				fmt.Fprint(w, ": keep-alive\n\n")
-				flusher.Flush()
-				continue
-			}
-			lastPayload = payload
-			writeSSEEvent(w, "progress", payload)
-			flusher.Flush()
 		}
 	}
 }
 
-func (h *ProgressAdminHandler) renderStreamPayload(r *http.Request) (string, error) {
+func (h *ProgressAdminHandler) writeMatchingProgressFrames(ctx context.Context, c *websocket.Conn, r *http.Request, lastFrames map[string]string) bool {
+	for _, snap := range h.matchingProgressSnapshots(r) {
+		frame, err := progressSnapshotFrame(snap)
+		if err != nil {
+			continue
+		}
+		key := snap.AppID + "\x00" + snap.JobID
+		if lastFrames[key] == frame {
+			continue
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err = c.Write(writeCtx, websocket.MessageText, []byte(frame))
+		cancel()
+		if err != nil {
+			return false
+		}
+		lastFrames[key] = frame
+	}
+	return true
+}
+
+func (h *ProgressAdminHandler) matchingProgressSnapshots(r *http.Request) []ProgressSnapshot {
 	appIDs := uniqueSorted(r.URL.Query()["app_id"])
 	jobIDs := uniqueSorted(r.URL.Query()["job_id"])
-	hasRequestedFilters := len(appIDs) > 0 || len(jobIDs) > 0
-	requestedStreamURL := buildProgressStreamURL(appIDs, jobIDs)
-	if len(appIDs) == 0 && len(jobIDs) == 0 {
-		for _, snap := range h.tracker.SnapshotAll() {
-			appIDs = append(appIDs, snap.AppID)
-			jobIDs = append(jobIDs, snap.JobID)
-		}
-		appIDs = uniqueSorted(appIDs)
-		jobIDs = uniqueSorted(jobIDs)
-	}
+	appFilter := makeStringSet(appIDs)
+	jobFilter := makeStringSet(jobIDs)
 
-	var fragments bytes.Buffer
-	for _, appID := range appIDs {
-		app, err := h.loadAppWithProgress(appID)
-		if err != nil || app == nil {
-			continue
+	snapshots := h.tracker.SnapshotAll()
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].AppID == snapshots[j].AppID {
+			return snapshots[i].JobID < snapshots[j].JobID
 		}
-		if err := h.templates["apps_list.html"].ExecuteTemplate(&fragments, "app_card_oob", app); err != nil {
-			return "", err
-		}
-		historyData, err := h.loadHistoryData(appID)
-		if err == nil && historyData != nil {
-			if err := h.templates["history.html"].ExecuteTemplate(&fragments, "history_table_region_oob", historyData); err != nil {
-				return "", err
+		return snapshots[i].AppID < snapshots[j].AppID
+	})
+
+	matched := make([]ProgressSnapshot, 0, len(snapshots))
+	for _, snap := range snapshots {
+		if len(appFilter) > 0 {
+			if _, ok := appFilter[snap.AppID]; !ok {
+				continue
 			}
 		}
-	}
-
-	state := progressStreamSubscriptionState(appIDs, jobIDs, h.store, h.queue)
-	if !hasRequestedFilters {
-		requestedStreamURL = state.URL
-	}
-	if state.URL != requestedStreamURL {
-		if err := h.templates["apps_list.html"].ExecuteTemplate(&fragments, "apps_progress_subscription_oob", state); err != nil {
-			return "", err
-		}
-		if err := h.templates["history.html"].ExecuteTemplate(&fragments, "history_progress_subscription_oob", state); err != nil {
-			return "", err
-		}
-	}
-
-	if fragments.Len() == 0 {
-		return `<div></div>`, nil
-	}
-	return fragments.String(), nil
-}
-
-func (h *ProgressAdminHandler) loadHistoryData(appID string) (*historyData, error) {
-	if h.store == nil || h.queue == nil {
-		return nil, nil
-	}
-	historyHandler := &HistoryAdminHandler{store: h.store, queue: h.queue, tracker: h.tracker}
-	data, err := historyHandler.loadHistoryData(appID, "", false)
-	if err != nil {
-		return nil, err
-	}
-	return &data, nil
-}
-
-type progressSubscriptionState struct {
-	URL string
-}
-
-func progressStreamSubscriptionState(appIDs, jobIDs []string, store *AppStore, queue *DeployQueue) progressSubscriptionState {
-	activeAppIDs := make([]string, 0)
-	if store != nil {
-		apps, err := store.ListWithLastDeploy()
-		if err == nil {
-			appIndex := make(map[string]AppWithLastDeploy, len(apps))
-			for _, app := range apps {
-				appIndex[app.ID] = app
-			}
-			for _, appID := range appIDs {
-				app, ok := appIndex[appID]
-				if ok && isActiveDeployStatus(app.LastDeployStatus) {
-					activeAppIDs = append(activeAppIDs, appID)
-				}
+		if len(jobFilter) > 0 {
+			if _, ok := jobFilter[snap.JobID]; !ok {
+				continue
 			}
 		}
+		matched = append(matched, snap)
 	}
-
-	activeJobIDs := make([]string, 0)
-	if queue != nil {
-		for _, jobID := range jobIDs {
-			job, err := queue.GetJob(jobID)
-			if err == nil && isActiveDeployStatus(job.Status) {
-				activeJobIDs = append(activeJobIDs, jobID)
-			}
-		}
-	}
-
-	return progressSubscriptionState{URL: buildProgressStreamURL(uniqueSorted(activeAppIDs), uniqueSorted(activeJobIDs))}
+	return matched
 }
 
-func (h *ProgressAdminHandler) loadAppWithProgress(appID string) (*AppWithLastDeploy, error) {
-	if h.store == nil {
-		return nil, nil
-	}
-	apps, err := h.store.ListWithLastDeploy()
-	if err != nil {
-		return nil, err
-	}
-	for i := range apps {
-		if apps[i].ID != appID {
-			continue
-		}
-		if snap, ok := activeSnapshotForApp(h.tracker, apps[i]); ok {
-			apps[i].LiveProgress = snap
-		}
-		return &apps[i], nil
-	}
-	return nil, nil
+func progressSnapshotFrame(snap ProgressSnapshot) (string, error) {
+	return EncodeProgressFrame(ProgressFrame{
+		AppID:           snap.AppID,
+		JobID:           snap.JobID,
+		Tag:             snap.Tag,
+		Stage:           snap.Phase,
+		Status:          progressStatusForStage(snap.Phase),
+		Percent:         progressPercentInt(snap.Percent),
+		DownloadedBytes: snap.DownloadedBytes,
+		TotalBytes:      snap.TotalBytes,
+		SpeedBPS:        int64(snap.SpeedBPS),
+	})
 }
 
-func (h *ProgressAdminHandler) loadHistoryRow(jobID string) (*historyRowData, error) {
-	if h.queue == nil || h.store == nil {
-		return nil, nil
+func progressStatusForStage(stage string) string {
+	switch stage {
+	case ProgressStageQueued:
+		return ProgressStatusPending
+	case ProgressStageSucceeded:
+		return ProgressStatusSucceeded
+	case ProgressStageFailed:
+		return ProgressStatusFailed
+	default:
+		return ProgressStatusInProgress
 	}
-	job, err := h.queue.GetJob(jobID)
-	if err != nil {
-		return nil, err
+}
+
+func progressPercentInt(percent float64) int64 {
+	if percent < 0 {
+		return -1
 	}
-	app, err := h.store.Get(job.AppID)
-	if err != nil {
-		return nil, err
+	if percent > 100 {
+		return 100
 	}
-	row := &historyRowData{AppEnabled: app.Enabled, Job: *job}
-	if snap, ok := activeSnapshotForHistoryJob(h.tracker, job.AppID, *job); ok {
-		row.LiveProgress = snap
-	}
-	return row, nil
+	return int64(percent)
 }
 
 func uniqueSorted(values []string) []string {
@@ -215,18 +157,14 @@ func uniqueSorted(values []string) []string {
 	return result
 }
 
-func writeSSEEvent(w http.ResponseWriter, eventName, payload string) {
-	payload = strings.TrimSpace(payload)
-	if payload == "" {
-		payload = `<div></div>`
+func makeStringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
 	}
-	fmt.Fprintf(w, "event: %s\n", eventName)
-	for _, line := range strings.Split(payload, "\n") {
-		fmt.Fprintf(w, "data: %s\n", line)
-	}
-	fmt.Fprint(w, "\n")
+	return set
 }
 
 func RegisterAdminProgressRoutes(mux *http.ServeMux, handler *ProgressAdminHandler, middleware func(http.Handler) http.Handler) {
-	mux.Handle("GET /admin/progress/stream", middleware(http.HandlerFunc(handler.StreamProgress)))
+	mux.Handle("GET /admin/progress/ws", middleware(http.HandlerFunc(handler.ProgressWebSocket)))
 }

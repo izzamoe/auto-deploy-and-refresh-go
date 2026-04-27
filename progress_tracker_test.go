@@ -23,8 +23,8 @@ func TestProgressTrackerStartAndSnapshot(t *testing.T) {
 	if snap.Tag != "v1.0" {
 		t.Errorf("Tag = %q, want v1.0", snap.Tag)
 	}
-	if snap.Phase != PhaseDownloading {
-		t.Errorf("Phase = %q, want %q", snap.Phase, PhaseDownloading)
+	if snap.Phase != StageDownloading {
+		t.Errorf("Phase = %q, want %q", snap.Phase, StageDownloading)
 	}
 	if snap.TotalBytes != -1 {
 		t.Errorf("TotalBytes = %d, want -1 before any Update", snap.TotalBytes)
@@ -71,11 +71,26 @@ func TestProgressTrackerUnknownTotalBytesNoDiv(t *testing.T) {
 	if snap.Percent != -1 {
 		t.Errorf("Percent = %v, want -1 when TotalBytes is -1", snap.Percent)
 	}
+	if snap.TotalBytes != -1 {
+		t.Errorf("TotalBytes = %d, want -1 when total is unknown", snap.TotalBytes)
+	}
 
 	pt.Update("app1", 1024, 0, 100.0)
 	snap, _ = pt.Snapshot("app1")
 	if snap.Percent != -1 {
 		t.Errorf("Percent = %v, want -1 when TotalBytes is 0", snap.Percent)
+	}
+	if snap.TotalBytes != -1 {
+		t.Errorf("TotalBytes = %d, want -1 when total is 0", snap.TotalBytes)
+	}
+
+	pt.Update("app1", 1024, -5, 100.0)
+	snap, _ = pt.Snapshot("app1")
+	if snap.Percent != -1 {
+		t.Errorf("Percent = %v, want -1 when TotalBytes is negative", snap.Percent)
+	}
+	if snap.TotalBytes != -1 {
+		t.Errorf("TotalBytes = %d, want -1 when total is negative", snap.TotalBytes)
 	}
 }
 
@@ -88,22 +103,42 @@ func TestProgressTrackerFinish(t *testing.T) {
 	if !ok {
 		t.Fatal("entry should still be readable after Finish (within grace window)")
 	}
-	if snap.Phase != PhaseDone {
-		t.Errorf("Phase = %q, want %q", snap.Phase, PhaseDone)
+	if snap.Phase != StageSucceeded {
+		t.Errorf("Phase = %q, want %q", snap.Phase, StageSucceeded)
 	}
 }
 
 func TestProgressTrackerSetPhase(t *testing.T) {
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
-	pt.SetPhase("app1", PhaseInstalling)
+	pt.SetPhase("app1", StageInstalling)
 
 	snap, ok := pt.Snapshot("app1")
 	if !ok {
 		t.Fatal("entry should still be readable after SetPhase")
 	}
-	if snap.Phase != PhaseInstalling {
-		t.Errorf("Phase = %q, want %q", snap.Phase, PhaseInstalling)
+	if snap.Phase != StageInstalling {
+		t.Errorf("Phase = %q, want %q", snap.Phase, StageInstalling)
+	}
+}
+
+func TestProgressTrackerStageConstants(t *testing.T) {
+	want := map[string]string{
+		"queued":      StageQueued,
+		"downloading": StageDownloading,
+		"validating":  StageValidating,
+		"backing_up":  StageBackingUp,
+		"installing":  StageInstalling,
+		"restarting":  StageRestarting,
+		"healthcheck": StageHealthcheck,
+		"rollback":    StageRollback,
+		"succeeded":   StageSucceeded,
+		"failed":      StageFailed,
+	}
+	for expected, got := range want {
+		if got != expected {
+			t.Errorf("stage constant = %q, want %q", got, expected)
+		}
 	}
 }
 
@@ -116,8 +151,8 @@ func TestProgressTrackerFail(t *testing.T) {
 	if !ok {
 		t.Fatal("entry should still be readable after Fail (within grace window)")
 	}
-	if snap.Phase != PhaseFailed {
-		t.Errorf("Phase = %q, want %q", snap.Phase, PhaseFailed)
+	if snap.Phase != StageFailed {
+		t.Errorf("Phase = %q, want %q", snap.Phase, StageFailed)
 	}
 }
 
@@ -183,11 +218,11 @@ func TestProgressTrackerMultipleAppsIndependent(t *testing.T) {
 	}
 
 	pt.Finish("app1")
-	if s, _ := pt.Snapshot("app1"); s.Phase != PhaseDone {
-		t.Errorf("app1 Phase = %q after Finish, want %q", s.Phase, PhaseDone)
+	if s, _ := pt.Snapshot("app1"); s.Phase != StageSucceeded {
+		t.Errorf("app1 Phase = %q after Finish, want %q", s.Phase, StageSucceeded)
 	}
-	if s, _ := pt.Snapshot("app2"); s.Phase != PhaseDownloading {
-		t.Errorf("app2 Phase should remain %q, got %q", PhaseDownloading, s.Phase)
+	if s, _ := pt.Snapshot("app2"); s.Phase != StageDownloading {
+		t.Errorf("app2 Phase should remain %q, got %q", StageDownloading, s.Phase)
 	}
 }
 
@@ -305,8 +340,8 @@ func TestProgressTrackerGraceWindowReadable(t *testing.T) {
 	if !ok {
 		t.Fatal("entry must be readable immediately after Finish")
 	}
-	if snap.Phase != PhaseDone {
-		t.Errorf("Phase = %q, want done", snap.Phase)
+	if snap.Phase != StageSucceeded {
+		t.Errorf("Phase = %q, want succeeded", snap.Phase)
 	}
 
 	fakeNow = fakeNow.Add(29 * time.Second)
@@ -355,7 +390,7 @@ func TestProgressTrackerStartOverwritesPreviousEntry(t *testing.T) {
 	if snap.DownloadedBytes != 0 {
 		t.Errorf("DownloadedBytes should reset to 0 on re-Start, got %d", snap.DownloadedBytes)
 	}
-	if snap.Phase != PhaseDownloading {
-		t.Errorf("Phase = %q after re-Start, want %q", snap.Phase, PhaseDownloading)
+	if snap.Phase != StageDownloading {
+		t.Errorf("Phase = %q after re-Start, want %q", snap.Phase, StageDownloading)
 	}
 }

@@ -27,7 +27,6 @@ func NewHistoryAdminHandler(store *AppStore, queue *DeployQueue, templates map[s
 type historyData struct {
 	App          *App
 	Rows         []historyRowData
-	ProgressStreamURL string
 	Flash        string
 	FlashMessage string
 	FlashIsError bool
@@ -107,13 +106,9 @@ func (h *HistoryAdminHandler) loadHistoryData(id, flash string, flashIsError boo
 	}
 
 	rows := make([]historyRowData, 0, len(jobs))
-	activeJobIDs := make([]string, 0)
 	if h.tracker != nil {
 		for _, job := range jobs {
 			var snap *ProgressSnapshot
-			if isActiveDeployStatus(job.Status) {
-				activeJobIDs = append(activeJobIDs, job.ID)
-			}
 			if snapVal, ok := activeSnapshotForHistoryJob(h.tracker, app.ID, job); ok {
 				snap = snapVal
 			}
@@ -121,9 +116,6 @@ func (h *HistoryAdminHandler) loadHistoryData(id, flash string, flashIsError boo
 		}
 	} else {
 		for _, job := range jobs {
-			if isActiveDeployStatus(job.Status) {
-				activeJobIDs = append(activeJobIDs, job.ID)
-			}
 			rows = append(rows, historyRowData{AppEnabled: app.Enabled, Job: job})
 		}
 	}
@@ -134,18 +126,17 @@ func (h *HistoryAdminHandler) loadHistoryData(id, flash string, flashIsError boo
 	}
 
 	return historyData{
-		App:               app,
-		Rows:              rows,
-		ProgressStreamURL: buildProgressStreamURL(activeHistoryAppIDs(app.ID, activeJobIDs), activeJobIDs),
-		Flash:             flash,
-		FlashMessage:      flash,
-		FlashIsError:      flashIsError,
+		App:          app,
+		Rows:         rows,
+		Flash:        flash,
+		FlashMessage: flash,
+		FlashIsError: flashIsError,
 	}, nil
 }
 
 func (h *HistoryAdminHandler) respondRetryResult(w http.ResponseWriter, r *http.Request, id, flash string, flashIsError bool) {
-	if !isHTMXRequest(r) {
-		adminNavigate(w, r, historyLocation(id, flash, flashIsError))
+	if !isAdminUIRequest(r) {
+		adminUINavigate(w, r, historyLocation(id, flash, flashIsError))
 		return
 	}
 
@@ -160,10 +151,6 @@ func (h *HistoryAdminHandler) respondRetryResult(w http.ResponseWriter, r *http.
 	}
 
 	if err := h.templates["history.html"].ExecuteTemplate(w, "flash", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := h.templates["history.html"].ExecuteTemplate(w, "history_progress_subscription_oob", progressSubscriptionState{URL: data.ProgressStreamURL}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -196,13 +183,6 @@ func activeSnapshotForHistoryJob(tracker *ProgressTracker, appID string, job Job
 		return nil, false
 	}
 	return snapshot, true
-}
-
-func activeHistoryAppIDs(appID string, activeJobIDs []string) []string {
-	if appID == "" || len(activeJobIDs) == 0 {
-		return nil
-	}
-	return []string{appID}
 }
 
 func RegisterAdminHistoryRoutes(mux *http.ServeMux, handler *HistoryAdminHandler, middleware func(http.Handler) http.Handler) {

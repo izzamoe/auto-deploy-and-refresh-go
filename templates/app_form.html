@@ -1,5 +1,5 @@
 {{ define "app-form" }}
-<form id="app-form" method="POST" action="{{ if .IsEdit }}/admin/apps/{{ .App.ID }}/update{{ else }}/admin/apps/create{{ end }}" hx-target="#app-form" hx-swap="outerHTML">
+<form id="app-form" method="POST" action="{{ if .IsEdit }}/admin/apps/{{ .App.ID }}/update{{ else }}/admin/apps/create{{ end }}" data-admin-target="#app-form">
     {{ if .Errors }}
     <div id="form-errors">
         <ul style="margin-left: 20px;">

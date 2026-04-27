@@ -63,9 +63,10 @@ async function createApp(page, suffix, namePrefix) {
     page.locator('#submit-btn').click()
   ]);
 
-  expect(createRequest.headers()['hx-request']).toBe('true');
+  expect(createRequest.headers()['x-admin-request']).toBe('true');
+  expect(createRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(createResponse.status()).toBe(200);
-  expect(createResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+created+successfully');
+  expect(createResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+created+successfully');
 
   await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
 
@@ -83,6 +84,14 @@ async function createApp(page, suffix, namePrefix) {
   };
 }
 
+async function expectNativeAdminRuntime(page) {
+  await expect.poll(() => page.evaluate(() => ({
+    hasAdminUI: typeof window.AdminUI === 'object',
+    hasLegacyRuntime: typeof window['ht' + 'mx'] !== 'undefined',
+    wsHooks: document.querySelectorAll('[data-admin-ws-url="/admin/progress/ws"]').length
+  }))).toEqual({ hasAdminUI: true, hasLegacyRuntime: false, wsHooks: 1 });
+}
+
 test('admin apps page loads with basic auth', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
@@ -90,6 +99,7 @@ test('admin apps page loads with basic auth', async ({ browser }) => {
   await page.goto(`${baseURL()}/admin/apps`);
 
   await expect(page.getByRole('heading', { name: 'Apps' })).toBeVisible();
+  await expectNativeAdminRuntime(page);
   await expect(page.locator('#apps-table')).toBeVisible();
   await expect(page.locator('[data-app-id]')).toHaveCount(1);
   await expect(page.locator('[data-app-id]').first()).toContainText('default');
@@ -119,6 +129,7 @@ test('history navigation supports deep links and retry updates stay in place', a
   await historyLink.click();
   await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
   await expect(page.locator('#history-content')).toBeVisible();
+  await expectNativeAdminRuntime(page);
   await expect(page.locator('#history-table-region')).toBeVisible();
 
   const statusRow = page.locator(`#history-table tr:has-text("${tag}")`).first();
@@ -144,7 +155,7 @@ test('history navigation supports deep links and retry updates stay in place', a
 
   await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
   await expect(page.locator('#flash')).toContainText('Retry queued');
-  await expect(page.locator('#history-progress-subscription [hx-ext="sse"]')).toHaveCount(1);
+  await expect(page.locator('[data-admin-ws-url="/admin/progress/ws"]')).toHaveCount(1);
   await expect(page.locator('#history-table tr[data-status="pending"]')).toContainText(tag);
   const historyNavigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
   await expect(page.locator('#history-table tr[data-status="pending"]')).toContainText(tag);
@@ -156,28 +167,63 @@ test('history navigation supports deep links and retry updates stay in place', a
   await context.close();
 });
 
-test('apps list deploy settles live through HTMX SSE without reload', async ({ browser }) => {
+test('apps list deploy settles live through WebSocket without reload', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
   const tag = `pw-apps-${Date.now()}`;
 
   await page.goto(`${baseURL()}/admin/apps`);
   await expect(page.locator('[data-app-id]')).toHaveCount(1);
+  await expectNativeAdminRuntime(page);
 
   const appCard = page.locator('[data-app-id]').first();
   await appCard.locator('input[name="tag"]').fill(tag);
   await appCard.getByRole('button', { name: 'Deploy' }).click();
 
   await expect(page.locator('#flash')).toContainText(`Manual deploy queued for ${tag}`);
-  await expect(page.locator('#apps-progress-subscription [hx-ext="sse"]')).toHaveCount(1);
+  await expect(page.locator('[data-admin-ws-url="/admin/progress/ws"]')).toHaveCount(1);
 
   const statusBadge = appCard.locator('[data-progress-region] .deploy-status-badge');
-  await expect(statusBadge).toContainText(/pending|in_progress/i);
+  await expect(statusBadge).toContainText(/pending|in_progress|downloading|validating|backing_up|installing|restarting|healthcheck|rollback/i);
+  await expect(appCard.locator('[data-progress-live]')).toBeVisible();
 
   const navigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
   await expect(appCard).not.toHaveAttribute('data-progress-job', /.+/, { timeout: 30000 });
   await expect(statusBadge).toContainText(/failed|succeeded/i, { timeout: 30000 });
+  if (await statusBadge.evaluate((node) => node.textContent.toLowerCase().includes('failed'))) {
+    await expect(statusBadge).toHaveClass(/status-failed/);
+    await expect(appCard.locator('[data-progress-detail]')).toContainText('Deployment failed');
+  }
   expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
+
+  await context.close();
+});
+
+test('native progress renderer ignores malformed frames and renders failed terminal frames', async ({ browser }) => {
+  const context = await newAuthenticatedContext(browser);
+  const page = await context.newPage();
+
+  await page.goto(`${baseURL()}/admin/apps`);
+  await expect(page.locator('[data-app-id]')).toHaveCount(1);
+  await expectNativeAdminRuntime(page);
+
+  const appCard = page.locator('[data-app-id]').first();
+  const appId = await appCard.getAttribute('data-app-id');
+  const originalStatus = await appCard.locator('[data-progress-region] .deploy-status-badge').textContent();
+
+  await page.evaluate(() => {
+    window.AdminUI.handleFrame('v1\u001Fp\u001Ftoo-few-fields');
+  });
+  await expect(appCard.locator('[data-progress-region] .deploy-status-badge')).toHaveText(originalStatus.trim());
+
+  await page.evaluate((id) => {
+    window.AdminUI.handleFrame(['v1', 'p', id, 'pw-malformed-job', 'pw-malformed-tag', 'failed', 'failed', '100', '4096', '4096', '256', 'c21va2UgdGVzdCBmYWlsdXJl'].join('\u001F'));
+  }, appId);
+
+  await expect(appCard.locator('[data-progress-region] .deploy-status-badge')).toHaveText('failed');
+  await expect(appCard.locator('[data-progress-region] .deploy-status-badge')).toHaveClass(/status-failed/);
+  await expect(appCard.locator('[data-progress-detail]')).toContainText('smoke test failure');
+  await expect(appCard).not.toHaveAttribute('data-progress-job', /.+/);
 
   await context.close();
 });
@@ -204,9 +250,10 @@ test('apps list toggle and delete flows update in place without hard navigation'
     page.locator('#submit-btn').click()
   ]);
 
-  expect(createRequest.headers()['hx-request']).toBe('true');
+  expect(createRequest.headers()['x-admin-request']).toBe('true');
+  expect(createRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(createResponse.status()).toBe(200);
-  expect(createResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+created+successfully');
+  expect(createResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+created+successfully');
 
   await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
   await expect(page.locator('#apps-table')).toBeVisible();
@@ -224,9 +271,10 @@ test('apps list toggle and delete flows update in place without hard navigation'
     appCard.getByRole('button', { name: 'Disable' }).click()
   ]);
 
-  expect(disableRequest.headers()['hx-request']).toBe('true');
+  expect(disableRequest.headers()['x-admin-request']).toBe('true');
+  expect(disableRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(disableResponse.status()).toBe(200);
-  expect(disableResponse.headers()['hx-location']).toBeUndefined();
+  expect(disableResponse.headers()['x-admin-location']).toBeUndefined();
   await expect(page).toHaveURL(appsURL);
   expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
   await expect(page.locator('#flash')).toContainText('App disabled successfully');
@@ -239,9 +287,10 @@ test('apps list toggle and delete flows update in place without hard navigation'
     page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Enable' }).click()
   ]);
 
-  expect(enableRequest.headers()['hx-request']).toBe('true');
+  expect(enableRequest.headers()['x-admin-request']).toBe('true');
+  expect(enableRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(enableResponse.status()).toBe(200);
-  expect(enableResponse.headers()['hx-location']).toBeUndefined();
+  expect(enableResponse.headers()['x-admin-location']).toBeUndefined();
   await expect(page).toHaveURL(appsURL);
   expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
   await expect(page.locator('#flash')).toContainText('App enabled successfully');
@@ -256,9 +305,10 @@ test('apps list toggle and delete flows update in place without hard navigation'
     page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Delete' }).click()
   ]);
 
-  expect(deleteRequest.headers()['hx-request']).toBe('true');
+  expect(deleteRequest.headers()['x-admin-request']).toBe('true');
+  expect(deleteRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(deleteResponse.status()).toBe(200);
-  expect(deleteResponse.headers()['hx-location']).toBeUndefined();
+  expect(deleteResponse.headers()['x-admin-location']).toBeUndefined();
   await expect(page).toHaveURL(appsURL);
   expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
   await expect(page.locator('#flash')).toContainText('App deleted successfully');
@@ -268,7 +318,7 @@ test('apps list toggle and delete flows update in place without hard navigation'
   await context.close();
 });
 
-test('new app form keeps values on HTMX validation and navigates on success', async ({ browser }) => {
+test('new app form keeps values on AdminUI validation and navigates on success', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
@@ -289,7 +339,8 @@ test('new app form keeps values on HTMX validation and navigates on success', as
     page.locator('#submit-btn').click()
   ]);
 
-  expect(invalidRequest.headers()['hx-request']).toBe('true');
+  expect(invalidRequest.headers()['x-admin-request']).toBe('true');
+  expect(invalidRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(invalidResponse.status()).toBe(400);
   await expect(page.locator('#form-errors')).toBeVisible();
   await expect(page.locator('#name')).toHaveValue('playwright-inline-app');
@@ -307,9 +358,10 @@ test('new app form keeps values on HTMX validation and navigates on success', as
     page.locator('#submit-btn').click()
   ]);
 
-  expect(successRequest.headers()['hx-request']).toBe('true');
+  expect(successRequest.headers()['x-admin-request']).toBe('true');
+  expect(successRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(successResponse.status()).toBe(200);
-  expect(successResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+created+successfully');
+  expect(successResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+created+successfully');
   await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
   await expect(page.getByTestId('admin-flash')).toContainText('App created successfully');
   await expect(page.locator('#apps-table')).toBeVisible();
@@ -318,7 +370,7 @@ test('new app form keeps values on HTMX validation and navigates on success', as
   await context.close();
 });
 
-test('edit app keeps invalid HTMX submission local with inline errors', async ({ browser }) => {
+test('edit app keeps invalid AdminUI submission local with inline errors', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
@@ -342,7 +394,8 @@ test('edit app keeps invalid HTMX submission local with inline errors', async ({
     page.locator('#submit-btn').click()
   ]);
 
-  expect(invalidRequest.headers()['hx-request']).toBe('true');
+  expect(invalidRequest.headers()['x-admin-request']).toBe('true');
+  expect(invalidRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(invalidResponse.status()).toBe(400);
   await expect(page).toHaveURL(/\/admin\/apps\/[^/]+\/update$/);
   expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
@@ -357,7 +410,7 @@ test('edit app keeps invalid HTMX submission local with inline errors', async ({
   await context.close();
 });
 
-test('edit app via boosted navigation shows success flash after HTMX redirect', async ({ browser }) => {
+test('edit app via AdminUI navigation shows success flash after native redirect', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
@@ -376,9 +429,10 @@ test('edit app via boosted navigation shows success flash after HTMX redirect', 
     page.locator('#submit-btn').click()
   ]);
 
-  expect(updateRequest.headers()['hx-request']).toBe('true');
+  expect(updateRequest.headers()['x-admin-request']).toBe('true');
+  expect(updateRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(updateResponse.status()).toBe(200);
-  expect(updateResponse.headers()['hx-location']).toContain('/admin/apps?flash=App+updated+successfully');
+  expect(updateResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+updated+successfully');
 
   await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+updated\+successfully/);
   await expect(page.getByTestId('admin-flash')).toContainText('App updated successfully');

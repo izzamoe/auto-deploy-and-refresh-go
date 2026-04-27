@@ -6,10 +6,16 @@ import (
 )
 
 const (
-	PhaseDownloading = "downloading"
-	PhaseInstalling  = "installing"
-	PhaseDone        = "done"
-	PhaseFailed      = "failed"
+	StageQueued      = ProgressStageQueued
+	StageDownloading = ProgressStageDownloading
+	StageValidating  = ProgressStageValidating
+	StageBackingUp   = ProgressStageBackingUp
+	StageInstalling  = ProgressStageInstalling
+	StageRestarting  = ProgressStageRestarting
+	StageHealthcheck = ProgressStageHealthcheck
+	StageRollback    = ProgressStageRollback
+	StageSucceeded   = ProgressStageSucceeded
+	StageFailed      = ProgressStageFailed
 )
 
 // ProgressSnapshot is a read-only view of one deployment's progress.
@@ -63,7 +69,7 @@ func (pt *ProgressTracker) Start(appID, jobID, tag string) {
 			AppID:      appID,
 			JobID:      jobID,
 			Tag:        tag,
-			Phase:      PhaseDownloading,
+			Phase:      StageDownloading,
 			TotalBytes: -1,
 			Percent:    -1,
 			UpdatedAt:  pt.now(),
@@ -87,6 +93,7 @@ func (pt *ProgressTracker) Update(appID string, downloaded, total int64, speedBP
 		pct = float64(downloaded) / float64(total) * 100
 	} else {
 		pct = -1
+		total = -1
 	}
 
 	e.snapshot.DownloadedBytes = downloaded
@@ -111,7 +118,7 @@ func (pt *ProgressTracker) SetPhase(appID, phase string) {
 	e.snapshot.UpdatedAt = pt.now()
 }
 
-// Finish marks the deployment for appID as done (success).
+// Finish marks the deployment for appID as succeeded.
 // The entry remains readable until Cleanup removes it after the grace window.
 func (pt *ProgressTracker) Finish(appID string) {
 	pt.mu.Lock()
@@ -121,7 +128,7 @@ func (pt *ProgressTracker) Finish(appID string) {
 	if !ok {
 		return
 	}
-	e.snapshot.Phase = PhaseDone
+	e.snapshot.Phase = StageSucceeded
 	e.snapshot.UpdatedAt = pt.now()
 	e.finishedAt = pt.now()
 }
@@ -136,7 +143,7 @@ func (pt *ProgressTracker) Fail(appID string) {
 	if !ok {
 		return
 	}
-	e.snapshot.Phase = PhaseFailed
+	e.snapshot.Phase = StageFailed
 	e.snapshot.UpdatedAt = pt.now()
 	e.finishedAt = pt.now()
 }

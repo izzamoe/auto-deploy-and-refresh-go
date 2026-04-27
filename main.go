@@ -22,6 +22,7 @@ var (
 		return exec.Command("systemctl", cmdArgs...).CombinedOutput()
 	}
 	renameFile             = os.Rename
+	chmodFile              = os.Chmod
 	deployHealthCheckSleep = time.Sleep
 )
 
@@ -297,20 +298,21 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 		tracker.Fail(app.ID)
 		return DownloadSummary{}, err
 	}
-	tracker.SetPhase(app.ID, PhaseInstalling)
+	tracker.SetPhase(app.ID, StageValidating)
 
 	if err := validateDownloadedArtifact(tmpPath); err != nil {
 		tracker.Fail(app.ID)
 		return summary, err
 	}
 
-	if err := os.Chmod(tmpPath, 0755); err != nil {
+	if err := chmodFile(tmpPath, 0755); err != nil {
 		tracker.Fail(app.ID)
 		return summary, fmt.Errorf("chmod: %w", err)
 	}
 
 	backupPath := app.BinaryPath + ".bak"
 	backupCreated := false
+	tracker.SetPhase(app.ID, StageBackingUp)
 	if _, err := os.Stat(app.BinaryPath); err == nil {
 		slog.Info("backup", "from", app.BinaryPath, "to", backupPath)
 		if err := renameFile(app.BinaryPath, backupPath); err != nil {
@@ -321,6 +323,7 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 	}
 
 	slog.Info("replacing binary")
+	tracker.SetPhase(app.ID, StageInstalling)
 	cleanup = false
 	if err := renameFile(tmpPath, app.BinaryPath); err != nil {
 		cleanup = true
@@ -334,11 +337,13 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 	}
 
 	slog.Info("restarting service", "service", app.ServiceName)
+	tracker.SetPhase(app.ID, StageRestarting)
 	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
 		tracker.Fail(app.ID)
 		return summary, fmt.Errorf("restart service: %w: %s", err, string(out))
 	}
 
+	tracker.SetPhase(app.ID, StageHealthcheck)
 	for i := 1; i <= 5; i++ {
 		deployHealthCheckSleep(2 * time.Second)
 		out, err := runSystemctl("is-active", app.ServiceName)
@@ -351,6 +356,7 @@ func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.
 	}
 
 	slog.Error("rolling back", "reason", "service failed health check")
+	tracker.SetPhase(app.ID, StageRollback)
 	if !backupCreated {
 		tracker.Fail(app.ID)
 		return summary, fmt.Errorf("rollback unavailable: no previous binary backup")

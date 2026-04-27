@@ -5,7 +5,7 @@
     <a href="/admin/apps" class="btn btn-secondary">Back to Apps</a>
 </div>
 
-{{ template "history_progress_subscription" . }}
+<div hidden data-admin-ws-url="/admin/progress/ws" aria-hidden="true"></div>
 {{ template "history_table_region" . }}
 </div>
 {{ end }}
@@ -39,51 +39,6 @@
 </div>
 {{ end }}
 
-{{ define "history_table_region_oob" }}
-<div class="table-container" id="history-table-region" data-testid="history-table-region" hx-swap-oob="outerHTML">
-    <table id="history-table">
-        <thead>
-            <tr>
-                <th>Tag</th>
-                <th>Status</th>
-                <th>Trigger</th>
-                <th>Error</th>
-                <th>Created</th>
-                <th>Updated</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{ if .Rows }}
-                {{ range .Rows }}
-                {{ template "history_row" . }}
-                {{ end }}
-            {{ else }}
-                <tr>
-                    <td colspan="7"><div class="empty-state"><p>No deploy history for this app.</p></div></td>
-                </tr>
-            {{ end }}
-        </tbody>
-    </table>
-</div>
-{{ end }}
-
-{{ define "history_progress_subscription" }}
-<div id="history-progress-subscription" style="display:none;">
-    {{ if .ProgressStreamURL }}
-    <div hx-ext="sse" hx-swap="none" sse-connect="{{ .ProgressStreamURL }}" sse-swap="progress"></div>
-    {{ end }}
-</div>
-{{ end }}
-
-{{ define "history_progress_subscription_oob" }}
-<div id="history-progress-subscription" hx-swap-oob="outerHTML" style="display:none;">
-    {{ if .URL }}
-    <div hx-ext="sse" hx-swap="none" sse-connect="{{ .URL }}" sse-swap="progress"></div>
-    {{ end }}
-</div>
-{{ end }}
-
 {{ define "history_row" }}
 <tr id="history-row-{{ .Job.ID }}" data-status="{{ .Job.Status }}" data-job-id="{{ .Job.ID }}">
     {{ template "history_row_cells" . }}
@@ -98,44 +53,25 @@
         {{ end }}
     </td>
     <td>
-        {{ if eq .Job.Status "succeeded" }}
-            <span class="deploy-status-badge status-succeeded">succeeded</span>
-            {{ if and .Job.DownloadBytes (gt .Job.DownloadBytes 0) }}
-            <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
-                <span class="stat-chip stat-percent">{{ .Job.DownloadBytes }} B</span>
-                {{ if and .Job.DownloadSpeedBPS (gt .Job.DownloadSpeedBPS 0.0) }}<span class="stat-chip stat-speed">{{ printf "%.0f" .Job.DownloadSpeedBPS }} B/s</span>{{ end }}
+        <span class="deploy-status-badge {{ if eq .Job.Status "succeeded" }}status-succeeded{{ else if eq .Job.Status "failed" }}status-failed{{ else if eq .Job.Status "in_progress" }}{{ if and .LiveProgress (eq .LiveProgress.Phase "installing") }}status-installing{{ else }}status-in-progress{{ end }}{{ else if eq .Job.Status "pending" }}status-pending{{ else }}status-disabled{{ end }}" data-status="{{ .Job.Status }}" data-progress-status-badge>
+            {{ if and .LiveProgress (or (eq .Job.Status "in_progress") (eq .Job.Status "pending")) }}{{ if eq .LiveProgress.Phase "installing" }}installing{{ else }}{{ .LiveProgress.Phase }}{{ end }}{{ else }}{{ .Job.Status }}{{ end }}
+        </span>
+        <div class="progress-live" data-progress-live style="margin-top: var(--space-2);"{{ if not (or .LiveProgress (eq .Job.Status "pending") (eq .Job.Status "in_progress")) }} hidden{{ end }}>
+            <div class="meta-row" data-progress-phase>{{ if .LiveProgress }}{{ template "progress_phase_text" .LiveProgress.Phase }}{{ else if or (eq .Job.Status "pending") (eq .Job.Status "in_progress") }}{{ template "progress_phase_text" "queued" }}{{ end }}</div>
+            <div class="progress-bar-container" data-progress-bar-track data-progress-indeterminate="{{ if and .LiveProgress (eq .LiveProgress.Phase "downloading") (le .LiveProgress.TotalBytes 0) }}true{{ else }}false{{ end }}"{{ if not (and .LiveProgress (eq .LiveProgress.Phase "downloading")) }} hidden{{ end }}>
+                <div class="progress-bar-fill" data-progress-bar{{ if and .LiveProgress (eq .LiveProgress.Phase "downloading") (gt .LiveProgress.TotalBytes 0) }} style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"{{ end }}></div>
             </div>
-            {{ end }}
-        {{ else if eq .Job.Status "failed" }}
-            <span class="deploy-status-badge status-failed">failed</span>
-        {{ else if eq .Job.Status "in_progress" }}
-            <span class="deploy-status-badge {{ if and .LiveProgress (eq .LiveProgress.Phase "installing") }}status-installing{{ else }}status-in-progress{{ end }}">
-                {{ if and .LiveProgress (eq .LiveProgress.Phase "installing") }}installing{{ else }}in_progress{{ end }}
-            </span>
-            {{ if .LiveProgress }}<div class="meta-row" data-progress-phase style="margin-top: 6px;">{{ template "progress_phase_text" .LiveProgress.Phase }}</div>{{ end }}
-            <div style="margin-top: 8px;">
-                {{ if and .LiveProgress (eq .LiveProgress.Phase "downloading") }}
-                    <div class="progress-bar-container" style="margin-bottom: 4px;">
-                        {{ if gt .LiveProgress.TotalBytes 0 }}
-                            <div class="progress-bar-fill" style="width: calc({{ .LiveProgress.DownloadedBytes }} * 100% / {{ .LiveProgress.TotalBytes }});"></div>
-                        {{ else }}
-                            <div class="progress-bar-fill status-in-progress" style="width: 100%; opacity: 0.5;"></div>
-                        {{ end }}
-                    </div>
-                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                        <span class="stat-chip stat-percent" data-progress-percent{{ if eq .LiveProgress.TotalBytes 0 }} style="display:none;"{{ end }}></span>
-                        <span class="stat-chip stat-speed" data-progress-speed>{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s</span>
-                        <span class="meta-row" style="margin: 0;{{ if gt .LiveProgress.TotalBytes 0 }}display:none;{{ end }}" data-progress-bytes>{{ .LiveProgress.DownloadedBytes }} B</span>
-                    </div>
-                {{ else if .LiveProgress }}
-                    <div class="meta-row" data-progress-detail>{{ template "progress_phase_detail_text" .LiveProgress.Phase }}</div>
-                {{ end }}
+            <div class="progress-stats" data-progress-stats{{ if not (and .LiveProgress (eq .LiveProgress.Phase "downloading")) }} hidden{{ end }}>
+                <span class="stat-chip stat-percent" data-progress-percent{{ if or (not .LiveProgress) (le .LiveProgress.TotalBytes 0) }} hidden{{ end }}>{{ if and .LiveProgress (gt .LiveProgress.TotalBytes 0) }}{{ .LiveProgress.DownloadedBytes }} / {{ .LiveProgress.TotalBytes }}{{ end }}</span>
+                <span class="stat-chip stat-speed" data-progress-speed{{ if not .LiveProgress }} hidden{{ end }}>{{ if .LiveProgress }}{{ printf "%.0f" .LiveProgress.SpeedBPS }} B/s{{ end }}</span>
+                <span class="meta-row" style="margin: 0;" data-progress-bytes{{ if not .LiveProgress }} hidden{{ end }}>{{ if .LiveProgress }}{{ .LiveProgress.DownloadedBytes }} B{{ end }}</span>
             </div>
-        {{ else if eq .Job.Status "pending" }}
-            <span class="deploy-status-badge status-pending">pending</span>
-        {{ else }}
-            <span class="deploy-status-badge status-disabled">{{ .Job.Status }}</span>
-        {{ end }}
+            <div class="meta-row" data-progress-detail{{ if and .LiveProgress (eq .LiveProgress.Phase "downloading") }} hidden{{ end }}>{{ if .LiveProgress }}{{ template "progress_phase_detail_text" .LiveProgress.Phase }}{{ else if or (eq .Job.Status "pending") (eq .Job.Status "in_progress") }}Waiting for progress updates.{{ end }}</div>
+        </div>
+        <div class="progress-stats" data-progress-summary style="margin-top: var(--space-2);"{{ if or (not (eq .Job.Status "succeeded")) (not .Job.DownloadBytes) (le .Job.DownloadBytes 0) }} hidden{{ end }}>
+            {{ if and .Job.DownloadBytes (gt .Job.DownloadBytes 0) }}<span class="stat-chip stat-percent">{{ .Job.DownloadBytes }} B</span>{{ end }}
+            {{ if and .Job.DownloadSpeedBPS (gt .Job.DownloadSpeedBPS 0.0) }}<span class="stat-chip stat-speed">{{ printf "%.0f" .Job.DownloadSpeedBPS }} B/s</span>{{ end }}
+        </div>
     </td>
     <td>{{ .Job.Trigger }}</td>
     <td style="color: var(--accent-danger); font-size: 0.75rem; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ end }}">{{ if .Job.ErrorMsg }}{{ .Job.ErrorMsg }}{{ else }}-{{ end }}</td>
@@ -144,18 +80,10 @@
     <td>
         {{ if .AppEnabled }}
             {{ if or (eq .Job.Status "succeeded") (eq .Job.Status "failed") }}
-            <form method="POST" action="/admin/apps/{{ .Job.AppID }}/retry/{{ .Job.ID }}" hx-post="/admin/apps/{{ .Job.AppID }}/retry/{{ .Job.ID }}" hx-target="#history-table-region" hx-swap="outerHTML" hx-push-url="false" style="margin: 0;">
+            <form method="POST" action="/admin/apps/{{ .Job.AppID }}/retry/{{ .Job.ID }}" data-admin-target="#history-table-region" style="margin: 0;">
                 <button type="submit" class="btn btn-secondary retry-button" data-testid="retry-button-{{ .Job.ID }}" title="Deploy this tag again">↻ Retry Deploy</button>
             </form>
             {{ end }}
         {{ end }}
     </td>
-{{ end }}
-
-{{ define "history_row_oob" }}
-<template>
-    <tr id="history-row-{{ .Job.ID }}" data-status="{{ .Job.Status }}" data-job-id="{{ .Job.ID }}" hx-swap-oob="outerHTML">
-        {{ template "history_row_cells" . }}
-    </tr>
-</template>
 {{ end }}

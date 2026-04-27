@@ -1,15 +1,16 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
+	"context"
+	"encoding/base64"
 	"html/template"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 func makeProgressMux(t *testing.T, tracker *ProgressTracker) *http.ServeMux {
@@ -34,384 +35,246 @@ func makeProgressMux(t *testing.T, tracker *ProgressTracker) *http.ServeMux {
 	return mux
 }
 
-func TestProgressStreamSSEHeaders(t *testing.T) {
-	tracker := NewProgressTracker()
-	srv := httptest.NewServer(makeProgressMux(t, tracker))
-	defer srv.Close()
-
-	req, _ := http.NewRequest("GET", srv.URL+"/admin/progress/stream", nil)
-	req.SetBasicAuth("admin", "secret")
-
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected 200, got %d", resp.StatusCode)
-	}
-	ct := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(ct, "text/event-stream") {
-		t.Errorf("expected Content-Type text/event-stream, got %q", ct)
-	}
-	if resp.Header.Get("Cache-Control") != "no-cache" {
-		t.Errorf("expected Cache-Control: no-cache, got %q", resp.Header.Get("Cache-Control"))
-	}
-	if resp.Header.Get("X-Accel-Buffering") != "no" {
-		t.Errorf("expected X-Accel-Buffering: no, got %q", resp.Header.Get("X-Accel-Buffering"))
-	}
-}
-
-func TestProgressStreamNoProgress(t *testing.T) {
-	tracker := NewProgressTracker()
-	srv := httptest.NewServer(makeProgressMux(t, tracker))
-	defer srv.Close()
-
-	req, _ := http.NewRequest("GET", srv.URL+"/admin/progress/stream", nil)
-	req.SetBasicAuth("admin", "secret")
-
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "event: ") {
-			if got := strings.TrimPrefix(line, "event: "); got != "progress" {
-				t.Fatalf("expected progress event, got %q", got)
-			}
-		}
-		if strings.HasPrefix(line, "data: ") {
-			payload := strings.TrimPrefix(line, "data: ")
-			if !strings.Contains(payload, "<div") {
-				t.Fatalf("expected HTML fragment payload, got %q", payload)
-			}
-			return
-		}
-	}
-	t.Fatal("no SSE data event received")
-}
-
-func TestProgressStreamWithProgress(t *testing.T) {
-	tracker := NewProgressTracker()
-	store := newTestAppStoreWithJobs(t)
-	app, err := store.Create("Progress App", "secret-1", "/tmp/bin", "progress.service", "example/progress", "progress")
-	if err != nil {
-		t.Fatalf("store.Create: %v", err)
-	}
-	queue, err := NewDeployQueue(store.db, 10)
-	if err != nil {
-		t.Fatalf("NewDeployQueue: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job123', 1, ?, 'v1.0.0', 'in_progress', 'webhook')`, app.ID); err != nil {
-		t.Fatalf("insert job: %v", err)
-	}
-
-	tmpls := make(map[string]*template.Template)
-	for _, page := range []string{"apps_list.html", "history.html"} {
-		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
-		if err != nil {
-			t.Fatalf("parse %s: %v", page, err)
-		}
-		tmpls[page] = tmpl
-	}
-
-	tracker.Start(app.ID, "job123", "v1.0.0")
-	tracker.Update(app.ID, 512, 1024, 100.0)
-
-	mux := http.NewServeMux()
-	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
-	RegisterAdminProgressRoutes(mux, handler, BasicAuthMiddleware("admin", "secret"))
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	req, _ := http.NewRequest("GET", srv.URL+"/admin/progress/stream?app_id="+app.ID+"&job_id=job123", nil)
-	req.SetBasicAuth("admin", "secret")
-
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	eventName, payload := readFirstSSEEvent(t, resp.Body)
-	if eventName != "progress" {
-		t.Fatalf("expected named progress event, got %q", eventName)
-	}
-	if !strings.Contains(payload, "app-card-") {
-		t.Fatalf("expected app card fragment in payload, got %q", payload)
-	}
-	if !strings.Contains(payload, "hx-swap-oob=\"outerHTML\"") {
-		t.Fatalf("expected OOB swap in payload, got %q", payload)
-	}
-	if strings.Contains(payload, `id="apps-progress-subscription"`) || strings.Contains(payload, `id="history-progress-subscription"`) {
-		t.Fatalf("expected steady-state progress payload to avoid subscription OOB churn, got %q", payload)
-	}
-}
-
-func TestProgressStreamNarrowedSubscriptionWhenTrackedJobsSetChanges(t *testing.T) {
-	tracker := NewProgressTracker()
-	store := newTestAppStoreWithJobs(t)
-	app, err := store.Create("Tracked App", "secret-4", "/tmp/bin-4", "tracked.service", "example/tracked", "tracked")
-	if err != nil {
-		t.Fatalf("store.Create: %v", err)
-	}
-	queue, err := NewDeployQueue(store.db, 10)
-	if err != nil {
-		t.Fatalf("NewDeployQueue: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job-active', 1, ?, 'v1.0.0', 'in_progress', 'webhook')`, app.ID); err != nil {
-		t.Fatalf("insert active job: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job-done', 2, ?, 'v1.0.1', 'succeeded', 'webhook')`, app.ID); err != nil {
-		t.Fatalf("insert terminal job: %v", err)
-	}
-
-	tmpls := make(map[string]*template.Template)
-	for _, page := range []string{"apps_list.html", "history.html"} {
-		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
-		if err != nil {
-			t.Fatalf("parse %s: %v", page, err)
-		}
-		tmpls[page] = tmpl
-	}
-
-	tracker.Start(app.ID, "job-active", "v1.0.0")
-	tracker.Update(app.ID, 768, 1024, 120.0)
-
-	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
-	req := httptest.NewRequest("GET", "/admin/progress/stream?app_id="+app.ID+"&job_id=job-active&job_id=job-done", nil)
-	payload, err := handler.renderStreamPayload(req)
-	if err != nil {
-		t.Fatalf("renderStreamPayload: %v", err)
-	}
-	if !strings.Contains(payload, `id="apps-progress-subscription"`) {
-		t.Fatalf("expected apps subscription OOB when tracked jobs change, got %s", payload)
-	}
-	if !strings.Contains(payload, `id="history-progress-subscription"`) {
-		t.Fatalf("expected history subscription OOB when tracked jobs change, got %s", payload)
-	}
-	if !strings.Contains(payload, `sse-connect="/admin/progress/stream?app_id=`+app.ID+`&amp;job_id=job-active"`) {
-		t.Fatalf("expected narrowed SSE stream URL for active job only, got %s", payload)
-	}
-	if strings.Contains(payload, `job_id=job-done`) {
-		t.Fatalf("expected terminal job to be removed from subscription URL, got %s", payload)
-	}
-}
-
-func TestProgressStreamWithoutFiltersAvoidsSubscriptionOOBChurn(t *testing.T) {
-	tracker := NewProgressTracker()
-	store := newTestAppStoreWithJobs(t)
-	app, err := store.Create("Unfiltered App", "secret-5", "/tmp/bin-5", "unfiltered.service", "example/unfiltered", "unfiltered")
-	if err != nil {
-		t.Fatalf("store.Create: %v", err)
-	}
-	queue, err := NewDeployQueue(store.db, 10)
-	if err != nil {
-		t.Fatalf("NewDeployQueue: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES ('job-unfiltered', 1, ?, 'v1.0.2', 'in_progress', 'webhook')`, app.ID); err != nil {
-		t.Fatalf("insert active job: %v", err)
-	}
-
-	tmpls := make(map[string]*template.Template)
-	for _, page := range []string{"apps_list.html", "history.html"} {
-		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
-		if err != nil {
-			t.Fatalf("parse %s: %v", page, err)
-		}
-		tmpls[page] = tmpl
-	}
-
-	tracker.Start(app.ID, "job-unfiltered", "v1.0.2")
-	tracker.Update(app.ID, 900, 1200, 140.0)
-
-	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
-	req := httptest.NewRequest("GET", "/admin/progress/stream", nil)
-	payload, err := handler.renderStreamPayload(req)
-	if err != nil {
-		t.Fatalf("renderStreamPayload: %v", err)
-	}
-	if strings.Contains(payload, `id="apps-progress-subscription"`) || strings.Contains(payload, `id="history-progress-subscription"`) {
-		t.Fatalf("expected unfiltered steady-state stream to avoid subscription OOB churn, got %s", payload)
-	}
-	if !strings.Contains(payload, `id="app-card-`+app.ID+`"`) {
-		t.Fatalf("expected app card OOB payload for active app, got %s", payload)
-	}
-}
-
-func TestProgressStreamSettlesTerminalAppCardAndSubscription(t *testing.T) {
-	tracker := NewProgressTracker()
-	store := newTestAppStoreWithJobs(t)
-	app, err := store.Create("Settled App", "secret-2", "/tmp/bin-2", "settled.service", "example/settled", "settled")
-	if err != nil {
-		t.Fatalf("store.Create: %v", err)
-	}
-	queue, err := NewDeployQueue(store.db, 10)
-	if err != nil {
-		t.Fatalf("NewDeployQueue: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_speed_bps) VALUES ('job-terminal', 1, ?, 'v1.0.1', 'succeeded', 'webhook', 2048, 512.0)`, app.ID); err != nil {
-		t.Fatalf("insert terminal job: %v", err)
-	}
-
-	tmpls := make(map[string]*template.Template)
-	for _, page := range []string{"apps_list.html", "history.html"} {
-		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
-		if err != nil {
-			t.Fatalf("parse %s: %v", page, err)
-		}
-		tmpls[page] = tmpl
-	}
-
-	tracker.Start(app.ID, "job-terminal", "v1.0.1")
-	tracker.Update(app.ID, 1024, 2048, 128)
-	tracker.Finish(app.ID)
-
-	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
-	req := httptest.NewRequest("GET", "/admin/progress/stream?app_id="+app.ID+"&job_id=job-terminal", nil)
-	payload, err := handler.renderStreamPayload(req)
-	if err != nil {
-		t.Fatalf("renderStreamPayload: %v", err)
-	}
-	if !strings.Contains(payload, `id="app-card-`+app.ID+`"`) {
-		t.Fatalf("expected full app card OOB payload, got %s", payload)
-	}
-	if strings.Contains(payload, `data-progress-job="job-terminal"`) {
-		t.Fatalf("expected terminal app card to clear stale data-progress-job, got %s", payload)
-	}
-	if !strings.Contains(payload, `status-succeeded`) {
-		t.Fatalf("expected terminal succeeded state in payload, got %s", payload)
-	}
-	if strings.Contains(payload, `sse-connect=`) {
-		t.Fatalf("expected subscription OOB payload to disconnect when nothing is active, got %s", payload)
-	}
-	if strings.Contains(payload, `data-progress-percent`) {
-		t.Fatalf("expected terminal app card to render final stats instead of active progress chips, got %s", payload)
-	}
-	if strings.Contains(payload, `data-progress-speed`) {
-		t.Fatalf("expected terminal app card to clear active speed chip markers, got %s", payload)
-	}
-	if !strings.Contains(payload, `Speed: 512 B/s`) {
-		t.Fatalf("expected final summary stats in payload, got %s", payload)
-	}
-}
-
-func TestProgressStreamSettlesTerminalHistoryRow(t *testing.T) {
-	tracker := NewProgressTracker()
-	store := newTestAppStoreWithJobs(t)
-	app, err := store.Create("History Settled App", "secret-3", "/tmp/bin-3", "history-settled.service", "example/history", "history")
-	if err != nil {
-		t.Fatalf("store.Create: %v", err)
-	}
-	queue, err := NewDeployQueue(store.db, 10)
-	if err != nil {
-		t.Fatalf("NewDeployQueue: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_speed_bps) VALUES ('job-history-terminal', 1, ?, 'v2.0.0', 'failed', 'webhook', 4096, 256.0)`, app.ID); err != nil {
-		t.Fatalf("insert terminal history job: %v", err)
-	}
-
-	tmpls := make(map[string]*template.Template)
-	for _, page := range []string{"apps_list.html", "history.html"} {
-		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
-		if err != nil {
-			t.Fatalf("parse %s: %v", page, err)
-		}
-		tmpls[page] = tmpl
-	}
-
-	tracker.Start(app.ID, "job-history-terminal", "v2.0.0")
-	tracker.Update(app.ID, 2048, 4096, 64)
-	tracker.Fail(app.ID)
-
-	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
-	req := httptest.NewRequest("GET", "/admin/progress/stream?app_id="+app.ID+"&job_id=job-history-terminal", nil)
-	payload, err := handler.renderStreamPayload(req)
-	if err != nil {
-		t.Fatalf("renderStreamPayload: %v", err)
-	}
-	if !strings.Contains(payload, `id="history-row-job-history-terminal"`) {
-		t.Fatalf("expected terminal history row OOB payload, got %s", payload)
-	}
-	if !strings.Contains(payload, `data-status="failed"`) {
-		t.Fatalf("expected failed row status in payload, got %s", payload)
-	}
-	if strings.Contains(payload, `data-progress-percent`) || strings.Contains(payload, `data-progress-speed`) {
-		t.Fatalf("expected terminal history row to drop active progress markers, got %s", payload)
-	}
-	if strings.Contains(payload, `sse-connect=`) {
-		t.Fatalf("expected subscription OOB payload to disconnect when history jobs are terminal, got %s", payload)
-	}
-}
-
-func TestProgressStreamRequiresAuth(t *testing.T) {
+func TestOldProgressRouteNotRegistered(t *testing.T) {
 	tracker := NewProgressTracker()
 	mux := makeProgressMux(t, tracker)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/admin/progress/stream", nil)
+	req := httptest.NewRequest("GET", "/admin/progress/"+"stream", nil)
+	req.SetBasicAuth("admin", "secret")
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rec.Code)
-	}
-	if got := rec.Header().Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
-		t.Errorf("expected WWW-Authenticate header, got %q", got)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected old progress route to be absent with 404, got %d", rec.Code)
 	}
 }
 
-func TestProgressStreamHTMXRequiresAuth(t *testing.T) {
+func TestProgressWebSocketRequiresAuth(t *testing.T) {
 	tracker := NewProgressTracker()
-	mux := makeProgressMux(t, tracker)
+	srv := httptest.NewServer(makeProgressMux(t, tracker))
+	defer srv.Close()
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/admin/progress/stream", nil)
-	req.Header.Set("HX-Request", "true")
-	mux.ServeHTTP(rec, req)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
+	_, resp, err := websocket.Dial(ctx, progressWSURL(srv, "/admin/progress/ws"), nil)
+	if err == nil {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+		t.Fatal("expected unauthorized websocket dial to fail")
 	}
-	if got := rec.Header().Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
+	if resp == nil {
+		t.Fatal("expected unauthorized response")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
 		t.Fatalf("expected WWW-Authenticate header, got %q", got)
 	}
 }
 
-func readFirstSSEEvent(t *testing.T, body io.ReadCloser) (string, string) {
-	t.Helper()
-	defer body.Close()
+func TestProgressWebSocketRejectsWrongPassword(t *testing.T) {
+	tracker := NewProgressTracker()
+	srv := httptest.NewServer(makeProgressMux(t, tracker))
+	defer srv.Close()
 
-	scanner := bufio.NewScanner(body)
-	var eventName string
-	var data bytes.Buffer
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			if eventName != "" || data.Len() > 0 {
-				return eventName, strings.TrimSuffix(data.String(), "\n")
-			}
-			continue
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	header := http.Header{}
+	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("admin:wrong")))
+
+	_, resp, err := websocket.Dial(ctx, progressWSURL(srv, "/admin/progress/ws"), &websocket.DialOptions{HTTPHeader: header})
+	if err == nil {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
 		}
-		if strings.HasPrefix(line, "event: ") {
-			eventName = strings.TrimPrefix(line, "event: ")
-			continue
-		}
-		if strings.HasPrefix(line, "data: ") {
-			data.WriteString(strings.TrimPrefix(line, "data: "))
-			data.WriteByte('\n')
-		}
+		t.Fatal("expected websocket dial with wrong password to fail")
 	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("failed to read SSE event: %v", err)
+	if resp == nil {
+		t.Fatal("expected unauthorized response")
 	}
-	t.Fatal("no SSE data event received")
-	return "", ""
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestProgressWebSocketSendsAuthorizedCurrentState(t *testing.T) {
+	tracker := NewProgressTracker()
+	tracker.Start("app-current", "job-current", "v1.2.3")
+	tracker.Update("app-current", 512, 1024, 123.9)
+	srv := httptest.NewServer(makeProgressMux(t, tracker))
+	defer srv.Close()
+
+	conn := dialProgressWebSocket(t, srv, "/admin/progress/ws")
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	frame := readProgressWebSocketFrame(t, conn)
+	if frame.AppID != "app-current" || frame.JobID != "job-current" || frame.Tag != "v1.2.3" {
+		t.Fatalf("unexpected identity frame: %+v", frame)
+	}
+	if frame.Stage != ProgressStageDownloading || frame.Status != ProgressStatusInProgress {
+		t.Fatalf("unexpected stage/status: %+v", frame)
+	}
+	if frame.Percent != 50 || frame.DownloadedBytes != 512 || frame.TotalBytes != 1024 || frame.SpeedBPS != 123 {
+		t.Fatalf("unexpected progress values: %+v", frame)
+	}
+}
+
+func TestProgressWebSocketFiltersCurrentState(t *testing.T) {
+	tracker := NewProgressTracker()
+	tracker.Start("app-one", "job-one", "v1.0.0")
+	tracker.Update("app-one", 100, 1000, 10)
+	tracker.Start("app-two", "job-two", "v2.0.0")
+	tracker.Update("app-two", 250, 500, 20)
+	srv := httptest.NewServer(makeProgressMux(t, tracker))
+	defer srv.Close()
+
+	conn := dialProgressWebSocket(t, srv, "/admin/progress/ws?app_id=app-two&job_id=job-two")
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	frame := readProgressWebSocketFrame(t, conn)
+	if frame.AppID != "app-two" || frame.JobID != "job-two" {
+		t.Fatalf("expected app-two/job-two frame, got %+v", frame)
+	}
+	if frame.Percent != 50 || frame.SpeedBPS != 20 {
+		t.Fatalf("unexpected filtered frame values: %+v", frame)
+	}
+}
+
+func TestProgressWebSocketSupportsMultipleSimultaneousClients(t *testing.T) {
+	tracker := NewProgressTracker()
+	tracker.Start("app-shared", "job-shared", "v3.0.0")
+	tracker.Update("app-shared", 100, 1000, 100)
+	srv := httptest.NewServer(makeProgressMux(t, tracker))
+	defer srv.Close()
+
+	connA := dialProgressWebSocket(t, srv, "/admin/progress/ws?app_id=app-shared")
+	defer connA.Close(websocket.StatusNormalClosure, "")
+	connB := dialProgressWebSocket(t, srv, "/admin/progress/ws?job_id=job-shared")
+	defer connB.Close(websocket.StatusNormalClosure, "")
+
+	if frame := readProgressWebSocketFrame(t, connA); frame.Percent != 10 {
+		t.Fatalf("client A initial percent = %d, want 10", frame.Percent)
+	}
+	if frame := readProgressWebSocketFrame(t, connB); frame.Percent != 10 {
+		t.Fatalf("client B initial percent = %d, want 10", frame.Percent)
+	}
+
+	tracker.Update("app-shared", 400, 1000, 200)
+
+	if frame := readProgressWebSocketFrame(t, connA); frame.Percent != 40 || frame.SpeedBPS != 200 {
+		t.Fatalf("client A update frame = %+v, want percent 40 speed 200", frame)
+	}
+	if frame := readProgressWebSocketFrame(t, connB); frame.Percent != 40 || frame.SpeedBPS != 200 {
+		t.Fatalf("client B update frame = %+v, want percent 40 speed 200", frame)
+	}
+}
+
+func TestProgressWebSocketReconnectReceivesCurrentState(t *testing.T) {
+	tracker := NewProgressTracker()
+	tracker.Start("app-reconnect", "job-reconnect", "v4.0.0")
+	tracker.Update("app-reconnect", 100, 1000, 100)
+	srv := httptest.NewServer(makeProgressMux(t, tracker))
+	defer srv.Close()
+
+	conn := dialProgressWebSocket(t, srv, "/admin/progress/ws?app_id=app-reconnect")
+	if frame := readProgressWebSocketFrame(t, conn); frame.Percent != 10 {
+		t.Fatalf("initial percent = %d, want 10", frame.Percent)
+	}
+	tracker.Update("app-reconnect", 900, 1000, 300)
+	if frame := readProgressWebSocketFrame(t, conn); frame.Percent != 90 || frame.SpeedBPS != 300 {
+		t.Fatalf("update frame = %+v, want percent 90 speed 300", frame)
+	}
+	if err := conn.Close(websocket.StatusNormalClosure, "reconnect"); err != nil {
+		t.Fatalf("close websocket: %v", err)
+	}
+
+	reconnected := dialProgressWebSocket(t, srv, "/admin/progress/ws?app_id=app-reconnect")
+	defer reconnected.Close(websocket.StatusNormalClosure, "")
+	frame := readProgressWebSocketFrame(t, reconnected)
+	if frame.AppID != "app-reconnect" || frame.JobID != "job-reconnect" || frame.Percent != 90 || frame.SpeedBPS != 300 {
+		t.Fatalf("reconnected current state = %+v, want latest app-reconnect/job-reconnect percent 90 speed 300", frame)
+	}
+}
+
+func TestProgressWebSocketTerminalFrameIsIdempotent(t *testing.T) {
+	tracker := NewProgressTracker()
+	tracker.Start("app-terminal", "job-terminal", "v5.0.0")
+	tracker.Update("app-terminal", 1000, 1000, 500)
+	srv := httptest.NewServer(makeProgressMux(t, tracker))
+	defer srv.Close()
+
+	conn := dialProgressWebSocket(t, srv, "/admin/progress/ws?job_id=job-terminal")
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if frame := readProgressWebSocketFrame(t, conn); frame.Status != ProgressStatusInProgress || frame.Percent != 100 {
+		t.Fatalf("initial frame = %+v, want in-progress 100%%", frame)
+	}
+
+	tracker.Finish("app-terminal")
+	terminal := readProgressWebSocketFrame(t, conn)
+	if terminal.Stage != ProgressStageSucceeded || terminal.Status != ProgressStatusSucceeded {
+		t.Fatalf("terminal frame = %+v, want succeeded", terminal)
+	}
+
+	tracker.Finish("app-terminal")
+	expectNoProgressWebSocketFrame(t, conn, 750*time.Millisecond)
+}
+
+func dialProgressWebSocket(t *testing.T, srv *httptest.Server, path string) *websocket.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	header := http.Header{}
+	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("admin:secret")))
+	conn, resp, err := websocket.Dial(ctx, progressWSURL(srv, path), &websocket.DialOptions{HTTPHeader: header})
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	return conn
+}
+
+func readProgressWebSocketFrame(t *testing.T, conn *websocket.Conn) ProgressFrame {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	messageType, payload, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("websocket read failed: %v", err)
+	}
+	if messageType != websocket.MessageText {
+		t.Fatalf("expected text websocket message, got %v", messageType)
+	}
+	frame, err := DecodeProgressFrame(string(payload))
+	if err != nil {
+		t.Fatalf("decode progress frame: %v", err)
+	}
+	return frame
+}
+
+func expectNoProgressWebSocketFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_, payload, err := conn.Read(ctx)
+	if err == nil {
+		frame, decodeErr := DecodeProgressFrame(string(payload))
+		if decodeErr == nil {
+			t.Fatalf("unexpected websocket progress frame: %+v", frame)
+		}
+		t.Fatalf("unexpected websocket payload: %q", string(payload))
+	}
+	if ctx.Err() == nil {
+		t.Fatalf("websocket read failed before timeout: %v", err)
+	}
+}
+
+func progressWSURL(srv *httptest.Server, path string) string {
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + path
 }
