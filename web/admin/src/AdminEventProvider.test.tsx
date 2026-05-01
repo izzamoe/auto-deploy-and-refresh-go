@@ -16,22 +16,60 @@ describe("AdminEventProvider", () => {
 	let originalWebSocket: typeof WebSocket;
 
 	beforeEach(() => {
-		originalWebSocket = window.WebSocket;
-		window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+		originalWebSocket = WebSocket;
+		stubWebSocket(MockWebSocket as unknown as typeof WebSocket);
 		vi.useFakeTimers();
 	});
 
 	afterEach(() => {
+		vi.unstubAllGlobals();
 		window.WebSocket = originalWebSocket;
 		vi.useRealTimers();
 	});
 
+	function stubWebSocket(webSocket: typeof WebSocket) {
+		vi.stubGlobal("WebSocket", webSocket);
+		window.WebSocket = webSocket;
+	}
+
+	function stubWindowLocation(pageUrl: string) {
+		const url = new URL(pageUrl);
+		const fakeWindow = Object.create(window) as Window & typeof globalThis;
+		Object.defineProperty(fakeWindow, "location", {
+			value: {
+				protocol: url.protocol,
+				host: url.host,
+			},
+		});
+		vi.stubGlobal("window", fakeWindow);
+	}
+
+	it.each([
+		["http://localhost/admin/apps", "ws://localhost/admin/events/ws"],
+		["https://example.test/admin/apps", "wss://example.test/admin/events/ws"],
+	])("opens realtime status socket for %s at %s", (pageUrl, wsUrl) => {
+		const webSocket = vi.fn().mockImplementation((url: string) => {
+			return new MockWebSocket(url);
+		}) as unknown as typeof WebSocket;
+		stubWebSocket(webSocket);
+		stubWindowLocation(pageUrl);
+
+		render(
+			<AdminEventProvider>
+				<div />
+			</AdminEventProvider>,
+		);
+
+		expect(webSocket).toHaveBeenCalledWith(wsUrl);
+	});
+
 	it("isolates WebSocket creation to provider and handles unknown events", () => {
 		let wsInstance: MockWebSocket | null = null;
-		window.WebSocket = vi.fn().mockImplementation((url: string) => {
+		const webSocket = vi.fn().mockImplementation((url: string) => {
 			wsInstance = new MockWebSocket(url);
 			return wsInstance;
 		}) as unknown as typeof WebSocket;
+		stubWebSocket(webSocket);
 
 		let currentState: ReturnType<typeof useAdminEvents> | undefined;
 		const TestComponent = () => {
@@ -47,8 +85,8 @@ describe("AdminEventProvider", () => {
 			</AdminEventProvider>,
 		);
 
-		expect(window.WebSocket).toHaveBeenCalledTimes(1);
-		expect(window.WebSocket).toHaveBeenCalledWith(
+		expect(webSocket).toHaveBeenCalledTimes(1);
+		expect(webSocket).toHaveBeenCalledWith(
 			expect.stringContaining("/admin/events/ws"),
 		);
 
@@ -71,10 +109,11 @@ describe("AdminEventProvider", () => {
 
 	it("normalizes compact progress frames", () => {
 		let wsInstance: MockWebSocket | null = null;
-		window.WebSocket = vi.fn().mockImplementation((url: string) => {
+		const webSocket = vi.fn().mockImplementation((url: string) => {
 			wsInstance = new MockWebSocket(url);
 			return wsInstance;
 		}) as unknown as typeof WebSocket;
+		stubWebSocket(webSocket);
 
 		let currentState: ReturnType<typeof useAdminEvents> | undefined;
 		const TestComponent = () => {
@@ -152,10 +191,11 @@ describe("AdminEventProvider", () => {
 
 	it("handles readable events (hello, snapshot, job_status, cancel_requested)", () => {
 		let wsInstance: MockWebSocket | null = null;
-		window.WebSocket = vi.fn().mockImplementation((url: string) => {
+		const webSocket = vi.fn().mockImplementation((url: string) => {
 			wsInstance = new MockWebSocket(url);
 			return wsInstance;
 		}) as unknown as typeof WebSocket;
+		stubWebSocket(webSocket);
 
 		let currentState: ReturnType<typeof useAdminEvents> | undefined;
 		const TestComponent = () => {
@@ -188,6 +228,14 @@ describe("AdminEventProvider", () => {
 							AppID: "app1",
 							Phase: "idle",
 							Status: "pending",
+							SpeedBPS: 1536,
+						},
+						{
+							jobId: "job_snap_lower",
+							appId: "app1",
+							phase: "downloading",
+							status: "in_progress",
+							speedBPS: 524288,
 						},
 					],
 				}),
@@ -197,6 +245,8 @@ describe("AdminEventProvider", () => {
 		expect(currentState?.events.length).toBe(2);
 		expect(currentState?.progress.job_snap).toBeDefined();
 		expect(currentState?.progress.job_snap.status).toBe("pending");
+		expect(currentState?.progress.job_snap.bytesPerSecond).toBe(1536);
+		expect(currentState?.progress.job_snap_lower.bytesPerSecond).toBe(524288);
 
 		act(() => {
 			wsInstance?.onmessage({

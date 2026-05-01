@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { AdminAPIError, apiRequest } from "./api";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
 export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (hash: string, flashMessage?: string) => void; setFlash: (flash: { message: string, type: "success" | "error" }) => void }) {
 	const [formData, setFormData] = useState({
 		name: "",
@@ -78,62 +84,85 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 	};
 
 	return (
-		<div>
-			<div className="form-header">
-				<h1>{id ? "Edit App" : "New App"}</h1>
-				<a href="#/">Back to Apps</a>
-			</div>
-			
-			{errors.length > 0 && (
-				<div id="form-errors" className="errors">
-					{errors.map((errStr) => <div key={errStr}>{errStr}</div>)}
-				</div>
-			)}
-			
-			<form id="app-form" onSubmit={handleSubmit}>
-				<div>
-					<label htmlFor="name">App Name</label>
-					<input type="text" id="name" name="name" value={formData.name} onChange={handleChange} required />
-				</div>
-				
-				<div>
-					<label htmlFor="webhook_secret">Webhook Secret</label>
-					<input 
-						type="password" 
-						id="webhook_secret" 
-						name="webhook_secret" 
-						value={formData.webhook_secret} 
-						onChange={handleChange} 
-						required={!id} 
-						placeholder={id ? "Leave blank to keep current secret" : ""}
-					/>
-				</div>
-				
-				<div>
-					<label htmlFor="service_name">Service Name</label>
-					<input type="text" id="service_name" name="service_name" value={formData.service_name} onChange={handleChange} required />
-				</div>
-				
-				<div>
-					<label htmlFor="binary_path">Binary Path</label>
-					<input type="text" id="binary_path" name="binary_path" value={formData.binary_path} onChange={handleChange} required />
-				</div>
-				
-				<div>
-					<label htmlFor="github_repo">GitHub Repo</label>
-					<input type="text" id="github_repo" name="github_repo" value={formData.github_repo} onChange={handleChange} required />
-				</div>
-				
-				<div>
-					<label htmlFor="artifact_name">Artifact Name</label>
-					<input type="text" id="artifact_name" name="artifact_name" value={formData.artifact_name} onChange={handleChange} required />
-				</div>
+		<div className="space-y-6">
+			<Card className="border-border/70 bg-card/95 shadow-sm">
+				<CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+					<div className="space-y-2">
+						<CardTitle className="text-3xl font-bold tracking-tight">
+							<h1>{id ? "Edit App" : "New App"}</h1>
+						</CardTitle>
+						<CardDescription>
+							{id ? "Update deployment settings while keeping the current webhook secret unless replaced." : "Register a service and release artifact for automated deployments."}
+						</CardDescription>
+					</div>
+					<Button variant="outline" asChild>
+						<a href="#/">Back to Apps</a>
+					</Button>
+				</CardHeader>
+			</Card>
 
-				<div className="form-actions">
-					<button type="submit" id="submit-btn">{id ? "Update App" : "Create App"}</button>
-					<a href="#/">Cancel</a>
-				</div>
-			</form>
+			{errors.length > 0 && (
+				<Alert id="form-errors" variant="destructive">
+					<AlertDescription className="space-y-1">
+						{errors.map((errStr) => <div key={errStr}>{errStr}</div>)}
+					</AlertDescription>
+				</Alert>
+			)}
+
+			<Card className="border-border/70 bg-card/80 shadow-sm">
+				<form id="app-form" onSubmit={handleSubmit}>
+					<CardContent className="grid gap-5 p-6">
+						<div className="grid gap-2">
+							<Label htmlFor="name">App Name</Label>
+							<Input type="text" id="name" name="name" value={formData.name} onChange={handleChange} required />
+						</div>
+
+						<div className="grid gap-2">
+							<Label htmlFor="webhook_secret">Webhook Secret</Label>
+							<Input
+								type="password"
+								id="webhook_secret"
+								name="webhook_secret"
+								value={formData.webhook_secret}
+								onChange={handleChange}
+								required={!id}
+								placeholder={id ? "Leave blank to keep current secret" : ""}
+							/>
+						</div>
+
+						<div className="grid gap-2 sm:grid-cols-2 sm:gap-4">
+							<div className="grid gap-2">
+								<Label htmlFor="service_name">Service Name</Label>
+								<Input type="text" id="service_name" name="service_name" value={formData.service_name} onChange={handleChange} required />
+							</div>
+
+							<div className="grid gap-2">
+								<Label htmlFor="binary_path">Binary Path</Label>
+								<Input type="text" id="binary_path" name="binary_path" value={formData.binary_path} onChange={handleChange} required />
+							</div>
+						</div>
+
+						<div className="grid gap-2 sm:grid-cols-2 sm:gap-4">
+							<div className="grid gap-2">
+								<Label htmlFor="github_repo">GitHub Repo</Label>
+								<Input type="text" id="github_repo" name="github_repo" value={formData.github_repo} onChange={handleChange} required />
+							</div>
+
+							<div className="grid gap-2">
+								<Label htmlFor="artifact_name">Artifact Name</Label>
+								<Input type="text" id="artifact_name" name="artifact_name" value={formData.artifact_name} onChange={handleChange} required />
+							</div>
+						</div>
+					</CardContent>
+
+					<CardFooter className="form-actions flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:justify-end">
+						<Button variant="outline" asChild>
+							<a href="#/">Cancel</a>
+						</Button>
+						<Button type="submit" id="submit-btn">{id ? "Update App" : "Create App"}</Button>
+					</CardFooter>
+				</form>
+			</Card>
 		</div>
 	);
 }

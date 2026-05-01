@@ -2,8 +2,16 @@ import { resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(async () => {
+  const { default: tailwindcss } = await import('@tailwindcss/vite');
+
+  return {
+    plugins: [tailwindcss(), react()],
+    resolve: {
+      alias: {
+        "@": resolve(__dirname, "./src"),
+      },
+    },
   base: '/admin/',
   root: resolve(__dirname),
   build: {
@@ -16,4 +24,5 @@ export default defineConfig({
     setupFiles: ['./setupTests.ts'],
     globals: true,
   },
+  };
 });
