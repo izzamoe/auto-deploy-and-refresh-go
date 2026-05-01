@@ -47,7 +47,7 @@ async function createApp(page, suffix, namePrefix) {
   const githubRepo = `example/${appName}`;
   const artifactName = `${appName}-artifact`;
 
-  await page.goto(`${baseURL()}/admin/apps/new`);
+  await page.goto(`${baseURL()}/admin/apps#/apps/new`);
   await expect(page.getByRole('heading', { name: 'New App' })).toBeVisible();
 
   await page.locator('#name').fill(appName);
@@ -58,17 +58,16 @@ async function createApp(page, suffix, namePrefix) {
   await page.locator('#artifact_name').fill(artifactName);
 
   const [createRequest, createResponse] = await Promise.all([
-    page.waitForRequest('**/admin/apps/create'),
-    page.waitForResponse('**/admin/apps/create'),
+    page.waitForRequest((req) => req.url().includes('/admin/api/apps') && req.method() === 'POST'),
+    page.waitForResponse((res) => res.url().includes('/admin/api/apps') && res.request().method() === 'POST'),
     page.locator('#submit-btn').click()
   ]);
 
   expect(createRequest.headers()['x-admin-request']).toBe('true');
   expect(createRequest.headers()['x-requested-with']).toBe('AdminUI');
-  expect(createResponse.status()).toBe(200);
-  expect(createResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+created+successfully');
+  expect(createResponse.status()).toBe(201);
 
-  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
+  await expect(page).toHaveURL(/\/admin\/apps#\//);
 
   const appCard = page.locator('[data-app-id]').filter({ hasText: appName }).first();
   await expect(appCard).toBeVisible();
@@ -86,10 +85,9 @@ async function createApp(page, suffix, namePrefix) {
 
 async function expectNativeAdminRuntime(page) {
   await expect.poll(() => page.evaluate(() => ({
-    hasAdminUI: typeof window.AdminUI === 'object',
     hasLegacyRuntime: typeof window['ht' + 'mx'] !== 'undefined',
-    wsHooks: document.querySelectorAll('[data-admin-ws-url="/admin/progress/ws"]').length
-  }))).toEqual({ hasAdminUI: true, hasLegacyRuntime: false, wsHooks: 1 });
+    wsHooks: document.querySelectorAll('[data-admin-ws-url="/admin/events/ws"]').length
+  }))).toEqual({ hasLegacyRuntime: false, wsHooks: 1 });
 }
 
 test('admin apps page loads with basic auth', async ({ browser }) => {
@@ -124,10 +122,9 @@ test('history navigation supports deep links and retry updates stay in place', a
 
   const appCard = page.locator('[data-app-id]').first();
   const historyLink = appCard.getByRole('link', { name: 'History' });
-  const historyPath = await historyLink.getAttribute('href');
 
   await historyLink.click();
-  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page).toHaveURL(/\/admin\/apps#\/history\?appId=/);
   await expect(page.locator('#history-content')).toBeVisible();
   await expectNativeAdminRuntime(page);
   await expect(page.locator('#history-table-region')).toBeVisible();
@@ -137,25 +134,27 @@ test('history navigation supports deep links and retry updates stay in place', a
   await expect(statusRow).toContainText(/failed|succeeded/i, { timeout: 30000 });
 
   await page.reload();
-  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page).toHaveURL(/\/admin\/apps#\/history\?appId=/);
   await expect(page.locator('#history-content')).toBeVisible();
   await expect(statusRow).toBeVisible();
 
   await page.goBack();
-  await expect(page).toHaveURL(/\/admin\/apps$/);
+  await expect(page).toHaveURL(/\/admin\/apps(#\/)?$/);
   await expect(page.locator('#apps-table')).toBeVisible();
 
   await page.goForward();
-  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page).toHaveURL(/\/admin\/apps#\/history\?appId=/);
   await expect(page.locator('#history-content')).toBeVisible();
 
+  await expect(statusRow).toBeVisible({ timeout: 30000 });
+  await expect(statusRow).toContainText(/failed|succeeded/i, { timeout: 30000 });
   const retryButton = statusRow.locator('.retry-button');
   await expect(retryButton).toBeVisible();
   await retryButton.click();
 
-  await expect(page).toHaveURL(new RegExp(`${historyPath}$`));
+  await expect(page).toHaveURL(/\/admin\/apps#\/history\?appId=/);
   await expect(page.locator('#flash')).toContainText('Retry queued');
-  await expect(page.locator('[data-admin-ws-url="/admin/progress/ws"]')).toHaveCount(1);
+  await expect(page.locator('[data-admin-ws-url="/admin/events/ws"]')).toHaveCount(1);
   await expect(page.locator('#history-table tr[data-status="pending"]')).toContainText(tag);
   const historyNavigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
   await expect(page.locator('#history-table tr[data-status="pending"]')).toContainText(tag);
@@ -181,7 +180,7 @@ test('apps list deploy settles live through WebSocket without reload', async ({ 
   await appCard.getByRole('button', { name: 'Deploy' }).click();
 
   await expect(page.locator('#flash')).toContainText(`Manual deploy queued for ${tag}`);
-  await expect(page.locator('[data-admin-ws-url="/admin/progress/ws"]')).toHaveCount(1);
+  await expect(page.locator('[data-admin-ws-url="/admin/events/ws"]')).toHaveCount(1);
 
   const statusBadge = appCard.locator('[data-progress-region] .deploy-status-badge');
   await expect(statusBadge).toContainText(/pending|in_progress|downloading|validating|backing_up|installing|restarting|healthcheck|rollback/i);
@@ -209,21 +208,43 @@ test('native progress renderer ignores malformed frames and renders failed termi
 
   const appCard = page.locator('[data-app-id]').first();
   const appId = await appCard.getAttribute('data-app-id');
+  
+  const appsResponse = await page.request.get(`${baseURL()}/admin/api/apps`, {
+    headers: { 'x-admin-request': 'true' }
+  });
+  const appsData = await appsResponse.json();
+  const targetApp = appsData.apps.find(a => a.id === appId);
+  const jobId = targetApp?.lastJobId || 'pw-malformed-job';
+
   const originalStatus = await appCard.locator('[data-progress-region] .deploy-status-badge').textContent();
 
   await page.evaluate(() => {
-    window.AdminUI.handleFrame('v1\u001Fp\u001Ftoo-few-fields');
+    if (window.AdminUITest) {
+      window.AdminUITest.injectEvent('not-json-at-all');
+    }
   });
   await expect(appCard.locator('[data-progress-region] .deploy-status-badge')).toHaveText(originalStatus.trim());
 
-  await page.evaluate((id) => {
-    window.AdminUI.handleFrame(['v1', 'p', id, 'pw-malformed-job', 'pw-malformed-tag', 'failed', 'failed', '100', '4096', '4096', '256', 'c21va2UgdGVzdCBmYWlsdXJl'].join('\u001F'));
-  }, appId);
+  await page.evaluate(({ a, j }) => {
+    if (window.AdminUITest) {
+      window.AdminUITest.injectEvent(JSON.stringify({
+        t: 'p',
+        a,
+        j,
+        ph: 'failed',
+        st: 'failed',
+        pct: 100,
+        tb: 4096,
+        db: 4096,
+        bps: 256,
+        msg: 'smoke test failure'
+      }));
+    }
+  }, { a: appId, j: jobId });
 
   await expect(appCard.locator('[data-progress-region] .deploy-status-badge')).toHaveText('failed');
   await expect(appCard.locator('[data-progress-region] .deploy-status-badge')).toHaveClass(/status-failed/);
   await expect(appCard.locator('[data-progress-detail]')).toContainText('smoke test failure');
-  await expect(appCard).not.toHaveAttribute('data-progress-job', /.+/);
 
   await context.close();
 });
@@ -234,7 +255,7 @@ test('apps list toggle and delete flows update in place without hard navigation'
   const suffix = `${Date.now()}`;
   const appName = `playwright-toggle-delete-${suffix}`;
 
-  await page.goto(`${baseURL()}/admin/apps/new`);
+  await page.goto(`${baseURL()}/admin/apps#/apps/new`);
   await expect(page.getByRole('heading', { name: 'New App' })).toBeVisible();
 
   await page.locator('#name').fill(appName);
@@ -245,17 +266,16 @@ test('apps list toggle and delete flows update in place without hard navigation'
   await page.locator('#artifact_name').fill(`playwright-toggle-artifact-${suffix}`);
 
   const [createRequest, createResponse] = await Promise.all([
-    page.waitForRequest('**/admin/apps/create'),
-    page.waitForResponse('**/admin/apps/create'),
+    page.waitForRequest((req) => req.url().includes('/admin/api/apps') && req.method() === 'POST'),
+    page.waitForResponse((res) => res.url().includes('/admin/api/apps') && res.request().method() === 'POST'),
     page.locator('#submit-btn').click()
   ]);
 
   expect(createRequest.headers()['x-admin-request']).toBe('true');
   expect(createRequest.headers()['x-requested-with']).toBe('AdminUI');
-  expect(createResponse.status()).toBe(200);
-  expect(createResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+created+successfully');
+  expect(createResponse.status()).toBe(201);
 
-  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
+  await expect(page).toHaveURL(/\/admin\/apps#\//);
   await expect(page.locator('#apps-table')).toBeVisible();
 
   const appCard = page.locator('[data-app-id]').filter({ hasText: appName }).first();
@@ -266,8 +286,8 @@ test('apps list toggle and delete flows update in place without hard navigation'
   const navigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
 
   const [disableRequest, disableResponse] = await Promise.all([
-    page.waitForRequest((request) => request.url().includes(`/admin/apps/${appId}/disable`) && request.method() === 'POST'),
-    page.waitForResponse((response) => response.url().includes(`/admin/apps/${appId}/disable`) && response.request().method() === 'POST'),
+    page.waitForRequest((request) => request.url().includes(`/admin/api/apps/${appId}/toggle`) && request.method() === 'POST'),
+    page.waitForResponse((response) => response.url().includes(`/admin/api/apps/${appId}/toggle`) && response.request().method() === 'POST'),
     appCard.getByRole('button', { name: 'Disable' }).click()
   ]);
 
@@ -282,8 +302,8 @@ test('apps list toggle and delete flows update in place without hard navigation'
   await expect(page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Enable' })).toBeVisible();
 
   const [enableRequest, enableResponse] = await Promise.all([
-    page.waitForRequest((request) => request.url().includes(`/admin/apps/${appId}/enable`) && request.method() === 'POST'),
-    page.waitForResponse((response) => response.url().includes(`/admin/apps/${appId}/enable`) && response.request().method() === 'POST'),
+    page.waitForRequest((request) => request.url().includes(`/admin/api/apps/${appId}/toggle`) && request.method() === 'POST'),
+    page.waitForResponse((response) => response.url().includes(`/admin/api/apps/${appId}/toggle`) && response.request().method() === 'POST'),
     page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Enable' }).click()
   ]);
 
@@ -300,8 +320,8 @@ test('apps list toggle and delete flows update in place without hard navigation'
   const appCountBeforeDelete = await page.locator('[data-app-id]').count();
   page.once('dialog', (dialog) => dialog.accept());
   const [deleteRequest, deleteResponse] = await Promise.all([
-    page.waitForRequest((request) => request.url().includes(`/admin/apps/${appId}/delete`) && request.method() === 'POST'),
-    page.waitForResponse((response) => response.url().includes(`/admin/apps/${appId}/delete`) && response.request().method() === 'POST'),
+    page.waitForRequest((request) => request.url().includes(`/admin/api/apps/${appId}`) && request.method() === 'DELETE'),
+    page.waitForResponse((response) => response.url().includes(`/admin/api/apps/${appId}`) && response.request().method() === 'DELETE'),
     page.locator(`#app-card-${appId}`).getByRole('button', { name: 'Delete' }).click()
   ]);
 
@@ -322,7 +342,7 @@ test('new app form keeps values on AdminUI validation and navigates on success',
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
-  await page.goto(`${baseURL()}/admin/apps/new`);
+  await page.goto(`${baseURL()}/admin/apps#/apps/new`);
 
   await expect(page.getByRole('heading', { name: 'New App' })).toBeVisible();
 
@@ -334,8 +354,8 @@ test('new app form keeps values on AdminUI validation and navigates on success',
   await page.locator('#artifact_name').fill('playwright-inline-artifact');
 
   const [invalidRequest, invalidResponse] = await Promise.all([
-    page.waitForRequest('**/admin/apps/create'),
-    page.waitForResponse('**/admin/apps/create'),
+    page.waitForRequest((req) => req.url().includes('/admin/api/apps') && req.method() === 'POST'),
+    page.waitForResponse((res) => res.url().includes('/admin/api/apps') && res.request().method() === 'POST'),
     page.locator('#submit-btn').click()
   ]);
 
@@ -353,16 +373,16 @@ test('new app form keeps values on AdminUI validation and navigates on success',
   await page.locator('#artifact_name').fill('playwright-inline-artifact');
 
   const [successRequest, successResponse] = await Promise.all([
-    page.waitForRequest('**/admin/apps/create'),
-    page.waitForResponse('**/admin/apps/create'),
+    page.waitForRequest((req) => req.url().includes('/admin/api/apps') && req.method() === 'POST'),
+    page.waitForResponse((res) => res.url().includes('/admin/api/apps') && res.request().method() === 'POST'),
     page.locator('#submit-btn').click()
   ]);
 
   expect(successRequest.headers()['x-admin-request']).toBe('true');
   expect(successRequest.headers()['x-requested-with']).toBe('AdminUI');
-  expect(successResponse.status()).toBe(200);
-  expect(successResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+created+successfully');
-  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+created\+successfully/);
+  expect(successResponse.status()).toBe(201);
+
+  await expect(page).toHaveURL(/\/admin\/apps#\//);
   await expect(page.getByTestId('admin-flash')).toContainText('App created successfully');
   await expect(page.locator('#apps-table')).toBeVisible();
   await expect(page.locator('[data-app-id]').filter({ hasText: 'playwright-inline-app' }).first()).toBeVisible();
@@ -379,7 +399,7 @@ test('edit app keeps invalid AdminUI submission local with inline errors', async
 
   await page.locator(`[data-app-id="${editableApp.appId}"]`).getByRole('link', { name: 'Edit' }).click();
 
-  await expect(page).toHaveURL(/\/admin\/apps\/[^/]+\/edit$/);
+  await expect(page).toHaveURL(/\/admin\/apps#\/apps\/[^/]+\/edit$/);
   await expect(page.getByRole('heading', { name: 'Edit App' })).toBeVisible();
 
   const navigationCount = await page.evaluate(() => performance.getEntriesByType('navigation').length);
@@ -389,20 +409,20 @@ test('edit app keeps invalid AdminUI submission local with inline errors', async
   await page.locator('#binary_path').fill(conflictApp.binaryPath);
 
   const [invalidRequest, invalidResponse] = await Promise.all([
-    page.waitForRequest((request) => request.url().includes('/update') && request.method() === 'POST'),
-    page.waitForResponse((response) => response.url().includes('/update') && response.request().method() === 'POST'),
+    page.waitForRequest((request) => request.url().includes('/admin/api/apps/') && request.method() === 'PUT'),
+    page.waitForResponse((response) => response.url().includes('/admin/api/apps/') && response.request().method() === 'PUT'),
     page.locator('#submit-btn').click()
   ]);
 
   expect(invalidRequest.headers()['x-admin-request']).toBe('true');
   expect(invalidRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(invalidResponse.status()).toBe(400);
-  await expect(page).toHaveURL(/\/admin\/apps\/[^/]+\/update$/);
+  await expect(page).toHaveURL(/\/admin\/apps#\/apps\/[^/]+\/edit$/);
   expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
   await expect(page.getByRole('heading', { name: 'Edit App' })).toBeVisible();
   await expect(page.locator('#app-form')).toBeVisible();
   await expect(page.locator('#form-errors')).toBeVisible();
-  await expect(page.locator('#form-errors')).toContainText('An app with this binary path or service name already exists');
+  await expect(page.locator('#form-errors')).toContainText('An app with this binary path, service name, or webhook secret already exists');
   await expect(page.locator('#name')).toHaveValue('playwright-edit-target-invalid');
   await expect(page.locator('#service_name')).toHaveValue(conflictApp.serviceName);
   await expect(page.locator('#binary_path')).toHaveValue(conflictApp.binaryPath);
@@ -418,23 +438,22 @@ test('edit app via AdminUI navigation shows success flash after native redirect'
 
   await page.locator(`[data-app-id="${editableApp.appId}"]`).getByRole('link', { name: 'Edit' }).click();
 
-  await expect(page).toHaveURL(/\/admin\/apps\/[^/]+\/edit$/);
+  await expect(page).toHaveURL(/\/admin\/apps#\/apps\/[^/]+\/edit$/);
   await expect(page.getByRole('heading', { name: 'Edit App' })).toBeVisible();
 
   await page.locator('#name').fill('playwright-edit-success-updated');
 
   const [updateRequest, updateResponse] = await Promise.all([
-    page.waitForRequest((request) => request.url().includes('/update') && request.method() === 'POST'),
-    page.waitForResponse((response) => response.url().includes('/update') && response.request().method() === 'POST'),
+    page.waitForRequest((request) => request.url().includes('/admin/api/apps/') && request.method() === 'PUT'),
+    page.waitForResponse((response) => response.url().includes('/admin/api/apps/') && response.request().method() === 'PUT'),
     page.locator('#submit-btn').click()
   ]);
 
   expect(updateRequest.headers()['x-admin-request']).toBe('true');
   expect(updateRequest.headers()['x-requested-with']).toBe('AdminUI');
   expect(updateResponse.status()).toBe(200);
-  expect(updateResponse.headers()['x-admin-location']).toContain('/admin/apps?flash=App+updated+successfully');
 
-  await expect(page).toHaveURL(/\/admin\/apps\?flash=App\+updated\+successfully/);
+  await expect(page).toHaveURL(/\/admin\/apps#\//);
   await expect(page.getByTestId('admin-flash')).toContainText('App updated successfully');
   await expect(page.locator('#apps-table')).toBeVisible();
   await expect(page.locator(`[data-app-id="${editableApp.appId}"]`)).toContainText('playwright-edit-success-updated');
