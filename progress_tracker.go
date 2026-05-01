@@ -37,11 +37,17 @@ type progressEntry struct {
 	finishedAt time.Time
 }
 
+// ProgressSink receives a copy of the latest progress state after tracker updates.
+type ProgressSink interface {
+	PublishProgress(ProgressSnapshot)
+}
+
 // ProgressTracker keeps one in-memory entry per app for the active deployment.
 // Finished entries persist for graceWindow before Cleanup removes them.
 type ProgressTracker struct {
 	mu          sync.RWMutex
 	entries     map[string]*progressEntry
+	sink        ProgressSink
 	graceWindow time.Duration
 	now         func() time.Time
 }
@@ -59,10 +65,16 @@ func newProgressTrackerWithClock(grace time.Duration, now func() time.Time) *Pro
 	}
 }
 
+// SetProgressSink connects the tracker to a fanout-only progress sink.
+func (pt *ProgressTracker) SetProgressSink(sink ProgressSink) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	pt.sink = sink
+}
+
 // Start registers a new in-progress deployment for appID, overwriting any existing entry.
 func (pt *ProgressTracker) Start(appID, jobID, tag string) {
 	pt.mu.Lock()
-	defer pt.mu.Unlock()
 
 	pt.entries[appID] = &progressEntry{
 		snapshot: ProgressSnapshot{
@@ -75,16 +87,20 @@ func (pt *ProgressTracker) Start(appID, jobID, tag string) {
 			UpdatedAt:  pt.now(),
 		},
 	}
+	snapshot := pt.entries[appID].snapshot
+	sink := pt.sink
+	pt.mu.Unlock()
+	publishProgress(sink, snapshot)
 }
 
 // Update sets the download progress for appID.
 // total == -1 means unknown size; Percent will be set to -1 in that case.
 func (pt *ProgressTracker) Update(appID string, downloaded, total int64, speedBPS float64) {
 	pt.mu.Lock()
-	defer pt.mu.Unlock()
 
 	e, ok := pt.entries[appID]
 	if !ok {
+		pt.mu.Unlock()
 		return
 	}
 
@@ -101,51 +117,74 @@ func (pt *ProgressTracker) Update(appID string, downloaded, total int64, speedBP
 	e.snapshot.SpeedBPS = speedBPS
 	e.snapshot.Percent = pct
 	e.snapshot.UpdatedAt = pt.now()
+	snapshot := e.snapshot
+	sink := pt.sink
+	pt.mu.Unlock()
+	publishProgress(sink, snapshot)
 }
 
 // SetPhase updates the current non-terminal phase for appID.
 // Missing entries are ignored.
 func (pt *ProgressTracker) SetPhase(appID, phase string) {
 	pt.mu.Lock()
-	defer pt.mu.Unlock()
 
 	e, ok := pt.entries[appID]
 	if !ok {
+		pt.mu.Unlock()
 		return
 	}
 
 	e.snapshot.Phase = phase
 	e.snapshot.UpdatedAt = pt.now()
+	snapshot := e.snapshot
+	sink := pt.sink
+	pt.mu.Unlock()
+	publishProgress(sink, snapshot)
 }
 
 // Finish marks the deployment for appID as succeeded.
 // The entry remains readable until Cleanup removes it after the grace window.
 func (pt *ProgressTracker) Finish(appID string) {
 	pt.mu.Lock()
-	defer pt.mu.Unlock()
 
 	e, ok := pt.entries[appID]
 	if !ok {
+		pt.mu.Unlock()
 		return
 	}
 	e.snapshot.Phase = StageSucceeded
 	e.snapshot.UpdatedAt = pt.now()
 	e.finishedAt = pt.now()
+	snapshot := e.snapshot
+	sink := pt.sink
+	pt.mu.Unlock()
+	publishProgress(sink, snapshot)
 }
 
 // Fail marks the deployment for appID as failed.
 // The entry remains readable until Cleanup removes it after the grace window.
 func (pt *ProgressTracker) Fail(appID string) {
 	pt.mu.Lock()
-	defer pt.mu.Unlock()
 
 	e, ok := pt.entries[appID]
 	if !ok {
+		pt.mu.Unlock()
 		return
 	}
 	e.snapshot.Phase = StageFailed
 	e.snapshot.UpdatedAt = pt.now()
 	e.finishedAt = pt.now()
+	snapshot := e.snapshot
+	sink := pt.sink
+	pt.mu.Unlock()
+	publishProgress(sink, snapshot)
+}
+
+func publishProgress(sink ProgressSink, snapshot ProgressSnapshot) {
+	if sink == nil {
+		return
+	}
+	sink.PublishProgress(snapshot)
 }
 
 // Snapshot returns the current progress for appID.

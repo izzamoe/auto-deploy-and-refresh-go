@@ -57,6 +57,10 @@ func normalizeDNSServer(dnsServer string) string {
 var defaultSleep = time.Sleep
 
 func DownloadWithRetry(client *http.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
+	return DownloadWithRetryContext(context.Background(), client, url, sleepFn)
+}
+
+func DownloadWithRetryContext(ctx context.Context, client *http.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
 	if sleepFn == nil {
 		sleepFn = defaultSleep
 	}
@@ -66,8 +70,18 @@ func DownloadWithRetry(client *http.Client, url string, sleepFn func(time.Durati
 
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		resp, err := client.Get(url)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			if isTransientError(err) {
 				lastErr = err
 				if attempt < maxAttempts-1 {
