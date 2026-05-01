@@ -5,9 +5,25 @@
   "scripts": {
     "pw:install": "playwright install chromium",
     "pw:smoke": "playwright test",
-    "test:playwright": "playwright test"
+    "test:playwright": "playwright test",
+    "admin:dev": "vite web/admin --config web/admin/vite.config.ts",
+    "admin:build": "vite build web/admin --config web/admin/vite.config.ts && touch web/admin/dist/.keep",
+    "admin:test": "vitest run web/admin --config web/admin/vite.config.ts"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.59.1"
+    "@playwright/test": "1.59.1",
+    "@testing-library/react": "^14.2.1",
+    "@testing-library/jest-dom": "^6.4.2",
+    "@types/react": "^18.2.56",
+    "@types/react-dom": "^18.2.19",
+    "@vitejs/plugin-react": "^4.2.1",
+    "jsdom": "^24.0.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.4",
+    "vitest": "^1.3.1"
   }
 }

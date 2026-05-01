@@ -1,7 +1,7 @@
 # Compiled binaries
 auto-deploy
 auto-deploy-arm64
-dist/
+/dist/
 
 # Runtime data
 deploy-queue.db
@@ -24,3 +24,5 @@ playwright-report/
 # Environment files (keep .example)
 .env
 auto-deploy.env
+web/admin/dist/*
+!web/admin/dist/.keep
