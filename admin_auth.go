@@ -5,6 +5,7 @@ import (
 	"embed"
 	"html/template"
 	"net/http"
+	"strings"
 )
 
 //go:embed templates/*.html
@@ -39,7 +40,7 @@ func BasicAuthMiddleware(expectedUsername, expectedPassword string) func(http.Ha
 			username, password, ok := r.BasicAuth()
 
 			if !ok {
-				requireAuth(w)
+				requireAuth(w, r)
 				return
 			}
 
@@ -48,7 +49,7 @@ func BasicAuthMiddleware(expectedUsername, expectedPassword string) func(http.Ha
 			passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword)) == 1
 
 			if !usernameMatch || !passwordMatch {
-				requireAuth(w)
+				requireAuth(w, r)
 				return
 			}
 
@@ -57,7 +58,11 @@ func BasicAuthMiddleware(expectedUsername, expectedPassword string) func(http.Ha
 	}
 }
 
-func requireAuth(w http.ResponseWriter) {
+func requireAuth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="auto-deploy admin"`)
+	if r.URL.Path == "/admin/api" || strings.HasPrefix(r.URL.Path, "/admin/api/") {
+		writeJSON(w, http.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
+		return
+	}
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
 }
