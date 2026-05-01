@@ -396,8 +396,12 @@ func (h *AppAdminHandler) ToggleApp(w http.ResponseWriter, r *http.Request) {
 func RegisterAdminAppRoutes(mux *http.ServeMux, handler *AppAdminHandler, middleware func(http.Handler) http.Handler) {
 	mux.Handle("GET /admin/apps", middleware(http.HandlerFunc(handler.ListApps)))
 	mux.Handle("GET /admin/apps/new", middleware(http.HandlerFunc(handler.NewAppForm)))
-	mux.Handle("POST /admin/apps/create", middleware(http.HandlerFunc(handler.CreateApp)))
 	mux.Handle("GET /admin/apps/{id}/edit", middleware(http.HandlerFunc(handler.EditAppForm)))
+	RegisterAdminAppActionRoutes(mux, handler, middleware)
+}
+
+func RegisterAdminAppActionRoutes(mux *http.ServeMux, handler *AppAdminHandler, middleware func(http.Handler) http.Handler) {
+	mux.Handle("POST /admin/apps/create", middleware(http.HandlerFunc(handler.CreateApp)))
 	mux.Handle("POST /admin/apps/{id}/update", middleware(http.HandlerFunc(handler.UpdateApp)))
 	mux.Handle("POST /admin/apps/{id}/delete", middleware(http.HandlerFunc(handler.DeleteApp)))
 	mux.Handle("POST /admin/apps/{id}/enable", middleware(http.HandlerFunc(handler.ToggleApp)))

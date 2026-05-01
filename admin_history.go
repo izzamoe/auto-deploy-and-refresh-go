@@ -187,5 +187,9 @@ func activeSnapshotForHistoryJob(tracker *ProgressTracker, appID string, job Job
 
 func RegisterAdminHistoryRoutes(mux *http.ServeMux, handler *HistoryAdminHandler, middleware func(http.Handler) http.Handler) {
 	mux.Handle("GET /admin/apps/{id}/history", middleware(http.HandlerFunc(handler.HistoryHandler)))
+	RegisterAdminHistoryActionRoutes(mux, handler, middleware)
+}
+
+func RegisterAdminHistoryActionRoutes(mux *http.ServeMux, handler *HistoryAdminHandler, middleware func(http.Handler) http.Handler) {
 	mux.Handle("POST /admin/apps/{id}/retry/{jobid}", middleware(http.HandlerFunc(handler.RetryHandler)))
 }

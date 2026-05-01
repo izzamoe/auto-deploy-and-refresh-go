@@ -251,7 +251,7 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 	}
 
 	_, err := q.db.Exec(
-		`UPDATE deploy_jobs SET status = ?, error_msg = ?, download_bytes = ?, download_duration_ms = ?, download_speed_bps = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE deploy_jobs SET status = ?, error_msg = ?, download_bytes = ?, download_duration_ms = ?, download_speed_bps = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('in_progress', 'cancel_requested')`,
 		status, nullMsg, downloadBytes, downloadDurationMs, downloadSpeedBPS, id,
 	)
 	return err
@@ -259,7 +259,7 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 
 func (q *DeployQueue) RecoverStale() error {
 	_, err := q.db.Exec(
-		`UPDATE deploy_jobs SET status = 'failed', error_msg = 'recovered: process crashed', updated_at = CURRENT_TIMESTAMP WHERE status = 'in_progress'`,
+		`UPDATE deploy_jobs SET status = 'failed', error_msg = 'recovered: process crashed', updated_at = CURRENT_TIMESTAMP WHERE status IN ('in_progress', 'cancel_requested')`,
 	)
 	return err
 }
@@ -267,7 +267,7 @@ func (q *DeployQueue) RecoverStale() error {
 func (q *DeployQueue) IsDuplicate(appID, tag string) (bool, error) {
 	var count int
 	err := q.db.QueryRow(
-		`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND tag = ? AND status IN ('pending', 'in_progress')`,
+		`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND tag = ? AND status IN ('pending', 'in_progress', 'cancel_requested')`,
 		appID, tag,
 	).Scan(&count)
 	if err != nil {

@@ -1,0 +1,420 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func newTestAdminAPI(t *testing.T) (*http.ServeMux, *AppStore, *DeployQueue) {
+	t.Helper()
+	db := newTestDB(t)
+	store, err := NewAppStore(db)
+	if err != nil {
+		t.Fatalf("NewAppStore: %v", err)
+	}
+	queue, err := NewDeployQueue(db, 10)
+	if err != nil {
+		t.Fatalf("NewDeployQueue: %v", err)
+	}
+	handler := NewAdminAPIHandler(store, queue, NewProgressTracker(), NewCancelService(queue))
+	mux := http.NewServeMux()
+	RegisterAdminAPIRoutes(mux, handler, BasicAuthMiddleware("admin", "secret"))
+	return mux, store, queue
+}
+
+func adminAPIRequest(method, path, body string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.SetBasicAuth("admin", "secret")
+	if method != http.MethodGet || body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
+}
+
+func serveAdminAPI(t *testing.T, mux *http.ServeMux, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if contentType := rr.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("expected JSON Content-Type, got %q with body %s", contentType, rr.Body.String())
+	}
+	return rr
+}
+
+func decodeAdminAPIResponse[T any](t *testing.T, rr *httptest.ResponseRecorder) T {
+	t.Helper()
+	var out T
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode JSON response: %v; body=%s", err, rr.Body.String())
+	}
+	return out
+}
+
+func TestAdminAPIUnauthorizedReturnsJSON(t *testing.T) {
+	mux, _, _ := newTestAdminAPI(t)
+
+	req := httptest.NewRequest("GET", "/admin/api/apps", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
+		t.Fatalf("expected WWW-Authenticate header, got %q", got)
+	}
+	if contentType := rr.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("expected JSON Content-Type, got %q", contentType)
+	}
+	body := decodeAdminAPIResponse[response](t, rr)
+	if body.Status != "error" || body.Error != "unauthorized" {
+		t.Fatalf("unexpected auth error body: %+v", body)
+	}
+}
+
+func TestAdminAPIAppsCRUD(t *testing.T) {
+	mux, store, _ := newTestAdminAPI(t)
+
+	createBody := `{"name":"api-app","secret":"secret-1","binaryPath":"/opt/api-app","serviceName":"api-app.service","githubRepo":"owner/api-app","artifactName":"api-app-linux"}`
+	createRR := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps", createBody))
+	if createRR.Code != http.StatusCreated {
+		t.Fatalf("expected 201 create, got %d body=%s", createRR.Code, createRR.Body.String())
+	}
+	created := decodeAdminAPIResponse[struct {
+		Status string              `json:"status"`
+		App    adminAPIAppResponse `json:"app"`
+	}](t, createRR)
+	if created.Status != "created" || created.App.ID == "" || created.App.Name != "api-app" {
+		t.Fatalf("unexpected create response: %+v", created)
+	}
+
+	listRR := serveAdminAPI(t, mux, adminAPIRequest("GET", "/admin/api/apps", ""))
+	if listRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 list, got %d", listRR.Code)
+	}
+	listed := decodeAdminAPIResponse[struct {
+		Apps []adminAPIAppResponse `json:"apps"`
+	}](t, listRR)
+	if len(listed.Apps) != 1 || listed.Apps[0].ID != created.App.ID {
+		t.Fatalf("unexpected app list: %+v", listed)
+	}
+
+	getRR := serveAdminAPI(t, mux, adminAPIRequest("GET", "/admin/api/apps/"+created.App.ID, ""))
+	if getRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 get, got %d", getRR.Code)
+	}
+	got := decodeAdminAPIResponse[struct {
+		App adminAPIAppResponse `json:"app"`
+	}](t, getRR)
+	if got.App.BinaryPath != "/opt/api-app" {
+		t.Fatalf("unexpected get response: %+v", got)
+	}
+
+	updateBody := `{"name":"api-app-updated","binaryPath":"/opt/api-app-v2","serviceName":"api-app-v2.service","githubRepo":"owner/api-app-v2","artifactName":"api-app-v2-linux","enabled":false}`
+	updateRR := serveAdminAPI(t, mux, adminAPIRequest("PUT", "/admin/api/apps/"+created.App.ID, updateBody))
+	if updateRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 update, got %d body=%s", updateRR.Code, updateRR.Body.String())
+	}
+	updated := decodeAdminAPIResponse[struct {
+		Status string              `json:"status"`
+		App    adminAPIAppResponse `json:"app"`
+	}](t, updateRR)
+	if updated.App.Name != "api-app-updated" || updated.App.Enabled {
+		t.Fatalf("unexpected update response: %+v", updated)
+	}
+
+	toggleRR := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps/"+created.App.ID+"/toggle", ""))
+	if toggleRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 toggle, got %d", toggleRR.Code)
+	}
+	toggled := decodeAdminAPIResponse[struct {
+		App adminAPIAppResponse `json:"app"`
+	}](t, toggleRR)
+	if !toggled.App.Enabled {
+		t.Fatalf("expected toggle to re-enable app, got %+v", toggled)
+	}
+
+	deleteRR := serveAdminAPI(t, mux, adminAPIRequest("DELETE", "/admin/api/apps/"+created.App.ID, ""))
+	if deleteRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 delete, got %d body=%s", deleteRR.Code, deleteRR.Body.String())
+	}
+	if _, err := store.Get(created.App.ID); err == nil {
+		t.Fatal("expected app to be deleted")
+	}
+
+	missingDeleteRR := serveAdminAPI(t, mux, adminAPIRequest("DELETE", "/admin/api/apps/"+created.App.ID, ""))
+	if missingDeleteRR.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 delete missing app, got %d body=%s", missingDeleteRR.Code, missingDeleteRR.Body.String())
+	}
+}
+
+func TestAdminAPIUpdateDuplicateSecretDoesNotPartiallyUpdate(t *testing.T) {
+	mux, store, _ := newTestAdminAPI(t)
+	appA, err := store.Create("app-a", "secret-a", "/bin/a", "a.service", "owner/a", "artifact-a")
+	if err != nil {
+		t.Fatalf("create app A: %v", err)
+	}
+	_, err = store.Create("app-b", "secret-b", "/bin/b", "b.service", "owner/b", "artifact-b")
+	if err != nil {
+		t.Fatalf("create app B: %v", err)
+	}
+
+	updateBody := `{"name":"app-a-mutated","secret":"secret-b","binaryPath":"/bin/a-mutated","serviceName":"a-mutated.service","githubRepo":"owner/a-mutated","artifactName":"artifact-a-mutated"}`
+	rr := serveAdminAPI(t, mux, adminAPIRequest("PUT", "/admin/api/apps/"+appA.ID, updateBody))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 duplicate secret update, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	reloaded, err := store.Get(appA.ID)
+	if err != nil {
+		t.Fatalf("reload app A: %v", err)
+	}
+	if reloaded.Name != appA.Name || reloaded.BinaryPath != appA.BinaryPath || reloaded.ServiceName != appA.ServiceName || reloaded.GithubRepo != appA.GithubRepo || reloaded.ArtifactName != appA.ArtifactName {
+		t.Fatalf("expected duplicate secret failure to leave metadata unchanged, got %+v want %+v", reloaded, appA)
+	}
+}
+
+func TestAdminAPIManualDeployQueuesJSON(t *testing.T) {
+	mux, store, queue := newTestAdminAPI(t)
+	app, err := store.Create("deploy-app", "secret", "/bin/deploy", "deploy.service", "owner/deploy", "artifact")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+
+	rr := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps/"+app.ID+"/deploy", `{"tag":"v1.2.3"}`))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 deploy, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	queued := decodeAdminAPIResponse[struct {
+		Status string `json:"status"`
+		Tag    string `json:"tag"`
+	}](t, rr)
+	if queued.Status != "queued" || queued.Tag != "v1.2.3" {
+		t.Fatalf("unexpected deploy response: %+v", queued)
+	}
+	jobs, err := queue.ListHistory(app.ID, 10)
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].Trigger != "manual_deploy" || jobs[0].Status != JobStatusPending {
+		t.Fatalf("expected one pending manual_deploy job, got %+v", jobs)
+	}
+
+	dupRR := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps/"+app.ID+"/deploy", `{"tag":"v1.2.3"}`))
+	if dupRR.Code != http.StatusConflict {
+		t.Fatalf("expected 409 duplicate deploy, got %d body=%s", dupRR.Code, dupRR.Body.String())
+	}
+	errBody := decodeAdminAPIResponse[adminAPIErrorResponse](t, dupRR)
+	if errBody.Error != "Deploy already queued for this tag" {
+		t.Fatalf("unexpected duplicate error body: %+v", errBody)
+	}
+}
+
+func TestAdminAPIHistoryListAndRetry(t *testing.T) {
+	mux, store, queue := newTestAdminAPI(t)
+	app, err := store.Create("history-app", "secret", "/bin/history", "history.service", "owner/history", "artifact")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := queue.Enqueue(app.ID, "v1.0.0"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	jobID, _, err := queue.DequeueNext(app.ID)
+	if err != nil {
+		t.Fatalf("DequeueNext: %v", err)
+	}
+	if err := queue.MarkDone(jobID, false, "failed", nil); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	listRR := serveAdminAPI(t, mux, adminAPIRequest("GET", "/admin/api/history?appId="+app.ID, ""))
+	if listRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 history, got %d", listRR.Code)
+	}
+	listed := decodeAdminAPIResponse[struct {
+		App     adminAPIAppResponse   `json:"app"`
+		History []adminAPIJobResponse `json:"history"`
+	}](t, listRR)
+	if listed.App.ID != app.ID || len(listed.History) != 1 || listed.History[0].ID != jobID {
+		t.Fatalf("unexpected history response: %+v", listed)
+	}
+
+	retryRR := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/history/"+jobID+"/retry", ""))
+	if retryRR.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 retry, got %d body=%s", retryRR.Code, retryRR.Body.String())
+	}
+	retry := decodeAdminAPIResponse[struct {
+		Status string `json:"status"`
+		JobID  string `json:"jobId"`
+	}](t, retryRR)
+	if retry.Status != "queued" || retry.JobID == "" {
+		t.Fatalf("unexpected retry response: %+v", retry)
+	}
+	count, err := queue.PendingCount(app.ID)
+	if err != nil {
+		t.Fatalf("PendingCount: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one pending retry job, got %d", count)
+	}
+}
+
+func TestAdminAPICancelEndpoints(t *testing.T) {
+	mux, store, queue := newTestAdminAPI(t)
+	app, err := store.Create("cancel-app", "secret", "/bin/cancel", "cancel.service", "owner/cancel", "artifact")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := queue.Enqueue(app.ID, "v-pending"); err != nil {
+		t.Fatalf("Enqueue pending: %v", err)
+	}
+	pendingJobs, err := queue.ListHistory(app.ID, 10)
+	if err != nil || len(pendingJobs) != 1 {
+		t.Fatalf("ListHistory pending: jobs=%+v err=%v", pendingJobs, err)
+	}
+
+	jobCancelRR := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/jobs/"+pendingJobs[0].ID+"/cancel", ""))
+	if jobCancelRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 job cancel, got %d body=%s", jobCancelRR.Code, jobCancelRR.Body.String())
+	}
+	jobCancel := decodeAdminAPIResponse[struct {
+		Status string                    `json:"status"`
+		Result adminAPICancelJobResponse `json:"result"`
+	}](t, jobCancelRR)
+	if jobCancel.Result.Status != JobStatusCanceled || jobCancel.Result.Outcome != CancelOutcomePendingCanceled {
+		t.Fatalf("unexpected job cancel response: %+v", jobCancel)
+	}
+	var rawJobCancel map[string]any
+	if err := json.Unmarshal(jobCancelRR.Body.Bytes(), &rawJobCancel); err != nil {
+		t.Fatalf("decode raw job cancel: %v", err)
+	}
+	rawJobResult := rawJobCancel["result"].(map[string]any)
+	if _, ok := rawJobResult["jobId"]; !ok {
+		t.Fatalf("expected camelCase jobId in cancel response, got %+v", rawJobResult)
+	}
+	if _, ok := rawJobResult["JobID"]; ok {
+		t.Fatalf("expected no Go-style JobID key in cancel response, got %+v", rawJobResult)
+	}
+
+	if err := queue.Enqueue(app.ID, "v-active"); err != nil {
+		t.Fatalf("Enqueue active: %v", err)
+	}
+	activeID, _, err := queue.DequeueNext(app.ID)
+	if err != nil {
+		t.Fatalf("DequeueNext: %v", err)
+	}
+	appCancelRR := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps/"+app.ID+"/cancel", ""))
+	if appCancelRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 app cancel, got %d body=%s", appCancelRR.Code, appCancelRR.Body.String())
+	}
+	appCancel := decodeAdminAPIResponse[struct {
+		Status string                    `json:"status"`
+		Result adminAPICancelAppResponse `json:"result"`
+	}](t, appCancelRR)
+	if appCancel.Result.AppID != app.ID || appCancel.Result.Active != 1 {
+		t.Fatalf("unexpected app cancel response: %+v", appCancel)
+	}
+	var status string
+	if err := queue.db.QueryRow(`SELECT status FROM deploy_jobs WHERE id = ?`, activeID).Scan(&status); err != nil {
+		t.Fatalf("query active status: %v", err)
+	}
+	if status != JobStatusCancelRequested {
+		t.Fatalf("expected active job cancel_requested, got %q", status)
+	}
+}
+
+func TestAdminAPIAppCancelReturnsCounts(t *testing.T) {
+	mux, store, queue := newTestAdminAPI(t)
+	app, err := store.Create("cancel-counts-app", "secret", "/bin/cancel-counts", "cancel-counts.service", "owner/cancel-counts", "artifact")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	activeID := dequeueJob(t, queue, app.ID, "v-active")
+	terminalID := dequeueJob(t, queue, app.ID, "v-terminal")
+	if err := queue.MarkDone(terminalID, true, "", nil); err != nil {
+		t.Fatalf("MarkDone terminal: %v", err)
+	}
+	pendingID := enqueueJob(t, queue, app.ID, "v-pending")
+	otherAppID := enqueueJob(t, queue, "other-app", "v-other")
+
+	rr := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps/"+app.ID+"/cancel", ""))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 app cancel, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	decoded := decodeAdminAPIResponse[struct {
+		Status string                    `json:"status"`
+		Result adminAPICancelAppResponse `json:"result"`
+	}](t, rr)
+	if decoded.Status != "ok" {
+		t.Fatalf("status = %q, want ok", decoded.Status)
+	}
+	result := decoded.Result
+	if result.AppID != app.ID || result.Total != 3 || result.PendingCanceled != 1 || result.ActiveSignaled != 1 || result.AlreadyTerminal != 1 {
+		t.Fatalf("unexpected cancel counts: %+v", result)
+	}
+	if result.Pending != 1 || result.Active != 1 || result.Terminal != 1 || result.Unknown != 0 {
+		t.Fatalf("unexpected legacy aggregate counts: %+v", result)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	rawResult := raw["result"].(map[string]any)
+	for key, want := range map[string]float64{"pendingCanceled": 1, "activeSignaled": 1, "alreadyTerminal": 1} {
+		got, ok := rawResult[key].(float64)
+		if !ok || got != want {
+			t.Fatalf("raw result[%q] = %v (ok=%v), want %v in %s", key, rawResult[key], ok, want, rr.Body.String())
+		}
+	}
+
+	assertJobStatus(t, queue, pendingID, JobStatusCanceled)
+	assertJobStatus(t, queue, activeID, JobStatusCancelRequested)
+	assertJobStatus(t, queue, terminalID, JobStatusSucceeded)
+	assertJobStatus(t, queue, otherAppID, JobStatusPending)
+}
+
+func TestAdminAPIErrorBodiesAreJSON(t *testing.T) {
+	mux, _, _ := newTestAdminAPI(t)
+
+	invalidCreate := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps", `{"name":"missing-fields"}`))
+	if invalidCreate.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 validation, got %d", invalidCreate.Code)
+	}
+	validation := decodeAdminAPIResponse[adminAPIErrorResponse](t, invalidCreate)
+	if validation.Status != "error" || validation.Error != "Validation failed" || len(validation.Errors) == 0 {
+		t.Fatalf("unexpected validation body: %+v", validation)
+	}
+
+	badJSON := serveAdminAPI(t, mux, adminAPIRequest("POST", "/admin/api/apps", `{`))
+	if badJSON.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 bad JSON, got %d", badJSON.Code)
+	}
+	badBody := decodeAdminAPIResponse[adminAPIErrorResponse](t, badJSON)
+	if badBody.Error != "Invalid JSON body" {
+		t.Fatalf("unexpected bad JSON body: %+v", badBody)
+	}
+
+	notFound := serveAdminAPI(t, mux, adminAPIRequest("GET", "/admin/api/does-not-exist", ""))
+	if notFound.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 JSON not found, got %d", notFound.Code)
+	}
+	notFoundBody := decodeAdminAPIResponse[adminAPIErrorResponse](t, notFound)
+	if notFoundBody.Error != "Not found" {
+		t.Fatalf("unexpected not found body: %+v", notFoundBody)
+	}
+
+	missingContentTypeReq := httptest.NewRequest("POST", "/admin/api/apps", strings.NewReader(`{"name":"x"}`))
+	missingContentTypeReq.SetBasicAuth("admin", "secret")
+	missingContentType := serveAdminAPI(t, mux, missingContentTypeReq)
+	if missingContentType.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415 for missing JSON Content-Type, got %d body=%s", missingContentType.Code, missingContentType.Body.String())
+	}
+	missingContentTypeBody := decodeAdminAPIResponse[adminAPIErrorResponse](t, missingContentType)
+	if missingContentTypeBody.Error != "Content-Type must be application/json" {
+		t.Fatalf("unexpected missing Content-Type body: %+v", missingContentTypeBody)
+	}
+}
