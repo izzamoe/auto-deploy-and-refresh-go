@@ -39,6 +39,5 @@ clean:
 	mkdir -p web/admin/dist
 	touch web/admin/dist/.keep
 
-test:
+test: admin-ui
 	go test ./...
-
