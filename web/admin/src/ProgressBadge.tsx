@@ -1,6 +1,7 @@
 import type { NormalizedProgress } from "./AdminEventProvider";
 
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 
 const currentActivityByStage: Record<string, string> = {
 	queued: "Waiting in deployment queue",
@@ -99,7 +100,7 @@ export function ProgressBadge({
 	const transferSpeed = formatTransferSpeed(progress?.bytesPerSecond);
 
 	return (
-		<div data-progress-region>
+		<div data-progress-region className="space-y-3">
 			<Badge
 				variant={progressStatusVariant(currentStatus)}
 				className={`deploy-status-badge status-${currentStatus}`}
@@ -108,7 +109,10 @@ export function ProgressBadge({
 			</Badge>
 
 			{progress && (
-				<div data-progress-live>
+				<div data-progress-live className="space-y-2 text-sm text-muted-foreground">
+					{progress.percent !== undefined && (
+						<Progress value={Math.max(0, Math.min(100, progress.percent))} aria-label="Deployment progress" />
+					)}
 					{doneBytes && totalBytes && (
 						<div>
 							{doneBytes} / {totalBytes}
