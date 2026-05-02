@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 
 export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (hash: string, flashMessage?: string) => void; setFlash: (flash: { message: string, type: "success" | "error" }) => void }) {
 	const [formData, setFormData] = useState({
@@ -44,6 +45,10 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 
 	const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		setFormData({ ...formData, [e.target.name]: e.target.value });
+	};
+
+	const handleEnabledChange = (enabled: boolean) => {
+		setFormData({ ...formData, enabled });
 	};
 
 	const handleSubmit = async (e: React.FormEvent) => {
@@ -153,6 +158,24 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 								<Input type="text" id="artifact_name" name="artifact_name" value={formData.artifact_name} onChange={handleChange} required />
 							</div>
 						</div>
+
+						{id && (
+							<div className="flex items-center justify-between rounded-lg border bg-background/80 p-4">
+								<div className="space-y-0.5">
+									<Label htmlFor="enabled">Enable deployments</Label>
+									<p className="text-sm text-muted-foreground">
+										Disabled apps stay registered but ignore webhook and manual deploy actions.
+									</p>
+								</div>
+								<Switch
+									id="enabled"
+									name="enabled"
+									checked={formData.enabled}
+									onCheckedChange={handleEnabledChange}
+									aria-label="Enable deployments"
+								/>
+							</div>
+						)}
 					</CardContent>
 
 					<CardFooter className="form-actions flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:justify-end">

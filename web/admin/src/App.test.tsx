@@ -52,4 +52,13 @@ describe("App component", () => {
 		expect(screen.queryByTestId("admin-flash")).toBeNull();
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
 	});
+
+	it("does not show the enabled switch while creating an app", () => {
+		window.history.replaceState({}, "", "/admin/apps#/apps/new");
+
+		render(<App />);
+
+		expect(screen.getByRole("heading", { name: "New App" })).toBeDefined();
+		expect(screen.queryByRole("switch", { name: "Enable deployments" })).toBeNull();
+	});
 });
