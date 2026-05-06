@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/cloudwego/hertz/pkg/app"
 )
 
 func TestAdminAuthRequiresCredentials(t *testing.T) {
@@ -89,6 +92,51 @@ func TestAdminAuthAcceptsCorrectCredentials(t *testing.T) {
 	}
 }
 
+func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
+	middleware := HertzBasicAuthMiddleware("admin", "secret")
+	c := newHertzTestContext("/admin/apps")
+
+	middleware(context.Background(), c)
+
+	if c.Response.StatusCode() != http.StatusUnauthorized {
+		t.Errorf("Expected 401 Unauthorized, got %d", c.Response.StatusCode())
+	}
+	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != `Basic realm="auto-deploy admin"` {
+		t.Errorf("Expected WWW-Authenticate header %q, got %q", `Basic realm="auto-deploy admin"`, got)
+	}
+}
+
+func TestHertzAdminAuthRejectsWrongPassword(t *testing.T) {
+	middleware := HertzBasicAuthMiddleware("admin", "secret")
+	c := newHertzTestContext("/admin/apps")
+	c.Request.SetBasicAuth("admin", "wrong")
+
+	middleware(context.Background(), c)
+
+	if c.Response.StatusCode() != http.StatusUnauthorized {
+		t.Errorf("Expected 401 Unauthorized for wrong password, got %d", c.Response.StatusCode())
+	}
+}
+
+func TestHertzAdminAuthAcceptsCorrectCredentials(t *testing.T) {
+	middleware := HertzBasicAuthMiddleware("admin", "secret")
+	c := newHertzTestContext("/admin/apps")
+	c.Request.SetBasicAuth("admin", "secret")
+	c.SetHandlers(app.HandlersChain{func(ctx context.Context, c *app.RequestContext) {
+		c.SetStatusCode(http.StatusOK)
+		c.Response.SetBodyString("success")
+	}})
+
+	middleware(context.Background(), c)
+
+	if c.Response.StatusCode() != http.StatusOK {
+		t.Errorf("Expected 200 OK for correct credentials, got %d", c.Response.StatusCode())
+	}
+	if body := string(c.Response.Body()); body != "success" {
+		t.Errorf("Expected body 'success', got %q", body)
+	}
+}
+
 func TestAdminLayoutRendersAppsTableSelector(t *testing.T) {
 	cfg := &ServiceConfig{}
 	adminHandler, err := NewAdminHandler(cfg)
@@ -126,4 +174,10 @@ func TestAdminLayoutRendersNavigationLinks(t *testing.T) {
 	if !strings.Contains(output, `href="/admin/apps"`) {
 		t.Errorf("Expected template output to contain navigation link 'href=\"/admin/apps\"', got %s", output)
 	}
+}
+
+func newHertzTestContext(path string) *app.RequestContext {
+	c := app.NewContext(0)
+	c.Request.SetRequestURI(path)
+	return c
 }

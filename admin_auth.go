@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"embed"
 	"html/template"
 	"net/http"
 	"strings"
+
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
 //go:embed templates/*.html
@@ -58,6 +62,25 @@ func BasicAuthMiddleware(expectedUsername, expectedPassword string) func(http.Ha
 	}
 }
 
+func HertzBasicAuthMiddleware(expectedUsername, expectedPassword string) app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		username, password, ok := c.Request.BasicAuth()
+		if !ok {
+			hertzRequireAuth(c)
+			c.Abort()
+			return
+		}
+		usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(expectedUsername)) == 1
+		passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword)) == 1
+		if !usernameMatch || !passwordMatch {
+			hertzRequireAuth(c)
+			c.Abort()
+			return
+		}
+		c.Next(ctx)
+	}
+}
+
 func requireAuth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="auto-deploy admin"`)
 	if r.URL.Path == "/admin/api" || strings.HasPrefix(r.URL.Path, "/admin/api/") {
@@ -65,4 +88,14 @@ func requireAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+}
+
+func hertzRequireAuth(c *app.RequestContext) {
+	c.Header("WWW-Authenticate", `Basic realm="auto-deploy admin"`)
+	path := string(c.Request.URI().Path())
+	if path == "/admin/api" || strings.HasPrefix(path, "/admin/api/") {
+		c.JSON(consts.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
+		return
+	}
+	c.String(consts.StatusUnauthorized, "Unauthorized")
 }
