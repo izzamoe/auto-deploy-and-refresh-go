@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/cloudwego/hertz/pkg/common/hlog"
 )
 
 var (
@@ -39,6 +41,13 @@ type response struct {
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+
+	hertzLogger, err := NewZapLogger()
+	if err != nil {
+		slog.Error("zap logger init failed", "err", err)
+		os.Exit(1)
+	}
+	hlog.SetLogger(hertzLogger)
 
 	serviceCfg, err := LoadServiceConfig()
 	if err != nil {
