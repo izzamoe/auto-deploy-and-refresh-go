@@ -16,6 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 )
 
@@ -37,6 +40,12 @@ type response struct {
 	Status string `json:"status"`
 	Tag    string `json:"tag,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func main() {
@@ -126,14 +135,30 @@ func main() {
 	RegisterAdminHistoryActionRoutes(mux, historyAdminHandler, authMiddleware)
 	RegisterAdminSPARoutes(mux, authMiddleware)
 
-	server := &http.Server{
-		Addr:    serviceCfg.ListenAddr,
-		Handler: mux,
-	}
+	h := server.New(
+		server.WithHostPorts(serviceCfg.ListenAddr),
+		server.WithReadTimeout(45*time.Second),
+		server.WithWriteTimeout(45*time.Second),
+		server.WithIdleTimeout(90*time.Second),
+		server.WithKeepAliveTimeout(1*time.Minute),
+		server.WithMaxRequestBodySize(16*1024*1024),
+		server.WithMaxHeaderBytes(1<<20),
+		server.WithMaxKeepBodySize(4*1024*1024),
+		server.WithReadBufferSize(4*1024),
+		server.WithKeepAlive(true),
+		server.WithExitWaitTime(30*time.Second),
+		server.WithNetwork("tcp"),
+	)
+
+	setupMiddleware(h)
+
+	h.Any("/*path", func(ctx context.Context, c *app.RequestContext) {
+		adaptor.HertzHandler(mux)(ctx, c)
+	})
 
 	go func() {
 		slog.Info("starting", "addr", serviceCfg.ListenAddr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := h.Run(); err != nil {
 			slog.Error("server error", "err", err)
 			os.Exit(1)
 		}
@@ -147,10 +172,11 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	if err := h.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
 }
+
 
 func multiAppWebhookHandler(admission *AdmissionService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +184,6 @@ func multiAppWebhookHandler(admission *AdmissionService) http.HandlerFunc {
 			writeJSON(w, http.StatusMethodNotAllowed, response{Status: "error", Error: "method not allowed"})
 			return
 		}
-
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			writeJSON(w, http.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
@@ -597,10 +622,4 @@ func removeIfExists(path string) error {
 		return err
 	}
 	return nil
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
 }
