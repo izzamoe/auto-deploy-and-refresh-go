@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/coder/websocket"
 )
 
@@ -165,6 +168,14 @@ func makeStringSet(values []string) map[string]struct{} {
 	return set
 }
 
+func (h *ProgressAdminHandler) ProgressWebSocketHertz(ctx context.Context, c *app.RequestContext) {
+	adaptor.HertzHandler(http.HandlerFunc(h.ProgressWebSocket))(ctx, c)
+}
+
 func RegisterAdminProgressRoutes(mux *http.ServeMux, handler *ProgressAdminHandler, middleware func(http.Handler) http.Handler) {
 	mux.Handle("GET /admin/progress/ws", middleware(http.HandlerFunc(handler.ProgressWebSocket)))
+}
+
+func RegisterAdminProgressRoutesHertz(h *server.Hertz, handler *ProgressAdminHandler, auth app.HandlerFunc) {
+	h.GET("/admin/progress/ws", auth, handler.ProgressWebSocketHertz)
 }

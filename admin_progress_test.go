@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/common/ut"
 	"github.com/coder/websocket"
 )
 
@@ -277,4 +279,53 @@ func expectNoProgressWebSocketFrame(t *testing.T, conn *websocket.Conn, timeout 
 
 func progressWSURL(srv *httptest.Server, path string) string {
 	return "ws" + strings.TrimPrefix(srv.URL, "http") + path
+}
+
+func makeProgressHertzEngine(t *testing.T, tracker *ProgressTracker) *server.Hertz {
+	t.Helper()
+	tmpls := make(map[string]*template.Template)
+	for _, page := range []string{"apps_list.html", "history.html"} {
+		tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+page)
+		if err != nil {
+			t.Fatalf("parse %s: %v", page, err)
+		}
+		tmpls[page] = tmpl
+	}
+	store := newTestAppStoreWithJobs(t)
+	queue, err := NewDeployQueue(store.db, 10)
+	if err != nil {
+		t.Fatalf("NewDeployQueue: %v", err)
+	}
+	h := server.New(server.WithHostPorts("127.0.0.1:0"))
+	handler := NewProgressAdminHandler(tracker, store, queue, tmpls)
+	auth := HertzBasicAuthMiddleware("admin", "secret")
+	RegisterAdminProgressRoutesHertz(h, handler, auth)
+	return h
+}
+
+func TestRegisterAdminProgressRoutesHertz_RequiresAuth(t *testing.T) {
+	tracker := NewProgressTracker()
+	engine := makeProgressHertzEngine(t, tracker)
+
+	w := ut.PerformRequest(engine.Engine, "GET", "/admin/progress/ws", nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
+		t.Fatalf("expected WWW-Authenticate header, got %q", got)
+	}
+}
+
+func TestRegisterAdminProgressRoutesHertz_RejectsWrongPassword(t *testing.T) {
+	tracker := NewProgressTracker()
+	engine := makeProgressHertzEngine(t, tracker)
+
+	w := ut.PerformRequest(engine.Engine, "GET", "/admin/progress/ws", nil, ut.Header{Key: "Authorization", Value: "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:wrong"))})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestRegisterAdminProgressRoutesHertz_AcceptsAuth(t *testing.T) {
+	t.Skip("WebSocket upgrade requires a real HTTP connection; covered by standard HTTP WebSocket tests")
 }

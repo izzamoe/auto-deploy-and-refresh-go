@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
 )
 
 type HistoryAdminHandler struct {
@@ -192,4 +196,92 @@ func RegisterAdminHistoryRoutes(mux *http.ServeMux, handler *HistoryAdminHandler
 
 func RegisterAdminHistoryActionRoutes(mux *http.ServeMux, handler *HistoryAdminHandler, middleware func(http.Handler) http.Handler) {
 	mux.Handle("POST /admin/apps/{id}/retry/{jobid}", middleware(http.HandlerFunc(handler.RetryHandler)))
+}
+
+func (h *HistoryAdminHandler) HistoryHandlerHertz(ctx context.Context, c *app.RequestContext) {
+	id := c.Param("id")
+	data, err := h.loadHistoryData(id, c.Query("flash"), c.Query("flash_error") == "1")
+	if err != nil {
+		if errors.Is(err, errHistoryAppNotFound) {
+			c.String(http.StatusNotFound, "App not found")
+			return
+		}
+		c.String(http.StatusInternalServerError, "Failed to list history")
+		return
+	}
+
+	if err := renderAdminTemplateHertz(c, h.templates["history.html"], data); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+	}
+}
+
+func (h *HistoryAdminHandler) RetryHandlerHertz(ctx context.Context, c *app.RequestContext) {
+	id := c.Param("id")
+	app, err := h.store.Get(id)
+	if err != nil {
+		c.String(http.StatusNotFound, "App not found")
+		return
+	}
+
+	if !app.Enabled {
+		h.respondRetryResultHertz(c, id, "Cannot retry disabled app", true)
+		return
+	}
+
+	jobID := c.Param("jobid")
+	job, err := h.queue.GetJob(jobID)
+	if err != nil {
+		c.String(http.StatusNotFound, "Job not found")
+		return
+	}
+	if job.AppID != app.ID {
+		c.String(http.StatusNotFound, "Job not found")
+		return
+	}
+
+	_, err = h.queue.CreateRetryJob(jobID, app.ID, job.Tag)
+	if err != nil {
+		if errors.Is(err, ErrDuplicate) {
+			h.respondRetryResultHertz(c, id, "Deploy already pending for this tag", true)
+			return
+		}
+		c.String(http.StatusInternalServerError, "Failed to create retry job: "+err.Error())
+		return
+	}
+
+	h.respondRetryResultHertz(c, id, "Retry queued", false)
+}
+
+func (h *HistoryAdminHandler) respondRetryResultHertz(c *app.RequestContext, id, flash string, flashIsError bool) {
+	if !isAdminUIRequestHertz(c) {
+		adminUINavigateHertz(c, historyLocation(id, flash, flashIsError))
+		return
+	}
+
+	data, err := h.loadHistoryData(id, flash, flashIsError)
+	if err != nil {
+		if errors.Is(err, errHistoryAppNotFound) {
+			c.String(http.StatusNotFound, "App not found")
+			return
+		}
+		c.String(http.StatusInternalServerError, "Failed to list history")
+		return
+	}
+
+	if err := h.templates["history.html"].ExecuteTemplate(c.Response.BodyWriter(), "flash", data); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.templates["history.html"].ExecuteTemplate(c.Response.BodyWriter(), "history_table_region", data); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+	}
+}
+
+func RegisterAdminHistoryRoutesHertz(hz *server.Hertz, handler *HistoryAdminHandler, auth app.HandlerFunc) {
+	hz.GET("/admin/apps/:id/history", auth, handler.HistoryHandlerHertz)
+	RegisterAdminHistoryActionRoutesHertz(hz, handler, auth)
+}
+
+func RegisterAdminHistoryActionRoutesHertz(hz *server.Hertz, handler *HistoryAdminHandler, auth app.HandlerFunc) {
+	hz.POST("/admin/apps/:id/retry/:jobid", auth, handler.RetryHandlerHertz)
 }

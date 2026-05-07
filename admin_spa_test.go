@@ -1,11 +1,15 @@
 package main
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/common/ut"
 )
 
 func newTestAdminSPAMux(t *testing.T) *http.ServeMux {
@@ -164,6 +168,73 @@ func TestAdminSPARoutesRequireAuth(t *testing.T) {
 				t.Fatalf("expected 401, got %d body=%s", rr.Code, rr.Body.String())
 			}
 			if got := rr.Header().Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
+				t.Fatalf("expected WWW-Authenticate header, got %q", got)
+			}
+		})
+	}
+}
+
+func newTestAdminSPAHertzEngine(t *testing.T) *server.Hertz {
+	t.Helper()
+	h := server.New(server.WithHostPorts("127.0.0.1:0"))
+	auth := HertzBasicAuthMiddleware("admin", "secret")
+	RegisterAdminSPARoutesHertz(h, auth)
+	return h
+}
+
+func TestAdminSPARoutesHertzFallbackServesClientRoutes(t *testing.T) {
+	engine := newTestAdminSPAHertzEngine(t)
+
+	for _, path := range []string{"/admin", "/admin/apps"} {
+		t.Run(path, func(t *testing.T) {
+			w := ut.PerformRequest(engine.Engine, http.MethodGet, path, nil, ut.Header{Key: "Authorization", Value: "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:secret"))})
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+			}
+			if contentType := w.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/html") {
+				t.Fatalf("expected HTML Content-Type, got %q", contentType)
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, `<div id="root"></div>`) || !strings.Contains(body, "/admin/assets/") {
+				t.Fatalf("expected embedded React index.html, got %s", body)
+			}
+		})
+	}
+}
+
+func TestAdminSPARoutesHertzServeAssetsWithCache(t *testing.T) {
+	engine := newTestAdminSPAHertzEngine(t)
+
+	indexW := ut.PerformRequest(engine.Engine, http.MethodGet, "/admin", nil, ut.Header{Key: "Authorization", Value: "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:secret"))})
+	assetPath := regexp.MustCompile(`/admin/assets/[^"']+`).FindString(indexW.Body.String())
+	if assetPath == "" {
+		t.Fatalf("expected index.html to reference a built asset; run npm run admin:build")
+	}
+
+	assetW := ut.PerformRequest(engine.Engine, http.MethodGet, assetPath, nil, ut.Header{Key: "Authorization", Value: "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:secret"))})
+	if assetW.Code != http.StatusOK {
+		t.Fatalf("expected asset 200, got %d body=%s", assetW.Code, assetW.Body.String())
+	}
+	if got := assetW.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("expected immutable asset cache header, got %q", got)
+	}
+
+	missingW := ut.PerformRequest(engine.Engine, http.MethodGet, "/admin/assets/missing.js", nil, ut.Header{Key: "Authorization", Value: "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:secret"))})
+	if missingW.Code != http.StatusNotFound {
+		t.Fatalf("expected missing asset 404, got %d body=%s", missingW.Code, missingW.Body.String())
+	}
+}
+
+func TestAdminSPARoutesHertzRequireAuth(t *testing.T) {
+	engine := newTestAdminSPAHertzEngine(t)
+
+	for _, path := range []string{"/admin", "/admin/assets/missing.js"} {
+		t.Run(path, func(t *testing.T) {
+			w := ut.PerformRequest(engine.Engine, http.MethodGet, path, nil)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401, got %d body=%s", w.Code, w.Body.String())
+			}
+			if got := w.Header().Get("WWW-Authenticate"); got != `Basic realm="auto-deploy admin"` {
 				t.Fatalf("expected WWW-Authenticate header, got %q", got)
 			}
 		})

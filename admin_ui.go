@@ -3,6 +3,8 @@ package main
 import (
 	"html/template"
 	"net/http"
+
+	"github.com/cloudwego/hertz/pkg/app"
 )
 
 const adminUIRequestHeader = "X-Admin-Request"
@@ -43,4 +45,30 @@ func adminUINavigate(w http.ResponseWriter, r *http.Request, location string) {
 		return
 	}
 	http.Redirect(w, r, location, http.StatusSeeOther)
+}
+
+func isAdminUIRequestHertz(c *app.RequestContext) bool {
+	return string(c.GetHeader(adminUIRequestHeader)) == "true"
+}
+
+func renderAdminTemplateHertz(c *app.RequestContext, tmpl *template.Template, data any) error {
+	if isAdminUIRequestHertz(c) {
+		if string(c.Request.Method()) == http.MethodGet {
+			return tmpl.ExecuteTemplate(c.Response.BodyWriter(), "fragment", data)
+		}
+		if err := tmpl.ExecuteTemplate(c.Response.BodyWriter(), "flash", data); err != nil {
+			return err
+		}
+		return tmpl.ExecuteTemplate(c.Response.BodyWriter(), "content", data)
+	}
+	return tmpl.ExecuteTemplate(c.Response.BodyWriter(), "base.html", data)
+}
+
+func adminUINavigateHertz(c *app.RequestContext, location string) {
+	if isAdminUIRequestHertz(c) {
+		c.Header(adminUILocationHeader, location)
+		c.SetStatusCode(http.StatusOK)
+		return
+	}
+	c.Redirect(http.StatusSeeOther, []byte(location))
 }

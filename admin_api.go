@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
 type AdminAPIHandler struct {
@@ -644,4 +649,356 @@ func RegisterAdminAPIRoutes(mux *http.ServeMux, handler *AdminAPIHandler, middle
 	mux.Handle("POST /admin/api/history/{id}/retry", middleware(http.HandlerFunc(handler.RetryHistoryJob)))
 	mux.Handle("POST /admin/api/jobs/{job_id}/cancel", middleware(http.HandlerFunc(handler.CancelJob)))
 	mux.Handle("POST /admin/api/apps/{app_id}/cancel", middleware(http.HandlerFunc(handler.CancelApp)))
+}
+
+func (h *AdminAPIHandler) ListAppsHertz(ctx context.Context, c *app.RequestContext) {
+	apps, err := h.store.ListWithLastDeploy()
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list apps")
+		return
+	}
+
+	resp := make([]adminAPIAppResponse, 0, len(apps))
+	for i := range apps {
+		if h.tracker != nil {
+			if snapshot, ok := activeSnapshotForApp(h.tracker, apps[i]); ok {
+				apps[i].LiveProgress = snapshot
+			}
+		}
+		resp = append(resp, appWithLastDeployResponse(apps[i]))
+	}
+
+	c.JSON(consts.StatusOK, map[string]any{"apps": resp})
+}
+
+func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	var body adminAPIAppRequest
+	if !decodeAdminAPIJSONHertz(c, &body) {
+		return
+	}
+
+	if errs := validateAdminAPIAppRequest(body, true); len(errs) > 0 {
+		writeAdminAPIValidationErrorHertz(c, errs)
+		return
+	}
+
+	app, err := h.store.Create(body.Name, body.webhookSecret(), body.BinaryPath, body.ServiceName, body.GithubRepo, body.ArtifactName)
+	if err != nil {
+		if errors.Is(err, ErrDuplicateApp) {
+			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
+			return
+		}
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error creating app")
+		return
+	}
+
+	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app)})
+}
+
+func (h *AdminAPIHandler) GetAppHertz(ctx context.Context, c *app.RequestContext) {
+	app, err := h.store.Get(c.Param("id"))
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"app": appResponse(*app)})
+}
+
+func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	id := c.Param("id")
+	app, err := h.store.Get(id)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+		return
+	}
+
+	var body adminAPIAppRequest
+	if !decodeAdminAPIJSONHertz(c, &body) {
+		return
+	}
+
+	if errs := validateAdminAPIAppRequest(body, false); len(errs) > 0 {
+		writeAdminAPIValidationErrorHertz(c, errs)
+		return
+	}
+
+	enabled := app.Enabled
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+
+	if err := h.updateAppWithOptionalSecret(id, body, enabled); err != nil {
+		if errors.Is(err, ErrDuplicateApp) {
+			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
+			return
+		}
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error updating app")
+		return
+	}
+
+	updated, err := h.store.Get(id)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load updated app")
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
+}
+
+func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	if err := h.store.Delete(c.Param("id")); err != nil {
+		if errors.Is(err, ErrActiveDeployExists) {
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Cannot delete app with active deploy")
+			return
+		}
+		if isAdminAPINotFoundError(err) {
+			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+			return
+		}
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to delete app")
+		return
+	}
+	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: "App deleted successfully"})
+}
+
+func (h *AdminAPIHandler) ToggleAppHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	id := c.Param("id")
+	app, err := h.store.Get(id)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+		return
+	}
+
+	enabled := !app.Enabled
+	if c.Request.Body() != nil && c.Request.Header.ContentLength() > 0 {
+		var body adminAPIToggleRequest
+		if !decodeAdminAPIJSONHertz(c, &body) {
+			return
+		}
+		if body.Enabled != nil {
+			enabled = *body.Enabled
+		}
+	}
+
+	if err := h.store.SetEnabled(id, enabled); err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to update app status")
+		return
+	}
+	updated, err := h.store.Get(id)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load updated app")
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
+}
+
+func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	id := c.Param("id")
+	app, err := h.store.Get(id)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+		return
+	}
+	if !app.Enabled {
+		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "Cannot deploy disabled app")
+		return
+	}
+
+	var body adminAPIDeployRequest
+	if !decodeAdminAPIJSONHertz(c, &body) {
+		return
+	}
+	if body.Tag == "" {
+		writeAdminAPIValidationErrorHertz(c, []string{"Tag is required"})
+		return
+	}
+
+	if err := h.queue.EnqueueManual(id, body.Tag); err != nil {
+		if errors.Is(err, ErrDuplicate) {
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Deploy already queued for this tag")
+			return
+		}
+		if errors.Is(err, ErrQueueFull) {
+			writeAdminAPIErrorHertz(c, consts.StatusServiceUnavailable, "Queue is full")
+			return
+		}
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to queue deploy: "+err.Error())
+		return
+	}
+
+	c.JSON(consts.StatusAccepted, map[string]string{"status": "queued", "tag": body.Tag})
+}
+
+func (h *AdminAPIHandler) ListHistoryHertz(ctx context.Context, c *app.RequestContext) {
+	if appID := c.Query("appId"); appID != "" {
+		app, err := h.store.Get(appID)
+		if err != nil {
+			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+			return
+		}
+		jobs, err := h.queue.ListHistory(app.ID, 50)
+		if err != nil {
+			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list history")
+			return
+		}
+		c.JSON(consts.StatusOK, map[string]any{"app": appResponse(*app), "history": h.jobResponses(app, jobs)})
+		return
+	}
+
+	apps, err := h.store.List()
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list apps")
+		return
+	}
+	var history []adminAPIJobResponse
+	for i := range apps {
+		jobs, err := h.queue.ListHistory(apps[i].ID, 50)
+		if err != nil {
+			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list history")
+			return
+		}
+		app := apps[i]
+		history = append(history, h.jobResponses(&app, jobs)...)
+	}
+	c.JSON(consts.StatusOK, map[string]any{"history": history})
+}
+
+func (h *AdminAPIHandler) RetryHistoryJobHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	jobID := c.Param("id")
+	job, err := h.queue.GetJob(jobID)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "Job not found")
+		return
+	}
+	app, err := h.store.Get(job.AppID)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+		return
+	}
+	if !app.Enabled {
+		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "Cannot retry disabled app")
+		return
+	}
+
+	retryJobID, err := h.queue.CreateRetryJob(jobID, app.ID, job.Tag)
+	if err != nil {
+		if errors.Is(err, ErrDuplicate) {
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Deploy already pending for this tag")
+			return
+		}
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to create retry job: "+err.Error())
+		return
+	}
+
+	c.JSON(consts.StatusAccepted, map[string]string{"status": "queued", "jobId": retryJobID})
+}
+
+func (h *AdminAPIHandler) CancelJobHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	result, err := h.cancel.RequestJobCancel(c.Param("job_id"))
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelJobResponse(result)})
+}
+
+func (h *AdminAPIHandler) CancelAppHertz(ctx context.Context, c *app.RequestContext) {
+	if !requireAdminAPIJSONRequestHertz(c) {
+		return
+	}
+
+	appID := c.Param("app_id")
+	if _, err := h.store.Get(appID); err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+		return
+	}
+	result, err := h.cancel.RequestAppCancel(appID)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelAppResponse(result)})
+}
+
+func (h *AdminAPIHandler) NotFoundHertz(ctx context.Context, c *app.RequestContext) {
+	writeAdminAPIErrorHertz(c, consts.StatusNotFound, "Not found")
+}
+
+func requireAdminAPIJSONRequestHertz(c *app.RequestContext) bool {
+	contentType := string(c.GetHeader("Content-Type"))
+	if strings.HasPrefix(contentType, "application/json") {
+		return true
+	}
+	writeAdminAPIErrorHertz(c, consts.StatusUnsupportedMediaType, "Content-Type must be application/json")
+	return false
+}
+
+func decodeAdminAPIJSONHertz(c *app.RequestContext, dst any) bool {
+	if err := c.BindJSON(dst); err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "Invalid JSON body")
+		return false
+	}
+	return true
+}
+
+func writeAdminAPIValidationErrorHertz(c *app.RequestContext, errs []string) {
+	c.JSON(consts.StatusBadRequest, adminAPIErrorResponse{Status: "error", Error: "Validation failed", Errors: errs})
+}
+
+func writeAdminAPIErrorHertz(c *app.RequestContext, status int, msg string) {
+	c.JSON(status, adminAPIErrorResponse{Status: "error", Error: msg})
+}
+
+func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth app.HandlerFunc) {
+	api := h.Group("/admin/api", auth)
+	api.GET("/apps", handler.ListAppsHertz)
+	api.POST("/apps", handler.CreateAppHertz)
+	api.GET("/apps/:id", handler.GetAppHertz)
+	api.PUT("/apps/:id", handler.UpdateAppHertz)
+	api.DELETE("/apps/:id", handler.DeleteAppHertz)
+	api.POST("/apps/:id/toggle", handler.ToggleAppHertz)
+	api.POST("/apps/:id/deploy", handler.ManualDeployAppHertz)
+	api.GET("/history", handler.ListHistoryHertz)
+	api.POST("/history/:id/retry", handler.RetryHistoryJobHertz)
+	api.POST("/jobs/:job_id/cancel", handler.CancelJobHertz)
+	api.POST("/apps/:app_id/cancel", handler.CancelAppHertz)
+
+	notFound := handler.NotFoundHertz
+	h.GET("/admin/api", auth, notFound)
+	h.POST("/admin/api", auth, notFound)
+	h.PUT("/admin/api", auth, notFound)
+	h.PATCH("/admin/api", auth, notFound)
+	h.DELETE("/admin/api", auth, notFound)
+	h.GET("/admin/api/*path", auth, notFound)
+	h.POST("/admin/api/*path", auth, notFound)
+	h.PUT("/admin/api/*path", auth, notFound)
+	h.PATCH("/admin/api/*path", auth, notFound)
+	h.DELETE("/admin/api/*path", auth, notFound)
 }
