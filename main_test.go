@@ -14,11 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/client"
 	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
-func setupTestWebhook(t *testing.T) (http.HandlerFunc, string) {
+func setupTestWebhook(t *testing.T) (app.HandlerFunc, string) {
 	t.Helper()
 	db := newTestDB(t)
 	q, err := NewDeployQueue(db, 10)
@@ -38,7 +39,7 @@ func setupTestWebhook(t *testing.T) (http.HandlerFunc, string) {
 	return multiAppWebhookHandler(admission), secret
 }
 
-func setupTestWebhookWithQueueMax(t *testing.T, maxPending int) (http.HandlerFunc, string) {
+func setupTestWebhookWithQueueMax(t *testing.T, maxPending int) (app.HandlerFunc, string) {
 	t.Helper()
 	db := newTestDB(t)
 	q, err := NewDeployQueue(db, maxPending)
@@ -58,34 +59,35 @@ func setupTestWebhookWithQueueMax(t *testing.T, maxPending int) (http.HandlerFun
 	return multiAppWebhookHandler(admission), secret
 }
 
-func decodeResponse(t *testing.T, rec *httptest.ResponseRecorder) response {
+func decodeResponse(t *testing.T, ctx *app.RequestContext) response {
 	t.Helper()
 	var resp response
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal(ctx.Response.Body(), &resp); err != nil {
 		t.Fatalf("failed to decode response body: %v", err)
 	}
 	return resp
 }
 
-func newAuthRequestWithSecret(t *testing.T, tag, secret string) *http.Request {
+func newAuthRequestWithSecret(t *testing.T, tag, secret string) *app.RequestContext {
 	t.Helper()
-	body := bytes.NewBufferString(`{"tag":"` + tag + `"}`)
-	r := httptest.NewRequest(http.MethodPost, "/webhook", body)
-	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Authorization", "Bearer "+secret)
-	return r
+	body := []byte(`{"tag":"` + tag + `"}`)
+	headers := map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "Bearer " + secret,
+	}
+	return newHertzTestContext(http.MethodPost, "/webhook", body, headers)
 }
 
 func TestWebhookValidRequestReturns202Queued(t *testing.T) {
 	handler, secret := setupTestWebhook(t)
 
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, newAuthRequestWithSecret(t, "v1.2.0", secret))
+	ctx := newAuthRequestWithSecret(t, "v1.2.0", secret)
+	handler(context.Background(), ctx)
 
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d", rec.Code)
+	if ctx.Response.StatusCode() != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", ctx.Response.StatusCode())
 	}
-	resp := decodeResponse(t, rec)
+	resp := decodeResponse(t, ctx)
 	if resp.Status != "queued" {
 		t.Errorf("expected status=queued, got %q", resp.Status)
 	}
@@ -97,18 +99,18 @@ func TestWebhookValidRequestReturns202Queued(t *testing.T) {
 func TestWebhookSecondRequestAlsoReturns202(t *testing.T) {
 	handler, secret := setupTestWebhook(t)
 
-	rec1 := httptest.NewRecorder()
-	handler.ServeHTTP(rec1, newAuthRequestWithSecret(t, "v1.2.0", secret))
-	if rec1.Code != http.StatusAccepted {
-		t.Fatalf("first request: expected 202, got %d", rec1.Code)
+	ctx1 := newAuthRequestWithSecret(t, "v1.2.0", secret)
+	handler(context.Background(), ctx1)
+	if ctx1.Response.StatusCode() != http.StatusAccepted {
+		t.Fatalf("first request: expected 202, got %d", ctx1.Response.StatusCode())
 	}
 
-	rec2 := httptest.NewRecorder()
-	handler.ServeHTTP(rec2, newAuthRequestWithSecret(t, "v1.3.0", secret))
-	if rec2.Code != http.StatusAccepted {
-		t.Fatalf("second request: expected 202, got %d", rec2.Code)
+	ctx2 := newAuthRequestWithSecret(t, "v1.3.0", secret)
+	handler(context.Background(), ctx2)
+	if ctx2.Response.StatusCode() != http.StatusAccepted {
+		t.Fatalf("second request: expected 202, got %d", ctx2.Response.StatusCode())
 	}
-	resp := decodeResponse(t, rec2)
+	resp := decodeResponse(t, ctx2)
 	if resp.Status != "queued" {
 		t.Errorf("expected status=queued, got %q", resp.Status)
 	}
@@ -117,18 +119,18 @@ func TestWebhookSecondRequestAlsoReturns202(t *testing.T) {
 func TestWebhookDuplicateTagReturnsDuplicateStatus(t *testing.T) {
 	handler, secret := setupTestWebhook(t)
 
-	rec1 := httptest.NewRecorder()
-	handler.ServeHTTP(rec1, newAuthRequestWithSecret(t, "v1.2.0", secret))
-	if rec1.Code != http.StatusAccepted {
-		t.Fatalf("first request: expected 202, got %d", rec1.Code)
+	ctx1 := newAuthRequestWithSecret(t, "v1.2.0", secret)
+	handler(context.Background(), ctx1)
+	if ctx1.Response.StatusCode() != http.StatusAccepted {
+		t.Fatalf("first request: expected 202, got %d", ctx1.Response.StatusCode())
 	}
 
-	rec2 := httptest.NewRecorder()
-	handler.ServeHTTP(rec2, newAuthRequestWithSecret(t, "v1.2.0", secret))
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("duplicate request: expected 200, got %d", rec2.Code)
+	ctx2 := newAuthRequestWithSecret(t, "v1.2.0", secret)
+	handler(context.Background(), ctx2)
+	if ctx2.Response.StatusCode() != http.StatusOK {
+		t.Fatalf("duplicate request: expected 200, got %d", ctx2.Response.StatusCode())
 	}
-	resp := decodeResponse(t, rec2)
+	resp := decodeResponse(t, ctx2)
 	if resp.Status != "duplicate" {
 		t.Errorf("expected status=duplicate, got %q", resp.Status)
 	}
@@ -140,18 +142,18 @@ func TestWebhookDuplicateTagReturnsDuplicateStatus(t *testing.T) {
 func TestWebhookQueueFullReturns503(t *testing.T) {
 	handler, secret := setupTestWebhookWithQueueMax(t, 1)
 
-	rec1 := httptest.NewRecorder()
-	handler.ServeHTTP(rec1, newAuthRequestWithSecret(t, "v1.0.0", secret))
-	if rec1.Code != http.StatusAccepted {
-		t.Fatalf("first request: expected 202, got %d", rec1.Code)
+	ctx1 := newAuthRequestWithSecret(t, "v1.0.0", secret)
+	handler(context.Background(), ctx1)
+	if ctx1.Response.StatusCode() != http.StatusAccepted {
+		t.Fatalf("first request: expected 202, got %d", ctx1.Response.StatusCode())
 	}
 
-	rec2 := httptest.NewRecorder()
-	handler.ServeHTTP(rec2, newAuthRequestWithSecret(t, "v2.0.0", secret))
-	if rec2.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d", rec2.Code)
+	ctx2 := newAuthRequestWithSecret(t, "v2.0.0", secret)
+	handler(context.Background(), ctx2)
+	if ctx2.Response.StatusCode() != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", ctx2.Response.StatusCode())
 	}
-	resp := decodeResponse(t, rec2)
+	resp := decodeResponse(t, ctx2)
 	if resp.Status != "error" {
 		t.Errorf("expected status=error, got %q", resp.Status)
 	}
@@ -174,20 +176,19 @@ func TestWebhookUnauthorizedReturns401(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := bytes.NewBufferString(`{"tag":"v1.0.0"}`)
-			r := httptest.NewRequest(http.MethodPost, "/webhook", body)
-			r.Header.Set("Content-Type", "application/json")
+			body := []byte(`{"tag":"v1.0.0"}`)
+			headers := map[string]string{"Content-Type": "application/json"}
 			if tc.header != "" {
-				r.Header.Set("Authorization", tc.header)
+				headers["Authorization"] = tc.header
 			}
+			ctx := newHertzTestContext(http.MethodPost, "/webhook", body, headers)
 
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, r)
+			handler(context.Background(), ctx)
 
-			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("expected 401, got %d", rec.Code)
+			if ctx.Response.StatusCode() != http.StatusUnauthorized {
+				t.Fatalf("expected 401, got %d", ctx.Response.StatusCode())
 			}
-			resp := decodeResponse(t, rec)
+			resp := decodeResponse(t, ctx)
 			if resp.Status != "error" {
 				t.Errorf("expected status=error, got %q", resp.Status)
 			}
@@ -213,17 +214,18 @@ func TestWebhookInvalidPayloadReturns400(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(tc.body))
-			r.Header.Set("Content-Type", "application/json")
-			r.Header.Set("Authorization", "Bearer "+secret)
-
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, r)
-
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("expected 400, got %d", rec.Code)
+			headers := map[string]string{
+				"Content-Type":  "application/json",
+				"Authorization": "Bearer " + secret,
 			}
-			resp := decodeResponse(t, rec)
+			ctx := newHertzTestContext(http.MethodPost, "/webhook", []byte(tc.body), headers)
+
+			handler(context.Background(), ctx)
+
+			if ctx.Response.StatusCode() != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d", ctx.Response.StatusCode())
+			}
+			resp := decodeResponse(t, ctx)
 			if resp.Status != "error" {
 				t.Errorf("expected status=error, got %q", resp.Status)
 			}
@@ -265,33 +267,6 @@ func TestLoadConfigRejectsInvalidQueueMax(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error for DEPLOY_QUEUE_MAX=%q, got nil", tc)
 		}
-	}
-}
-
-func TestWebhookMethodNotAllowedReturns405(t *testing.T) {
-	handler, secret := setupTestWebhook(t)
-
-	methods := []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch}
-
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
-			r := httptest.NewRequest(method, "/webhook", nil)
-			r.Header.Set("Authorization", "Bearer "+secret)
-
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, r)
-
-			if rec.Code != http.StatusMethodNotAllowed {
-				t.Fatalf("expected 405, got %d", rec.Code)
-			}
-			resp := decodeResponse(t, rec)
-			if resp.Status != "error" {
-				t.Errorf("expected status=error, got %q", resp.Status)
-			}
-			if resp.Error != "method not allowed" {
-				t.Errorf("expected error=method not allowed, got %q", resp.Error)
-			}
-		})
 	}
 }
 

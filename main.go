@@ -19,8 +19,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/client"
 	"github.com/cloudwego/hertz/pkg/app/server"
-	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
+	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
 var (
@@ -126,16 +126,6 @@ func main() {
 	progressAdminHandler := NewProgressAdminHandler(tracker, appStore, q, adminHandler.templates)
 	adminAPIHandler := NewAdminAPIHandler(appStore, q, tracker, cancelService)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /webhook", multiAppWebhookHandler(admission))
-	authMiddleware := BasicAuthMiddleware(serviceCfg.AdminUsername, serviceCfg.AdminPassword)
-	RegisterAdminEventRoutes(mux, adminEventHub, authMiddleware)
-	RegisterAdminAPIRoutes(mux, adminAPIHandler, authMiddleware)
-	RegisterAdminProgressRoutes(mux, progressAdminHandler, authMiddleware)
-	RegisterAdminAppActionRoutes(mux, appAdminHandler, authMiddleware)
-	RegisterAdminHistoryActionRoutes(mux, historyAdminHandler, authMiddleware)
-	RegisterAdminSPARoutes(mux, authMiddleware)
-
 	h := server.New(
 		server.WithHostPorts(serviceCfg.ListenAddr),
 		server.WithReadTimeout(45*time.Second),
@@ -153,9 +143,15 @@ func main() {
 
 	setupMiddleware(h)
 
-	h.Any("/*path", func(ctx context.Context, c *app.RequestContext) {
-		adaptor.HertzHandler(mux)(ctx, c)
-	})
+	authMiddleware := HertzBasicAuthMiddleware(serviceCfg.AdminUsername, serviceCfg.AdminPassword)
+
+	h.POST("/webhook", multiAppWebhookHandler(admission))
+	RegisterAdminEventRoutesHertz(h, adminEventHub, authMiddleware)
+	RegisterAdminAPIRoutesHertz(h, adminAPIHandler, authMiddleware)
+	RegisterAdminProgressRoutesHertz(h, progressAdminHandler, authMiddleware)
+	RegisterAdminAppRoutesHertz(h, appAdminHandler, authMiddleware)
+	RegisterAdminHistoryRoutesHertz(h, historyAdminHandler, authMiddleware)
+	RegisterAdminSPARoutesHertz(h, authMiddleware)
 
 	go func() {
 		slog.Info("starting", "addr", serviceCfg.ListenAddr)
@@ -179,15 +175,11 @@ func main() {
 }
 
 
-func multiAppWebhookHandler(admission *AdmissionService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, response{Status: "error", Error: "method not allowed"})
-			return
-		}
-		authHeader := r.Header.Get("Authorization")
+func multiAppWebhookHandler(admission *AdmissionService) app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		authHeader := string(c.GetHeader("Authorization"))
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			writeJSON(w, http.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
+			c.JSON(consts.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
@@ -195,33 +187,33 @@ func multiAppWebhookHandler(admission *AdmissionService) http.HandlerFunc {
 		var body struct {
 			Tag string `json:"tag"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Tag == "" {
-			writeJSON(w, http.StatusBadRequest, response{Status: "error", Error: "missing or empty tag"})
+		if err := c.BindJSON(&body); err != nil || body.Tag == "" {
+			c.JSON(consts.StatusBadRequest, response{Status: "error", Error: "missing or empty tag"})
 			return
 		}
 
 		result := admission.Admit(token, body.Tag)
 		switch result.Outcome {
 		case OutcomeUnauthorized:
-			writeJSON(w, http.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
+			c.JSON(consts.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
 		case OutcomeBadRequest:
-			writeJSON(w, http.StatusBadRequest, response{Status: "error", Error: "missing or empty tag"})
+			c.JSON(consts.StatusBadRequest, response{Status: "error", Error: "missing or empty tag"})
 		case OutcomeDuplicate:
-			writeJSON(w, http.StatusOK, response{Status: "duplicate", Tag: body.Tag})
+			c.JSON(consts.StatusOK, response{Status: "duplicate", Tag: body.Tag})
 		case OutcomeQueued:
-			writeJSON(w, http.StatusAccepted, response{Status: "queued", Tag: body.Tag})
+			c.JSON(consts.StatusAccepted, response{Status: "queued", Tag: body.Tag})
 		case OutcomeError:
 			errMsg := "internal error"
 			if result.Error != nil {
 				errMsg = result.Error.Error()
 			}
 			if errMsg == "queue full" {
-				writeJSON(w, http.StatusServiceUnavailable, response{Status: "error", Error: "queue full"})
+				c.JSON(consts.StatusServiceUnavailable, response{Status: "error", Error: "queue full"})
 			} else {
-				writeJSON(w, http.StatusInternalServerError, response{Status: "error", Error: errMsg})
+				c.JSON(consts.StatusInternalServerError, response{Status: "error", Error: errMsg})
 			}
 		default:
-			writeJSON(w, http.StatusInternalServerError, response{Status: "error", Error: "unexpected outcome"})
+			c.JSON(consts.StatusInternalServerError, response{Status: "error", Error: "unexpected outcome"})
 		}
 	}
 }

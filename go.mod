@@ -5,6 +5,9 @@ go 1.26.1
 require (
 	github.com/cloudwego/hertz v0.10.4
 	github.com/coder/websocket v1.8.14
+	github.com/gorilla/websocket v1.5.3
+	github.com/hertz-contrib/requestid v1.1.0
+	github.com/hertz-contrib/websocket v0.2.0
 	go.uber.org/zap v1.28.0
 	modernc.org/sqlite v1.48.2
 )
@@ -19,7 +22,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/hertz-contrib/requestid v1.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

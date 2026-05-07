@@ -94,7 +94,7 @@ func TestAdminAuthAcceptsCorrectCredentials(t *testing.T) {
 
 func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
 	middleware := HertzBasicAuthMiddleware("admin", "secret")
-	c := newHertzTestContext("/admin/apps")
+	c := newHertzTestContext(http.MethodGet, "/admin/apps", nil, nil)
 
 	middleware(context.Background(), c)
 
@@ -108,7 +108,7 @@ func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
 
 func TestHertzAdminAuthRejectsWrongPassword(t *testing.T) {
 	middleware := HertzBasicAuthMiddleware("admin", "secret")
-	c := newHertzTestContext("/admin/apps")
+	c := newHertzTestContext(http.MethodGet, "/admin/apps", nil, nil)
 	c.Request.SetBasicAuth("admin", "wrong")
 
 	middleware(context.Background(), c)
@@ -120,7 +120,7 @@ func TestHertzAdminAuthRejectsWrongPassword(t *testing.T) {
 
 func TestHertzAdminAuthAcceptsCorrectCredentials(t *testing.T) {
 	middleware := HertzBasicAuthMiddleware("admin", "secret")
-	c := newHertzTestContext("/admin/apps")
+	c := newHertzTestContext(http.MethodGet, "/admin/apps", nil, nil)
 	c.Request.SetBasicAuth("admin", "secret")
 	c.SetHandlers(app.HandlersChain{func(ctx context.Context, c *app.RequestContext) {
 		c.SetStatusCode(http.StatusOK)
@@ -176,8 +176,16 @@ func TestAdminLayoutRendersNavigationLinks(t *testing.T) {
 	}
 }
 
-func newHertzTestContext(path string) *app.RequestContext {
+func newHertzTestContext(method, path string, body []byte, headers map[string]string) *app.RequestContext {
 	c := app.NewContext(0)
 	c.Request.SetRequestURI(path)
+	c.Request.SetMethod(method)
+	if body != nil {
+		c.Request.SetBody(body)
+	}
+	for k, v := range headers {
+		c.Request.Header.Set(k, v)
+	}
 	return c
 }
+

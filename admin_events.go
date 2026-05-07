@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/coder/websocket"
 )
 
@@ -274,4 +277,12 @@ func writeAdminEventPayload(ctx context.Context, c *websocket.Conn, payload []by
 
 func RegisterAdminEventRoutes(mux *http.ServeMux, hub *AdminEventHub, middleware func(http.Handler) http.Handler) {
 	mux.Handle("GET /admin/events/ws", middleware(http.HandlerFunc(hub.EventsWebSocket)))
+}
+
+func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.RequestContext) {
+	adaptor.HertzHandler(http.HandlerFunc(h.EventsWebSocket))(ctx, c)
+}
+
+func RegisterAdminEventRoutesHertz(h *server.Hertz, hub *AdminEventHub, auth app.HandlerFunc) {
+	h.GET("/admin/events/ws", auth, hub.EventsWebSocketHertz)
 }

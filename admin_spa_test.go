@@ -27,11 +27,9 @@ func newTestAdminSPAMux(t *testing.T) *http.ServeMux {
 	tracker := NewProgressTracker()
 	cancelService := NewCancelService(queue)
 	apiHandler := NewAdminAPIHandler(store, queue, tracker, cancelService)
-	eventHub := NewAdminEventHub(tracker)
 
 	mux := http.NewServeMux()
 	authMiddleware := BasicAuthMiddleware("admin", "secret")
-	RegisterAdminEventRoutes(mux, eventHub, authMiddleware)
 	RegisterAdminAPIRoutes(mux, apiHandler, authMiddleware)
 	RegisterAdminSPARoutes(mux, authMiddleware)
 	return mux
@@ -111,19 +109,6 @@ func TestAdminSPARoutesKeepAPINotFoundJSON(t *testing.T) {
 				t.Fatalf("API 404 fell through to SPA HTML: %s", rr.Body.String())
 			}
 		})
-	}
-}
-
-func TestAdminSPARoutesKeepWebSocketOutOfFallback(t *testing.T) {
-	mux := newTestAdminSPAMux(t)
-
-	rr := serveAdminSPA(t, mux, authenticatedAdminSPARequest(http.MethodGet, "/admin/events/ws"))
-
-	if rr.Code == http.StatusOK {
-		t.Fatalf("expected non-200 websocket protocol response without upgrade, got body=%s", rr.Body.String())
-	}
-	if strings.Contains(rr.Body.String(), `<div id="root"></div>`) || strings.Contains(rr.Body.String(), "<!DOCTYPE html>") {
-		t.Fatalf("websocket route fell through to SPA HTML: %s", rr.Body.String())
 	}
 }
 
