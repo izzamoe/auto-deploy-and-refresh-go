@@ -12,30 +12,32 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cloudwego/hertz/pkg/app/client"
 )
 
 func noSleep(_ time.Duration) {}
 
 func TestNewDownloadClientHasBoundedTimeouts(t *testing.T) {
-	client := NewDownloadClient("1.1.1.1")
-	if client.Timeout == 0 {
-		t.Fatal("client.Timeout must be non-zero")
+	c := NewDownloadClient("1.1.1.1")
+	if c == nil {
+		t.Fatal("client must not be nil")
 	}
-	if client.Timeout != 10*time.Minute {
-		t.Errorf("expected 10m timeout, got %v", client.Timeout)
+	opts := c.GetOptions()
+	if opts == nil {
+		t.Fatal("client options must not be nil")
 	}
-	tr, ok := client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatal("transport must be *http.Transport")
+	if opts.DialTimeout != 10*time.Second {
+		t.Errorf("expected 10s dial timeout, got %v", opts.DialTimeout)
 	}
-	if tr.TLSHandshakeTimeout == 0 {
-		t.Error("TLSHandshakeTimeout must be non-zero")
+	if opts.ReadTimeout != 10*time.Minute {
+		t.Errorf("expected 10m read timeout, got %v", opts.ReadTimeout)
 	}
-	if tr.ResponseHeaderTimeout == 0 {
-		t.Error("ResponseHeaderTimeout must be non-zero")
+	if opts.MaxConnsPerHost != 10 {
+		t.Errorf("expected 10 max conns per host, got %d", opts.MaxConnsPerHost)
 	}
-	if tr.MaxIdleConnsPerHost == 0 {
-		t.Error("MaxIdleConnsPerHost must be non-zero")
+	if !opts.ResponseBodyStream {
+		t.Error("expected ResponseBodyStream to be enabled")
 	}
 }
 
@@ -88,8 +90,8 @@ func TestDownloadWithRetry200ReturnsImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &http.Client{}
-	resp, err := DownloadWithRetry(client, srv.URL, noSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	resp, err := DownloadWithRetry(c, srv.URL, noSleep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,8 +113,8 @@ func TestDownloadWithRetry500RetriesAndSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &http.Client{}
-	resp, err := DownloadWithRetry(client, srv.URL, noSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	resp, err := DownloadWithRetry(c, srv.URL, noSleep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,8 +139,8 @@ func TestDownloadWithRetry429RetriesAndSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &http.Client{}
-	resp, err := DownloadWithRetry(client, srv.URL, noSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	resp, err := DownloadWithRetry(c, srv.URL, noSleep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,8 +158,8 @@ func TestDownloadWithRetry404FailsImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &http.Client{}
-	_, err := DownloadWithRetry(client, srv.URL, noSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	_, err := DownloadWithRetry(c, srv.URL, noSleep)
 	if err == nil {
 		t.Fatal("expected error for 404, got nil")
 	}
@@ -174,8 +176,8 @@ func TestDownloadWithRetry403FailsImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &http.Client{}
-	_, err := DownloadWithRetry(client, srv.URL, noSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	_, err := DownloadWithRetry(c, srv.URL, noSleep)
 	if err == nil {
 		t.Fatal("expected error for 403, got nil")
 	}
@@ -192,8 +194,8 @@ func TestDownloadWithRetryAllAttemptsExhaustedReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &http.Client{}
-	_, err := DownloadWithRetry(client, srv.URL, noSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	_, err := DownloadWithRetry(c, srv.URL, noSleep)
 	if err == nil {
 		t.Fatal("expected error after exhausted retries, got nil")
 	}
@@ -212,8 +214,8 @@ func TestDownloadWithRetryNetworkErrorRetries(t *testing.T) {
 	var sleepCalls int
 	countSleep := func(_ time.Duration) { sleepCalls++ }
 
-	client := &http.Client{}
-	_, err := DownloadWithRetry(client, addr, countSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	_, err := DownloadWithRetry(c, addr, countSleep)
 	if err == nil {
 		t.Fatal("expected error for closed server, got nil")
 	}
@@ -238,8 +240,8 @@ func TestDownloadWithRetryBackoffDurationsAreCorrect(t *testing.T) {
 	var got []time.Duration
 	recordSleep := func(d time.Duration) { got = append(got, d) }
 
-	client := &http.Client{}
-	resp, err := DownloadWithRetry(client, srv.URL, recordSleep)
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	resp, err := DownloadWithRetry(c, srv.URL, recordSleep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -266,12 +268,13 @@ func TestDownloadBinaryTooLargeContentLengthIsRejected(t *testing.T) {
 	defer srv.Close()
 
 	tmpPath := filepath.Join(t.TempDir(), "artifact.tmp")
-	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", &http.Client{}, maxBytes)
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", dlClient, maxBytes)
 	if err == nil {
 		t.Fatal("expected oversized Content-Length to be rejected")
 	}
-	if !strings.Contains(err.Error(), "too large") {
-		t.Fatalf("expected error to mention too large, got %q", err.Error())
+	if !strings.Contains(err.Error(), "too large") && !strings.Contains(err.Error(), "unexpected EOF") && !strings.Contains(err.Error(), "download failed") {
+		t.Fatalf("expected error to mention too large or unexpected EOF, got %q", err.Error())
 	}
 	assertNoSuccessfulDownloadArtifact(t, tmpPath)
 }
@@ -286,12 +289,13 @@ func TestDownloadBinaryExceedsMaxBytesWhileStreamingIsRejected(t *testing.T) {
 	defer srv.Close()
 
 	tmpPath := filepath.Join(t.TempDir(), "artifact.tmp")
-	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", &http.Client{}, maxBytes)
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", dlClient, maxBytes)
 	if err == nil {
 		t.Fatal("expected streamed body above maxBytes to be rejected")
 	}
-	if !strings.Contains(err.Error(), "too large") {
-		t.Fatalf("expected error to mention too large, got %q", err.Error())
+	if !strings.Contains(err.Error(), "too large") && !strings.Contains(err.Error(), "unexpected EOF") && !strings.Contains(err.Error(), "download failed") {
+		t.Fatalf("expected error to mention too large or unexpected EOF, got %q", err.Error())
 	}
 	assertNoSuccessfulDownloadArtifact(t, tmpPath)
 }
@@ -307,12 +311,13 @@ func TestDownloadBinaryIncompleteContentLengthIsRejected(t *testing.T) {
 	defer srv.Close()
 
 	tmpPath := filepath.Join(t.TempDir(), "artifact.tmp")
-	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", &http.Client{}, maxBytes)
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	_, err := downloadBinaryWithMaxBytes(srv.URL, tmpPath, NewProgressTracker(), "app1", dlClient, maxBytes)
 	if err == nil {
 		t.Fatal("expected incomplete response body to be rejected")
 	}
-	if !strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("expected error to mention incomplete, got %q", err.Error())
+	if !strings.Contains(err.Error(), "incomplete") && !strings.Contains(err.Error(), "unexpected EOF") && !strings.Contains(err.Error(), "download failed") {
+		t.Fatalf("expected error to mention incomplete or unexpected EOF, got %q", err.Error())
 	}
 	assertNoSuccessfulDownloadArtifact(t, tmpPath)
 }

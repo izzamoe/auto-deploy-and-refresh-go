@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/client"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
@@ -225,15 +226,15 @@ func multiAppWebhookHandler(admission *AdmissionService) http.HandlerFunc {
 	}
 }
 
-func downloadBinary(url, tmpPath string, tracker *ProgressTracker, appID string, client *http.Client) (DownloadSummary, error) {
+func downloadBinary(url, tmpPath string, tracker *ProgressTracker, appID string, client *client.Client) (DownloadSummary, error) {
 	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, maxArtifactBytes)
 }
 
-func downloadBinaryWithMaxBytes(url, tmpPath string, tracker *ProgressTracker, appID string, client *http.Client, maxBytes int64) (DownloadSummary, error) {
+func downloadBinaryWithMaxBytes(url, tmpPath string, tracker *ProgressTracker, appID string, client *client.Client, maxBytes int64) (DownloadSummary, error) {
 	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, maxBytes)
 }
 
-func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *ProgressTracker, appID string, client *http.Client, maxBytes int64) (DownloadSummary, error) {
+func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *ProgressTracker, appID string, client *client.Client, maxBytes int64) (DownloadSummary, error) {
 	slog.Info("downloading", "url", url)
 	resp, err := DownloadWithRetryContext(ctx, client, url, nil)
 	if err != nil {
@@ -336,11 +337,11 @@ func validateDownloadedArtifact(path string) error {
 	return nil
 }
 
-func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *http.Client) (DownloadSummary, error) {
+func deploy(app *App, jobID, tag string, tracker *ProgressTracker, client *client.Client) (DownloadSummary, error) {
 	return deployWithControl(app, jobID, tag, tracker, client, nil)
 }
 
-func deployWithControl(app *App, jobID, tag string, tracker *ProgressTracker, client *http.Client, control *CancelService) (DownloadSummary, error) {
+func deployWithControl(app *App, jobID, tag string, tracker *ProgressTracker, client *client.Client, control *CancelService) (DownloadSummary, error) {
 	tracker.Start(app.ID, jobID, tag)
 
 	tmpPath := app.BinaryPath + ".tmp"

@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cloudwego/hertz/pkg/app/client"
+	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
 func TestQueueCancelPendingBeforeDequeue(t *testing.T) {
@@ -44,20 +46,21 @@ func TestWorkerCancelDuringDownloadCleansTempAndMarksCanceled(t *testing.T) {
 	tmpPath := binaryPath + ".tmp"
 	started := make(chan struct{})
 
-	client := &http.Client{Transport: cancelRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode:    http.StatusOK,
-			ContentLength: 1024,
-			Body:          &blockingBody{ctx: req.Context(), started: started},
-			Header:        make(http.Header),
-		}, nil
-	})}
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient.Use(func(next client.Endpoint) client.Endpoint {
+		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
+			resp.SetStatusCode(http.StatusOK)
+			resp.Header.SetContentLength(1024)
+			resp.SetBodyStream(&blockingBody{ctx: ctx, started: started}, 1024)
+			return nil
+		}
+	})
 	tracker := NewProgressTracker()
 	app := &App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := deployWithControl(app, jobID, "v-download", tracker, client, control)
+		_, err := deployWithControl(app, jobID, "v-download", tracker, dlClient, control)
 		done <- err
 	}()
 
@@ -173,12 +176,6 @@ func TestWorkerCancelTerminalAndRepeatedNoop(t *testing.T) {
 	assertJobStatus(t, q, jobID, JobStatusSucceeded)
 }
 
-type cancelRoundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f cancelRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
-
 type blockingBody struct {
 	ctx       context.Context
 	started   chan struct{}
@@ -203,11 +200,18 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 
 func (b *blockingBody) Close() error { return nil }
 
-func staticELFClient() *http.Client {
-	return &http.Client{Transport: cancelRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := []byte{0x7f, 'E', 'L', 'F', 1, 2, 3, 4}
-		return &http.Response{StatusCode: http.StatusOK, ContentLength: int64(len(body)), Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
-	})}
+func staticELFClient() *client.Client {
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	c.Use(func(next client.Endpoint) client.Endpoint {
+		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
+			body := []byte{0x7f, 'E', 'L', 'F', 1, 2, 3, 4}
+			resp.SetStatusCode(http.StatusOK)
+			resp.Header.SetContentLength(len(body))
+			resp.SetBodyStream(bytes.NewReader(body), len(body))
+			return nil
+		}
+	})
+	return c
 }
 
 func stubDeployGlobals(t *testing.T) func() {

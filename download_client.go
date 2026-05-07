@@ -2,27 +2,89 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cloudwego/hertz/pkg/app/client"
+	herrs "github.com/cloudwego/hertz/pkg/common/errors"
+	"github.com/cloudwego/hertz/pkg/network"
+	"github.com/cloudwego/hertz/pkg/network/standard"
+	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
-func NewDownloadClient(dnsServer string) *http.Client {
-	dialer := newDownloadDialer(dnsServer)
-	transport := &http.Transport{
-		DialContext:           dialer.DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		MaxIdleConnsPerHost:   10,
-		DisableCompression:    false,
+type dnsDialer struct {
+	base      network.Dialer
+	netDialer *net.Dialer
+}
+
+func (d *dnsDialer) DialConnection(network, address string, timeout time.Duration, tlsConfig *tls.Config) (network.Conn, error) {
+	resolvedAddr, err := d.resolve(address)
+	if err != nil {
+		return nil, err
 	}
-	return &http.Client{
-		Timeout:   10 * time.Minute,
-		Transport: transport,
+	return d.base.DialConnection(network, resolvedAddr, timeout, tlsConfig)
+}
+
+func (d *dnsDialer) DialTimeout(network, address string, timeout time.Duration, tlsConfig *tls.Config) (net.Conn, error) {
+	resolvedAddr, err := d.resolve(address)
+	if err != nil {
+		return nil, err
 	}
+	return d.base.DialTimeout(network, resolvedAddr, timeout, tlsConfig)
+}
+
+func (d *dnsDialer) AddTLS(conn network.Conn, tlsConfig *tls.Config) (network.Conn, error) {
+	return d.base.AddTLS(conn, tlsConfig)
+}
+
+func (d *dnsDialer) resolve(address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address, nil
+	}
+	if d.netDialer.Resolver == nil {
+		return address, nil
+	}
+	ctx := context.Background()
+	if d.netDialer.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.netDialer.Timeout)
+		defer cancel()
+	}
+	ips, err := d.netDialer.Resolver.LookupHost(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("no IPs found for %s", host)
+	}
+	return net.JoinHostPort(ips[0], port), nil
+}
+
+func NewDownloadClient(dnsServer string) *client.Client {
+	netDialer := newDownloadDialer(dnsServer)
+	c, err := client.NewClient(
+		client.WithDialer(&dnsDialer{
+			base:      standard.NewDialer(),
+			netDialer: netDialer,
+		}),
+		client.WithDialTimeout(10*time.Second),
+		client.WithClientReadTimeout(10*time.Minute),
+		client.WithMaxConnsPerHost(10),
+		client.WithMaxIdleConnDuration(10*time.Second),
+		client.WithResponseBodyStream(true),
+	)
+	if err != nil {
+		c, _ = client.NewClient()
+	}
+	return c
 }
 
 func newDownloadDialer(dnsServer string) *net.Dialer {
@@ -56,11 +118,11 @@ func normalizeDNSServer(dnsServer string) string {
 
 var defaultSleep = time.Sleep
 
-func DownloadWithRetry(client *http.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
+func DownloadWithRetry(client *client.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
 	return DownloadWithRetryContext(context.Background(), client, url, sleepFn)
 }
 
-func DownloadWithRetryContext(ctx context.Context, client *http.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
+func DownloadWithRetryContext(ctx context.Context, client *client.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
 	if sleepFn == nil {
 		sleepFn = defaultSleep
 	}
@@ -73,11 +135,13 @@ func DownloadWithRetryContext(ctx context.Context, client *http.Client, url stri
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := client.Do(req)
+
+		req := &protocol.Request{}
+		req.SetRequestURI(url)
+		req.SetMethod(http.MethodGet)
+		resp := &protocol.Response{}
+
+		err := client.Do(ctx, req, resp)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -92,21 +156,33 @@ func DownloadWithRetryContext(ctx context.Context, client *http.Client, url stri
 			return nil, err
 		}
 
-		if isRetriableStatus(resp.StatusCode) {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+	httpResp := &http.Response{
+		StatusCode:    resp.StatusCode(),
+		ContentLength: parseContentLength(resp.Header.Peek("Content-Length")),
+	}
+
+		body := resp.BodyStream()
+		if rc, ok := body.(io.ReadCloser); ok {
+			httpResp.Body = rc
+		} else {
+			httpResp.Body = io.NopCloser(body)
+		}
+
+		if isRetriableStatus(httpResp.StatusCode) {
+			httpResp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d", httpResp.StatusCode)
 			if attempt < maxAttempts-1 {
 				sleepFn(backoffs[attempt])
 			}
 			continue
 		}
 
-		if resp.StatusCode == http.StatusOK {
-			return resp, nil
+		if httpResp.StatusCode == http.StatusOK {
+			return httpResp, nil
 		}
 
-		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		httpResp.Body.Close()
+		return nil, fmt.Errorf("HTTP %d", httpResp.StatusCode)
 	}
 
 	return nil, fmt.Errorf("download failed after %d attempts: %w", maxAttempts, lastErr)
@@ -124,9 +200,26 @@ func isTransientError(err error) bool {
 	if errors.As(err, &opErr) {
 		return true
 	}
+	if errors.Is(err, herrs.ErrTimeout) {
+		return true
+	}
+	if errors.Is(err, herrs.ErrConnectionClosed) {
+		return true
+	}
 	return false
 }
 
 func isRetriableStatus(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests || (statusCode >= 500 && statusCode < 600)
+}
+
+func parseContentLength(b []byte) int64 {
+	if len(b) == 0 {
+		return -1
+	}
+	n, err := strconv.ParseInt(string(b), 10, 64)
+	if err != nil {
+		return -1
+	}
+	return n
 }

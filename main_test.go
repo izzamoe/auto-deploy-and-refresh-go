@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cloudwego/hertz/pkg/app/client"
+	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
 func setupTestWebhook(t *testing.T) (http.HandlerFunc, string) {
@@ -317,10 +321,10 @@ func TestDeployDownloadProgress(t *testing.T) {
 
 	tracker := NewProgressTracker()
 	tracker.Start(app.ID, "job-1", "v1.0.0")
-	client := srv.Client()
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, client)
+	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
 	if err != nil {
 		t.Fatalf("downloadBinary: %v", err)
 	}
@@ -368,10 +372,10 @@ func TestDeployDownloadRetry(t *testing.T) {
 
 	tracker := NewProgressTracker()
 	tracker.Start(app.ID, "job-retry", "v1.0.0")
-	client := srv.Client()
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, client)
+	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
 	if err != nil {
 		t.Fatalf("downloadBinary after retries: %v", err)
 	}
@@ -396,10 +400,10 @@ func TestDeployDownloadFailure(t *testing.T) {
 
 	tracker := NewProgressTracker()
 	tracker.Start(app.ID, "job-fail", "v1.0.0")
-	client := srv.Client()
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	_, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, client)
+	_, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
 	if err == nil {
 		t.Fatal("expected error from 404 server")
 	}
@@ -412,28 +416,36 @@ func TestDeployDownloadFailure(t *testing.T) {
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
+func deployClientWithBody(body []byte) *client.Client {
+	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	c.Use(func(next client.Endpoint) client.Endpoint {
+		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
+			resp.SetStatusCode(http.StatusOK)
+			resp.Header.SetContentLength(len(body))
+			resp.SetBodyStream(bytes.NewReader(body), len(body))
+			return nil
+		}
+	})
+	return c
 }
 
 func TestDeployCleanupOnValidationFailure(t *testing.T) {
 	body := []byte("not-an-elf-binary")
-	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		rec := httptest.NewRecorder()
-		rec.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		rec.WriteHeader(http.StatusOK)
-		rec.Write(body)
-		return rec.Result(), nil
+	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient.Use(func(next client.Endpoint) client.Endpoint {
+		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
+			resp.SetStatusCode(http.StatusOK)
+			resp.Header.SetContentLength(len(body))
+			resp.SetBodyStream(bytes.NewReader(body), len(body))
+			return nil
+		}
 	})
-	client := &http.Client{Transport: transport}
 
 	tmpDir := t.TempDir()
 	app := testApp(tmpDir)
 	tracker := NewProgressTracker()
 
-	_, err := deploy(app, "job-elf-fail", "v1.0.0", tracker, client)
+	_, err := deploy(app, "job-elf-fail", "v1.0.0", tracker, dlClient)
 	if err == nil {
 		t.Fatal("expected deploy to fail on ELF validation")
 	}
@@ -831,17 +843,6 @@ func TestDeployChmodFailureSetsFailedAfterValidating(t *testing.T) {
 	if snap.Phase != StageFailed {
 		t.Fatalf("phase = %q, want %q", snap.Phase, StageFailed)
 	}
-}
-
-func deployClientWithBody(body []byte) *http.Client {
-	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		rec := httptest.NewRecorder()
-		rec.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		rec.WriteHeader(http.StatusOK)
-		rec.Write(body)
-		return rec.Result(), nil
-	})
-	return &http.Client{Transport: transport}
 }
 
 func equalStrings(got, want []string) bool {
