@@ -133,7 +133,7 @@ func DownloadWithRetryContext(ctx context.Context, client *client.Client, url st
 	maxAttempts := 3
 
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -231,11 +231,11 @@ func doWithRedirects(ctx context.Context, c *client.Client, url string) (*http.R
 
 func isRedirectStatus(code int) bool {
 	switch code {
-	case http.StatusMovedPermanently,  // 301
-		http.StatusFound,              // 302
-		http.StatusSeeOther,           // 303
-		http.StatusTemporaryRedirect,  // 307
-		http.StatusPermanentRedirect:  // 308
+	case http.StatusMovedPermanently, // 301
+		http.StatusFound,             // 302
+		http.StatusSeeOther,          // 303
+		http.StatusTemporaryRedirect, // 307
+		http.StatusPermanentRedirect: // 308
 		return true
 	}
 	return false
@@ -243,13 +243,13 @@ func isRedirectStatus(code int) bool {
 
 func extractHost(rawURL string) string {
 	// Fast path: find "://" then extract up to next "/"
-	idx := strings.Index(rawURL, "://")
-	if idx < 0 {
+	_, after, ok := strings.Cut(rawURL, "://")
+	if !ok {
 		return rawURL
 	}
-	rest := rawURL[idx+3:]
-	if slash := strings.IndexByte(rest, '/'); slash >= 0 {
-		return rest[:slash]
+	rest := after
+	if before, _, ok := strings.Cut(rest, "/"); ok {
+		return before
 	}
 	return rest
 }
@@ -258,12 +258,10 @@ func isTransientError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 		return true
 	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
+	if _, ok := errors.AsType[*net.OpError](err); ok {
 		return true
 	}
 	if errors.Is(err, herrs.ErrTimeout) {
