@@ -36,10 +36,6 @@ func downloadBinary(url, tmpPath string, tracker *progress.ProgressTracker, appI
 	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, maxArtifactBytes)
 }
 
-func downloadBinaryWithMaxBytes(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, maxBytes int64) (store.DownloadSummary, error) {
-	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, maxBytes)
-}
-
 func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, maxBytes int64) (store.DownloadSummary, error) {
 	slog.Info("downloading", "url", url)
 	resp, err := download.DownloadWithRetryContext(ctx, client, url, nil)
@@ -141,14 +137,6 @@ func validateDownloadedArtifact(path string) error {
 	}
 
 	return nil
-}
-
-func Deploy(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client) (store.DownloadSummary, error) {
-	return DeployWithControl(app, jobID, tag, tracker, client, nil)
-}
-
-func deploy(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client) (store.DownloadSummary, error) {
-	return Deploy(app, jobID, tag, tracker, client)
 }
 
 func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client, control *cancel.CancelService) (store.DownloadSummary, error) {
