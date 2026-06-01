@@ -95,8 +95,6 @@ func main() {
 		os.Exit(1)
 	}
 	templates := adminHandler.Templates()
-	appAdminHandler := admin.NewAppAdminHandler(appStore, q, templates, tracker)
-	historyAdminHandler := admin.NewHistoryAdminHandler(appStore, q, templates, tracker)
 	progressAdminHandler := admin.NewProgressAdminHandler(tracker, appStore, q, templates)
 	adminAPIHandler := admin.NewAdminAPIHandler(appStore, q, tracker, cancelService)
 	loginHandler, err := admin.NewLoginHandler(serviceCfg)
@@ -113,8 +111,6 @@ func main() {
 	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, auth)
 	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, auth)
 	admin.RegisterAdminProgressRoutesHertz(h, progressAdminHandler, auth)
-	admin.RegisterAdminAppRoutesHertz(h, appAdminHandler, auth)
-	admin.RegisterAdminHistoryRoutesHertz(h, historyAdminHandler, auth)
 	admin.RegisterAdminSPARoutesHertz(h, auth)
 	go func() {
 		slog.Info("starting", "addr", serviceCfg.ListenAddr)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAdminEvents } from "./AdminEventProvider";
 import { AdminAPIError, apiRequest } from "./api";
 
@@ -35,10 +35,13 @@ function historyStatusVariant(status: string) {
 export function HistoryList({ setFlash }: { setFlash: (flash: { message: string, type: "success" | "error" }) => void }) {
 	const [history, setHistory] = useState<HistoryJob[]>([]);
 	const [optimisticRetryIds, setOptimisticRetryIds] = useState<Set<string>>(() => new Set());
+	const [retriedSourceIds, setRetriedSourceIds] = useState<Set<string>>(() => new Set());
 	const { progress: liveProgress } = useAdminEvents();
-	
-	const searchParams = new URLSearchParams(window.location.hash.split("?")[1] || "");
-	const appId = searchParams.get("appId");
+
+	const appId = useMemo(() => {
+		const searchParams = new URLSearchParams(window.location.hash.split("?")[1] || "");
+		return searchParams.get("appId");
+	}, []);
 	
 	const loadHistory = useCallback(async () => {
 		try {
@@ -63,6 +66,7 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 			const res = await apiRequest(`/history/${job.id}/retry`, { method: "POST" }) as RetryHistoryResponse;
 			if (res.jobId) {
 				const now = new Date().toISOString();
+				setRetriedSourceIds((ids) => new Set(ids).add(job.id));
 				setOptimisticRetryIds((currentIds) => new Set(currentIds).add(res.jobId || ""));
 				setHistory((currentHistory) => {
 					if (currentHistory.some((historyJob) => historyJob.id === res.jobId)) return currentHistory;
@@ -147,7 +151,7 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 							const progress = liveProgress[job.id];
 							const currentStatus = optimisticRetryIds.has(job.id) ? job.status : progress?.status || job.status;
 							
-							const showRetry = currentStatus === "succeeded" || currentStatus === "failed";
+							const showRetry = (currentStatus === "succeeded" || currentStatus === "failed") && !retriedSourceIds.has(job.id);
 							const isTerminal = terminalHistoryStatuses.has(currentStatus);
 							
 							return (
