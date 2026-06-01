@@ -156,12 +156,12 @@ func (h *LoginHandler) HandleLoginHertz(ctx context.Context, c *app.RequestConte
 		return
 	}
 
-	c.SetCookie(jwtCookieName, token, int(jwtTTL.Seconds()), "/", "", protocol.CookieSameSiteLaxMode, false, true)
+	c.SetCookie(jwtCookieName, token, int(jwtTTL.Seconds()), "/", "", protocol.CookieSameSiteLaxMode, h.cfg.CookieSecure, true)
 	c.Redirect(consts.StatusFound, []byte("/admin/"))
 }
 
 func (h *LoginHandler) HandleLogoutHertz(ctx context.Context, c *app.RequestContext) {
-	c.SetCookie(jwtCookieName, "", -1, "/", "", protocol.CookieSameSiteLaxMode, false, true)
+	c.SetCookie(jwtCookieName, "", -1, "/", "", protocol.CookieSameSiteLaxMode, h.cfg.CookieSecure, true)
 	c.Redirect(consts.StatusFound, []byte("/admin/login"))
 }
 

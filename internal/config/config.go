@@ -13,6 +13,8 @@ type ServiceConfig struct {
 	DownloadDNS   string
 	AdminUsername string
 	AdminPassword string
+	// CookieSecure sets the Secure flag on the admin JWT cookie. Set to true when behind a TLS-terminating reverse proxy (e.g. nginx). Do NOT set if accessed over plain HTTP.
+	CookieSecure bool
 }
 
 type LegacyBootstrapConfig struct {
@@ -51,6 +53,7 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		DownloadDNS:   envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
 		AdminUsername: username,
 		AdminPassword: password,
+		CookieSecure:  os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
 	}, nil
 }
 
