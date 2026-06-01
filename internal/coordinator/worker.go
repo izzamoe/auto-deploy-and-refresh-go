@@ -38,6 +38,9 @@ func (w *Worker) Wait() {
 }
 
 func (w *Worker) loop(ctx context.Context) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -56,7 +59,7 @@ func (w *Worker) loop(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(100 * time.Millisecond):
+			case <-ticker.C:
 				continue
 			}
 		}
@@ -134,6 +137,9 @@ func (c *Coordinator) Wait() {
 }
 
 func (c *Coordinator) schedule(ctx context.Context) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -184,7 +190,7 @@ func (c *Coordinator) schedule(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(100 * time.Millisecond):
+			case <-ticker.C:
 			}
 		}
 	}
