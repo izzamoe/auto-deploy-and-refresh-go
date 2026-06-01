@@ -103,7 +103,20 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
-	h := server.New(server.WithHostPorts(serviceCfg.ListenAddr), server.WithReadTimeout(45*time.Second), server.WithWriteTimeout(45*time.Second), server.WithIdleTimeout(90*time.Second), server.WithKeepAliveTimeout(time.Minute), server.WithMaxRequestBodySize(16*1024*1024), server.WithMaxHeaderBytes(1<<20), server.WithMaxKeepBodySize(4*1024*1024), server.WithReadBufferSize(4*1024), server.WithKeepAlive(true), server.WithExitWaitTime(30*time.Second), server.WithNetwork("tcp"))
+	h := server.New(
+		server.WithHostPorts(serviceCfg.ListenAddr),
+		server.WithReadTimeout(45*time.Second),
+		server.WithWriteTimeout(45*time.Second),
+		server.WithIdleTimeout(90*time.Second),
+		server.WithKeepAliveTimeout(time.Minute),
+		server.WithMaxRequestBodySize(16*1024*1024),
+		server.WithMaxHeaderBytes(1<<20),
+		server.WithMaxKeepBodySize(4*1024*1024),
+		server.WithReadBufferSize(4*1024),
+		server.WithKeepAlive(true),
+		server.WithExitWaitTime(30*time.Second),
+		server.WithNetwork("tcp"),
+	)
 	admin.SetupMiddleware(h)
 	auth := admin.HertzSessionAuthMiddleware(serviceCfg)
 	admin.RegisterLoginRoutesHertz(h, loginHandler)
