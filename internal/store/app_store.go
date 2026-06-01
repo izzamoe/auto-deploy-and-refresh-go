@@ -7,15 +7,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/config"
 	"github.com/izzamoe/auto-deploy/internal/progress"
+	"modernc.org/sqlite"
 )
 
 var ErrDuplicateApp = errors.New("duplicate app: uniqueness constraint violated")
 var ErrActiveDeployExists = errors.New("active deploy in progress")
+
+const sqliteConstraintUnique = 2067 // SQLITE_CONSTRAINT_UNIQUE
 
 type AppWithLastDeploy struct {
 	App
@@ -385,7 +387,8 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 }
 
 func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+	return ok && sqliteErr.Code() == sqliteConstraintUnique
 }
 
 func scanApp(rows *sql.Rows) (App, error) {
