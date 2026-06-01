@@ -122,6 +122,8 @@ func DownloadWithRetry(client *client.Client, url string, sleepFn func(time.Dura
 	return DownloadWithRetryContext(context.Background(), client, url, sleepFn)
 }
 
+const maxRedirects = 10
+
 func DownloadWithRetryContext(ctx context.Context, client *client.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
 	if sleepFn == nil {
 		sleepFn = defaultSleep
@@ -136,12 +138,7 @@ func DownloadWithRetryContext(ctx context.Context, client *client.Client, url st
 			return nil, err
 		}
 
-		req := &protocol.Request{}
-		req.SetRequestURI(url)
-		req.SetMethod(http.MethodGet)
-		resp := &protocol.Response{}
-
-		err := client.Do(ctx, req, resp)
+		httpResp, err := doWithRedirects(ctx, client, url)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -154,18 +151,6 @@ func DownloadWithRetryContext(ctx context.Context, client *client.Client, url st
 				continue
 			}
 			return nil, err
-		}
-
-		httpResp := &http.Response{
-			StatusCode:    resp.StatusCode(),
-			ContentLength: parseContentLength(resp.Header.Peek("Content-Length")),
-		}
-
-		body := resp.BodyStream()
-		if rc, ok := body.(io.ReadCloser); ok {
-			httpResp.Body = rc
-		} else {
-			httpResp.Body = io.NopCloser(body)
 		}
 
 		if isRetriableStatus(httpResp.StatusCode) {
@@ -186,6 +171,87 @@ func DownloadWithRetryContext(ctx context.Context, client *client.Client, url st
 	}
 
 	return nil, fmt.Errorf("download failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// doWithRedirects performs a single GET following up to maxRedirects redirects.
+// Authorization header is stripped on cross-host redirects (security).
+func doWithRedirects(ctx context.Context, c *client.Client, url string) (*http.Response, error) {
+	currentURL := url
+	var originalHost string
+
+	for i := 0; i <= maxRedirects; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		req := &protocol.Request{}
+		req.SetRequestURI(currentURL)
+		req.SetMethod(http.MethodGet)
+
+		if i > 0 && originalHost != "" {
+			parsedHost := extractHost(currentURL)
+			if parsedHost != originalHost {
+				req.Header.Del("Authorization")
+			}
+		}
+		if i == 0 {
+			originalHost = extractHost(currentURL)
+		}
+
+		resp := &protocol.Response{}
+		if err := c.Do(ctx, req, resp); err != nil {
+			return nil, err
+		}
+
+		statusCode := resp.StatusCode()
+
+		if !isRedirectStatus(statusCode) {
+			httpResp := &http.Response{
+				StatusCode:    statusCode,
+				ContentLength: parseContentLength(resp.Header.Peek("Content-Length")),
+			}
+			body := resp.BodyStream()
+			if rc, ok := body.(io.ReadCloser); ok {
+				httpResp.Body = rc
+			} else {
+				httpResp.Body = io.NopCloser(body)
+			}
+			return httpResp, nil
+		}
+
+		location := string(resp.Header.Peek("Location"))
+		if location == "" {
+			return nil, fmt.Errorf("redirect with empty Location header (status %d)", statusCode)
+		}
+		currentURL = location
+	}
+
+	return nil, fmt.Errorf("too many redirects (max %d)", maxRedirects)
+}
+
+func isRedirectStatus(code int) bool {
+	switch code {
+	case http.StatusMovedPermanently,  // 301
+		http.StatusFound,              // 302
+		http.StatusSeeOther,           // 303
+		http.StatusTemporaryRedirect,  // 307
+		http.StatusPermanentRedirect:  // 308
+		return true
+	}
+	return false
+}
+
+func extractHost(rawURL string) string {
+	// Fast path: find "://" then extract up to next "/"
+	idx := strings.Index(rawURL, "://")
+	if idx < 0 {
+		return rawURL
+	}
+	rest := rawURL[idx+3:]
+	if slash := strings.IndexByte(rest, '/'); slash >= 0 {
+		return rest[:slash]
+	}
+	return rest
 }
 
 func isTransientError(err error) bool {

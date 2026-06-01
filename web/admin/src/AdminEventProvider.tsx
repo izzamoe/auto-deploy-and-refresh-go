@@ -79,6 +79,15 @@ export function AdminEventProvider({ children }: PropsWithChildren) {
 		const connect = () => {
 			if (unmounted) return;
 
+			if (wsRef.current) {
+				wsRef.current.onclose = null;
+				wsRef.current.onerror = null;
+				wsRef.current.onmessage = null;
+				wsRef.current.onopen = null;
+				wsRef.current.close();
+				wsRef.current = null;
+			}
+
 			const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 			const wsUrl = `${wsProtocol}//${window.location.host}/admin/events/ws`;
 
@@ -231,8 +240,8 @@ export function AdminEventProvider({ children }: PropsWithChildren) {
 
 			ws.onclose = () => {
 				if (unmounted) return;
+				wsRef.current = null;
 				setState((s) => ({ ...s, connected: false }));
-				// Reconnect with backoff
 				if (reconnectTimeoutRef.current !== null) {
 					window.clearTimeout(reconnectTimeoutRef.current);
 				}

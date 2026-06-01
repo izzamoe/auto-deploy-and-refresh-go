@@ -30,8 +30,8 @@ const (
 	adminEventTypeProgress        = "progress"
 	adminEventCompactProgress     = "p"
 
-	adminEventClientBuffer = 8
-	adminEventWriteTimeout = 2 * time.Second
+	adminEventClientBuffer = 64
+	adminEventWriteTimeout = 5 * time.Second
 )
 
 type AdminEvent struct {
@@ -82,6 +82,8 @@ func NewAdminEventHub(tracker *progress.ProgressTracker) *AdminEventHub {
 	}
 }
 
+const adminEventHeartbeatInterval = 30 * time.Second
+
 func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, nil)
 	if err != nil {
@@ -97,10 +99,21 @@ func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	heartbeat := time.NewTicker(adminEventHeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-heartbeat.C:
+			hb, encErr := h.encodeEvent(AdminEvent{Type: adminEventTypeHeartbeat})
+			if encErr != nil {
+				return
+			}
+			if !writeAdminEventPayload(ctx, c, hb) {
+				return
+			}
 		case payload, ok := <-client.send:
 			if !ok {
 				return
