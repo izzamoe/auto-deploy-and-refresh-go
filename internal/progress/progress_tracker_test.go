@@ -262,7 +262,7 @@ func TestProgressTrackerConcurrentStartUpdateSnapshot(t *testing.T) {
 	const apps = 4
 
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -290,13 +290,13 @@ func TestProgressTrackerConcurrentFinishCleanup(t *testing.T) {
 	pt := newProgressTrackerWithClock(10*time.Second, now)
 
 	const apps = 10
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		appID := "app" + string(rune('0'+i))
 		pt.Start(appID, "job", "v1")
 	}
 
 	var wg sync.WaitGroup
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		wg.Add(1)
 		appID := "app" + string(rune('0'+i))
 		go func(id string) {
@@ -311,12 +311,10 @@ func TestProgressTrackerConcurrentFinishCleanup(t *testing.T) {
 	mu.Unlock()
 
 	var cleanupWg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		cleanupWg.Add(1)
-		go func() {
-			defer cleanupWg.Done()
+	for range 5 {
+		cleanupWg.Go(func() {
 			pt.Cleanup()
-		}()
+		})
 	}
 	cleanupWg.Wait()
 

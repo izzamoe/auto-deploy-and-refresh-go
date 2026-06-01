@@ -168,7 +168,7 @@ func TestWorkerCancelTerminalAndRepeatedNoop(t *testing.T) {
 		t.Fatalf("MarkDone: %v", err)
 	}
 	svc := cancel.NewCancelService(q)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		result, err := svc.RequestJobCancel(jobID)
 		if err != nil {
 			t.Fatalf("RequestJobCancel #%d: %v", i+1, err)

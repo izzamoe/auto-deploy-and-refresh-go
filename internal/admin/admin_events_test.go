@@ -107,7 +107,7 @@ func TestProgressTrackerUpdateDropsSlowEventClient(t *testing.T) {
 	hub := NewAdminEventHub(tracker)
 	tracker.SetProgressSink(hub)
 	client := hub.addClient()
-	for i := 0; i < adminEventClientBuffer; i++ {
+	for range adminEventClientBuffer {
 		client.send <- []byte(`{"queued":true}`)
 	}
 
@@ -136,7 +136,7 @@ func TestProgressTrackerUpdateDropsSlowEventClient(t *testing.T) {
 func TestAdminEventHubSlowClientDoesNotBlockBroadcast(t *testing.T) {
 	hub := NewAdminEventHub(progress.NewProgressTracker())
 	client := hub.addClient()
-	for i := 0; i < adminEventClientBuffer; i++ {
+	for range adminEventClientBuffer {
 		client.send <- []byte(`{"queued":true}`)
 	}
 

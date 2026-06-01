@@ -156,7 +156,7 @@ func TestCountingReaderThrottling(t *testing.T) {
 	}, clock.Now)
 	cr.interval = 250 * time.Millisecond
 	buf := make([]byte, 1)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		clock.Advance(100 * time.Millisecond)
 		if _, err := cr.Read(buf); err != nil {
 			t.Fatalf("read %d: %v", i, err)

@@ -65,7 +65,7 @@ func TestAdminLayoutRendersAppsTableSelector(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	data := map[string]interface{}{}
+	data := map[string]any{}
 	err = adminHandler.templates["apps_list.html"].ExecuteTemplate(&buf, "base.html", data)
 	if err != nil {
 		t.Fatalf("Failed to execute template: %v", err)
