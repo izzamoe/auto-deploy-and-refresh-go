@@ -50,11 +50,9 @@ func dequeueJob(t *testing.T, q *store.DeployQueue, appID, tag string) string {
 	return id
 }
 
-func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.DeployQueue) {
+func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.DeployQueue, *JWTHandler) {
 	t.Helper()
-	if err := InitJWTSecret(); err != nil {
-		t.Fatalf("initJWTSecret: %v", err)
-	}
+	jwt := testJWTHandler(t)
 	db := newTestDB(t)
 	appStore, err := store.NewAppStore(db)
 	if err != nil {
@@ -69,11 +67,11 @@ func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.
 	}
 	handler := NewAdminAPIHandler(appStore, queue, progress.NewProgressTracker(), cancel.NewCancelService(queue))
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
-	RegisterAdminAPIRoutesHertz(h, handler, testHertzSessionAuth(t))
-	return h, appStore, queue
+	RegisterAdminAPIRoutesHertz(h, handler, HertzSessionAuthMiddleware(testServiceConfig(), jwt))
+	return h, appStore, queue, jwt
 }
 
-func adminAPIRequestHertz(method, path, body string) *app.RequestContext {
+func adminAPIRequestHertz(jwt *JWTHandler, method, path, body string) *app.RequestContext {
 	c := app.NewContext(0)
 	c.Request.SetRequestURI(path)
 	c.Request.SetMethod(method)
@@ -81,7 +79,7 @@ func adminAPIRequestHertz(method, path, body string) *app.RequestContext {
 	if method != http.MethodGet || body != "" {
 		c.Request.Header.Set("Content-Type", "application/json")
 	}
-	token, _ := issueJWT("admin")
+	token, _ := jwt.issueJWT("admin")
 	c.Request.Header.Set("Cookie", jwtCookieName+"="+token)
 	return c
 }
@@ -105,7 +103,7 @@ func decodeAdminAPIResponseHertz[T any](t *testing.T, c *app.RequestContext) T {
 }
 
 func TestAdminAPIUnauthorizedReturnsJSON(t *testing.T) {
-	h, _, _ := newTestAdminAPIHertz(t)
+	h, _, _, _ := newTestAdminAPIHertz(t)
 
 	c := app.NewContext(0)
 	c.Request.SetRequestURI("/admin/api/apps")
@@ -129,10 +127,10 @@ func TestAdminAPIUnauthorizedReturnsJSON(t *testing.T) {
 }
 
 func TestAdminAPIAppsCRUD(t *testing.T) {
-	h, store, _ := newTestAdminAPIHertz(t)
+	h, store, _, jwt := newTestAdminAPIHertz(t)
 
 	createBody := `{"name":"api-app","secret":"secret-1","binaryPath":"/opt/api-app","serviceName":"api-app.service","githubRepo":"owner/api-app","artifactName":"api-app-linux"}`
-	createRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps", createBody))
+	createRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps", createBody))
 	if createRR.Response.StatusCode() != http.StatusCreated {
 		t.Fatalf("expected 201 create, got %d body=%s", createRR.Response.StatusCode(), string(createRR.Response.Body()))
 	}
@@ -144,7 +142,7 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 		t.Fatalf("unexpected create response: %+v", created)
 	}
 
-	listRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("GET", "/admin/api/apps", ""))
+	listRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/apps", ""))
 	if listRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 list, got %d", listRR.Response.StatusCode())
 	}
@@ -155,7 +153,7 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 		t.Fatalf("unexpected app list: %+v", listed)
 	}
 
-	getRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("GET", "/admin/api/apps/"+created.App.ID, ""))
+	getRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/apps/"+created.App.ID, ""))
 	if getRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 get, got %d", getRR.Response.StatusCode())
 	}
@@ -167,7 +165,7 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 	}
 
 	updateBody := `{"name":"api-app-updated","binaryPath":"/opt/api-app-v2","serviceName":"api-app-v2.service","githubRepo":"owner/api-app-v2","artifactName":"api-app-v2-linux","enabled":false}`
-	updateRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("PUT", "/admin/api/apps/"+created.App.ID, updateBody))
+	updateRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "PUT", "/admin/api/apps/"+created.App.ID, updateBody))
 	if updateRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 update, got %d body=%s", updateRR.Response.StatusCode(), string(updateRR.Response.Body()))
 	}
@@ -179,7 +177,7 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 		t.Fatalf("unexpected update response: %+v", updated)
 	}
 
-	toggleRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps/"+created.App.ID+"/toggle", ""))
+	toggleRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+created.App.ID+"/toggle", ""))
 	if toggleRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 toggle, got %d", toggleRR.Response.StatusCode())
 	}
@@ -190,7 +188,7 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 		t.Fatalf("expected toggle to re-enable app, got %+v", toggled)
 	}
 
-	deleteRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("DELETE", "/admin/api/apps/"+created.App.ID, ""))
+	deleteRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "DELETE", "/admin/api/apps/"+created.App.ID, ""))
 	if deleteRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 delete, got %d body=%s", deleteRR.Response.StatusCode(), string(deleteRR.Response.Body()))
 	}
@@ -198,14 +196,14 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 		t.Fatal("expected app to be deleted")
 	}
 
-	missingDeleteRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("DELETE", "/admin/api/apps/"+created.App.ID, ""))
+	missingDeleteRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "DELETE", "/admin/api/apps/"+created.App.ID, ""))
 	if missingDeleteRR.Response.StatusCode() != http.StatusNotFound {
 		t.Fatalf("expected 404 delete missing app, got %d body=%s", missingDeleteRR.Response.StatusCode(), string(missingDeleteRR.Response.Body()))
 	}
 }
 
 func TestAdminAPIUpdateDuplicateSecretDoesNotPartiallyUpdate(t *testing.T) {
-	h, store, _ := newTestAdminAPIHertz(t)
+	h, store, _, jwt := newTestAdminAPIHertz(t)
 	appA, err := store.Create("app-a", "secret-a", "/bin/a", "a.service", "owner/a", "artifact-a")
 	if err != nil {
 		t.Fatalf("create app A: %v", err)
@@ -216,7 +214,7 @@ func TestAdminAPIUpdateDuplicateSecretDoesNotPartiallyUpdate(t *testing.T) {
 	}
 
 	updateBody := `{"name":"app-a-mutated","secret":"secret-b","binaryPath":"/bin/a-mutated","serviceName":"a-mutated.service","githubRepo":"owner/a-mutated","artifactName":"artifact-a-mutated"}`
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz("PUT", "/admin/api/apps/"+appA.ID, updateBody))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "PUT", "/admin/api/apps/"+appA.ID, updateBody))
 	if rr.Response.StatusCode() != http.StatusBadRequest {
 		t.Fatalf("expected 400 duplicate secret update, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -231,13 +229,13 @@ func TestAdminAPIUpdateDuplicateSecretDoesNotPartiallyUpdate(t *testing.T) {
 }
 
 func TestAdminAPIManualDeployQueuesJSON(t *testing.T) {
-	h, store, queue := newTestAdminAPIHertz(t)
+	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("deploy-app", "secret", "/bin/deploy", "deploy.service", "owner/deploy", "artifact")
 	if err != nil {
 		t.Fatalf("store.Create: %v", err)
 	}
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps/"+app.ID+"/deploy", `{"tag":"v1.2.3"}`))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+app.ID+"/deploy", `{"tag":"v1.2.3"}`))
 	if rr.Response.StatusCode() != http.StatusAccepted {
 		t.Fatalf("expected 202 deploy, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -256,7 +254,7 @@ func TestAdminAPIManualDeployQueuesJSON(t *testing.T) {
 		t.Fatalf("expected one pending manual_deploy job, got %+v", jobs)
 	}
 
-	dupRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps/"+app.ID+"/deploy", `{"tag":"v1.2.3"}`))
+	dupRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+app.ID+"/deploy", `{"tag":"v1.2.3"}`))
 	if dupRR.Response.StatusCode() != http.StatusConflict {
 		t.Fatalf("expected 409 duplicate deploy, got %d body=%s", dupRR.Response.StatusCode(), string(dupRR.Response.Body()))
 	}
@@ -267,7 +265,7 @@ func TestAdminAPIManualDeployQueuesJSON(t *testing.T) {
 }
 
 func TestAdminAPIHistoryListAndRetry(t *testing.T) {
-	h, store, queue := newTestAdminAPIHertz(t)
+	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("history-app", "secret", "/bin/history", "history.service", "owner/history", "artifact")
 	if err != nil {
 		t.Fatalf("store.Create: %v", err)
@@ -283,7 +281,7 @@ func TestAdminAPIHistoryListAndRetry(t *testing.T) {
 		t.Fatalf("MarkDone: %v", err)
 	}
 
-	listRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("GET", "/admin/api/history?appId="+app.ID, ""))
+	listRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/history?appId="+app.ID, ""))
 	if listRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 history, got %d", listRR.Response.StatusCode())
 	}
@@ -295,7 +293,7 @@ func TestAdminAPIHistoryListAndRetry(t *testing.T) {
 		t.Fatalf("unexpected history response: %+v", listed)
 	}
 
-	retryRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/history/"+jobID+"/retry", ""))
+	retryRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/history/"+jobID+"/retry", ""))
 	if retryRR.Response.StatusCode() != http.StatusAccepted {
 		t.Fatalf("expected 202 retry, got %d body=%s", retryRR.Response.StatusCode(), string(retryRR.Response.Body()))
 	}
@@ -316,7 +314,7 @@ func TestAdminAPIHistoryListAndRetry(t *testing.T) {
 }
 
 func TestAdminAPICancelEndpoints(t *testing.T) {
-	h, store, queue := newTestAdminAPIHertz(t)
+	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("cancel-app", "secret", "/bin/cancel", "cancel.service", "owner/cancel", "artifact")
 	if err != nil {
 		t.Fatalf("store.Create: %v", err)
@@ -329,7 +327,7 @@ func TestAdminAPICancelEndpoints(t *testing.T) {
 		t.Fatalf("ListHistory pending: jobs=%+v err=%v", pendingJobs, err)
 	}
 
-	jobCancelRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/jobs/"+pendingJobs[0].ID+"/cancel", ""))
+	jobCancelRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/jobs/"+pendingJobs[0].ID+"/cancel", ""))
 	if jobCancelRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 job cancel, got %d body=%s", jobCancelRR.Response.StatusCode(), string(jobCancelRR.Response.Body()))
 	}
@@ -359,7 +357,7 @@ func TestAdminAPICancelEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DequeueNext: %v", err)
 	}
-	appCancelRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps/"+app.ID+"/cancel", ""))
+	appCancelRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+app.ID+"/cancel", ""))
 	if appCancelRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 app cancel, got %d body=%s", appCancelRR.Response.StatusCode(), string(appCancelRR.Response.Body()))
 	}
@@ -380,7 +378,7 @@ func TestAdminAPICancelEndpoints(t *testing.T) {
 }
 
 func TestAdminAPIAppCancelReturnsCounts(t *testing.T) {
-	h, store, queue := newTestAdminAPIHertz(t)
+	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("cancel-counts-app", "secret", "/bin/cancel-counts", "cancel-counts.service", "owner/cancel-counts", "artifact")
 	if err != nil {
 		t.Fatalf("store.Create: %v", err)
@@ -395,7 +393,7 @@ func TestAdminAPIAppCancelReturnsCounts(t *testing.T) {
 	pendingID := enqueueJob(t, queue, app.ID, "v-pending")
 	otherAppID := enqueueJob(t, queue, "other-app", "v-other")
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps/"+app.ID+"/cancel", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+app.ID+"/cancel", ""))
 	if rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 app cancel, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -433,9 +431,9 @@ func TestAdminAPIAppCancelReturnsCounts(t *testing.T) {
 }
 
 func TestAdminAPIErrorBodiesAreJSON(t *testing.T) {
-	h, _, _ := newTestAdminAPIHertz(t)
+	h, _, _, jwt := newTestAdminAPIHertz(t)
 
-	invalidCreate := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps", `{"name":"missing-fields"}`))
+	invalidCreate := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps", `{"name":"missing-fields"}`))
 	if invalidCreate.Response.StatusCode() != http.StatusBadRequest {
 		t.Fatalf("expected 400 validation, got %d", invalidCreate.Response.StatusCode())
 	}
@@ -444,7 +442,7 @@ func TestAdminAPIErrorBodiesAreJSON(t *testing.T) {
 		t.Fatalf("unexpected validation body: %+v", validation)
 	}
 
-	badJSON := serveAdminAPIHertz(t, h, adminAPIRequestHertz("POST", "/admin/api/apps", `{`))
+	badJSON := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps", `{`))
 	if badJSON.Response.StatusCode() != http.StatusBadRequest {
 		t.Fatalf("expected 400 bad JSON, got %d", badJSON.Response.StatusCode())
 	}
@@ -453,7 +451,7 @@ func TestAdminAPIErrorBodiesAreJSON(t *testing.T) {
 		t.Fatalf("unexpected bad JSON body: %+v", badBody)
 	}
 
-	notFound := serveAdminAPIHertz(t, h, adminAPIRequestHertz("GET", "/admin/api/does-not-exist", ""))
+	notFound := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/does-not-exist", ""))
 	if notFound.Response.StatusCode() != http.StatusNotFound {
 		t.Fatalf("expected 404 JSON not found, got %d", notFound.Response.StatusCode())
 	}
@@ -466,7 +464,7 @@ func TestAdminAPIErrorBodiesAreJSON(t *testing.T) {
 	missingContentType.Request.SetRequestURI("/admin/api/apps")
 	missingContentType.Request.SetMethod("POST")
 	missingContentType.Request.SetBodyString(`{"name":"x"}`)
-	token, _ := issueJWT("admin")
+	token, _ := jwt.issueJWT("admin")
 	missingContentType.Request.Header.Set("Cookie", jwtCookieName+"="+token)
 	missingContentType = serveAdminAPIHertz(t, h, missingContentType)
 	if missingContentType.Response.StatusCode() != http.StatusUnsupportedMediaType {

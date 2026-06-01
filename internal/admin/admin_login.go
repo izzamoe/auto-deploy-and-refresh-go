@@ -26,15 +26,18 @@ const (
 	jwtTTL        = 24 * time.Hour
 )
 
-var jwtSecret []byte
+// JWTHandler holds the signing secret and provides JWT issue/validate methods.
+type JWTHandler struct {
+	secret []byte
+}
 
-func InitJWTSecret() error {
+// NewJWTHandler creates a JWTHandler with 32 cryptographically random bytes.
+func NewJWTHandler() (*JWTHandler, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return err
+		return nil, err
 	}
-	jwtSecret = b
-	return nil
+	return &JWTHandler{secret: b}, nil
 }
 
 type jwtClaims struct {
@@ -42,7 +45,7 @@ type jwtClaims struct {
 	Exp int64  `json:"exp"`
 }
 
-func issueJWT(username string) (string, error) {
+func (h *JWTHandler) issueJWT(username string) (string, error) {
 	claims := jwtClaims{
 		Sub: username,
 		Exp: time.Now().Add(jwtTTL).Unix(),
@@ -56,21 +59,21 @@ func issueJWT(username string) (string, error) {
 	body := base64.RawURLEncoding.EncodeToString(payload)
 	unsigned := header + "." + body
 
-	mac := hmac.New(sha256.New, jwtSecret)
+	mac := hmac.New(sha256.New, h.secret)
 	mac.Write([]byte(unsigned))
 	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 
 	return unsigned + "." + sig, nil
 }
 
-func validateJWT(token string) (string, bool) {
+func (h *JWTHandler) validateJWT(token string) (string, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return "", false
 	}
 
 	unsigned := parts[0] + "." + parts[1]
-	mac := hmac.New(sha256.New, jwtSecret)
+	mac := hmac.New(sha256.New, h.secret)
 	mac.Write([]byte(unsigned))
 	expectedSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 
@@ -97,15 +100,16 @@ func validateJWT(token string) (string, bool) {
 
 type LoginHandler struct {
 	cfg  *config.ServiceConfig
+	jwt  *JWTHandler
 	tmpl *template.Template
 }
 
-func NewLoginHandler(cfg *config.ServiceConfig) (*LoginHandler, error) {
+func NewLoginHandler(cfg *config.ServiceConfig, jwt *JWTHandler) (*LoginHandler, error) {
 	tmpl, err := template.ParseFS(templateFS, "templates/login.html")
 	if err != nil {
 		return nil, err
 	}
-	return &LoginHandler{cfg: cfg, tmpl: tmpl}, nil
+	return &LoginHandler{cfg: cfg, jwt: jwt, tmpl: tmpl}, nil
 }
 
 type loginPageData struct {
@@ -115,7 +119,7 @@ type loginPageData struct {
 
 func (h *LoginHandler) ShowLoginHertz(ctx context.Context, c *app.RequestContext) {
 	token := string(c.Cookie(jwtCookieName))
-	if _, ok := validateJWT(token); ok {
+	if _, ok := h.jwt.validateJWT(token); ok {
 		c.Redirect(consts.StatusFound, []byte("/admin/"))
 		return
 	}
@@ -145,7 +149,7 @@ func (h *LoginHandler) HandleLoginHertz(ctx context.Context, c *app.RequestConte
 		return
 	}
 
-	token, err := issueJWT(username)
+	token, err := h.jwt.issueJWT(username)
 	if err != nil {
 		slog.Error("jwt issue failed", "err", err)
 		c.String(consts.StatusInternalServerError, "internal error")
@@ -161,7 +165,7 @@ func (h *LoginHandler) HandleLogoutHertz(ctx context.Context, c *app.RequestCont
 	c.Redirect(consts.StatusFound, []byte("/admin/login"))
 }
 
-func HertzSessionAuthMiddleware(cfg *config.ServiceConfig) app.HandlerFunc {
+func HertzSessionAuthMiddleware(cfg *config.ServiceConfig, jwt *JWTHandler) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		path := string(c.Request.URI().Path())
 		isAPIOrEvents := strings.HasPrefix(path, "/admin/api") || strings.HasPrefix(path, "/admin/events")
@@ -185,7 +189,7 @@ func HertzSessionAuthMiddleware(cfg *config.ServiceConfig) app.HandlerFunc {
 		}
 
 		token := string(c.Cookie(jwtCookieName))
-		if _, ok := validateJWT(token); ok {
+		if _, ok := jwt.validateJWT(token); ok {
 			c.Next(ctx)
 			return
 		}

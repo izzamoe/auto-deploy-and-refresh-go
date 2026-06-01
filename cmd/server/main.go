@@ -39,8 +39,9 @@ func main() {
 		os.Exit(1)
 	}
 	hlog.SetLogger(hertzLogger)
-	if err := admin.InitJWTSecret(); err != nil {
-		slog.Error("jwt secret init failed", "err", err)
+	jwtHandler, err := admin.NewJWTHandler()
+	if err != nil {
+		slog.Error("jwt handler init failed", "err", err)
 		os.Exit(1)
 	}
 	serviceCfg, err := config.LoadServiceConfig()
@@ -102,7 +103,7 @@ func main() {
 	templates := adminHandler.Templates()
 	progressAdminHandler := admin.NewProgressAdminHandler(tracker, appStore, q, templates)
 	adminAPIHandler := admin.NewAdminAPIHandler(appStore, q, tracker, cancelService)
-	loginHandler, err := admin.NewLoginHandler(serviceCfg)
+	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler)
 	if err != nil {
 		slog.Error("login handler init failed", "err", err)
 		db.Close()
@@ -123,7 +124,7 @@ func main() {
 		server.WithNetwork("tcp"),
 	)
 	admin.SetupMiddleware(h)
-	auth := admin.HertzSessionAuthMiddleware(serviceCfg)
+	auth := admin.HertzSessionAuthMiddleware(serviceCfg, jwtHandler)
 	admin.RegisterLoginRoutesHertz(h, loginHandler)
 	h.POST("/webhook", multiAppWebhookHandler(admissionSvc))
 	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, auth)
