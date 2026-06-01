@@ -34,6 +34,9 @@ func newTestAppAdminHandler(t *testing.T, appStore *store.AppStore) *AppAdminHan
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 
 	return NewAppAdminHandler(appStore, queue, tmpls, progress.NewProgressTracker())
 }

@@ -26,6 +26,9 @@ func newTestAppStoreWithJobs(t *testing.T) *store.AppStore {
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	if err := queue.Enqueue(app.ID, "v1.0.0"); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

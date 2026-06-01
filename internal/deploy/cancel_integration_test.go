@@ -214,6 +214,9 @@ func newTestQueue(t *testing.T, maxPending int) *store.DeployQueue {
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := q.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	return q
 }
 

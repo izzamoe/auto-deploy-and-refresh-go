@@ -31,6 +31,9 @@ func makeProgressHertzServer(t *testing.T, tracker *progress.ProgressTracker, ad
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	h := server.New(server.WithHostPorts(addr), server.WithDisablePrintRoute(true))
 	handler := NewProgressAdminHandler(tracker, appStore, queue, tmpls)
 	RegisterAdminProgressRoutesHertz(h, handler, testHertzSessionAuth(t))
@@ -291,6 +294,9 @@ func makeProgressHertzEngine(t *testing.T, tracker *progress.ProgressTracker) *s
 	queue, err := store.NewDeployQueue(appStore.DB(), 10)
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
+	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
 	}
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
 	handler := NewProgressAdminHandler(tracker, appStore, queue, tmpls)

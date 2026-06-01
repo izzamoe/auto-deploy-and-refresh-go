@@ -26,6 +26,9 @@ func newTestAdminSPAFullHertzEngine(t *testing.T) *server.Hertz {
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	tracker := progress.NewProgressTracker()
 	cancelService := cancel.NewCancelService(queue)
 	apiHandler := NewAdminAPIHandler(appStore, queue, tracker, cancelService)

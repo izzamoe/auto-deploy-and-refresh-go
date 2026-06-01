@@ -19,6 +19,9 @@ func newTestAdmission(t *testing.T, maxPending int) (*AdmissionService, *store.A
 	if err != nil {
 		t.Fatalf("store.NewDeployQueue: %v", err)
 	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("queue.Migrate: %v", err)
+	}
 
 	svc := NewAdmissionService(appStore, queue)
 	return svc, appStore, queue

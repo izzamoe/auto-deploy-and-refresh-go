@@ -21,6 +21,10 @@ func newTestQueue(t *testing.T, maxPending int) *DeployQueue {
 		db.Close()
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := q.Migrate(); err != nil {
+		db.Close()
+		t.Fatalf("Migrate: %v", err)
+	}
 	t.Cleanup(func() { q.Close() })
 	return q
 }
@@ -43,6 +47,9 @@ func TestQueueFIFOAndPersistencePerApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := q.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	for _, tag := range []string{"v1", "v2", "v3"} {
 		if err := q.Enqueue("app1", tag); err != nil {
 			t.Fatalf("Enqueue(%s): %v", tag, err)
@@ -56,6 +63,9 @@ func TestQueueFIFOAndPersistencePerApp(t *testing.T) {
 	q2, err := NewDeployQueue(db2, 10)
 	if err != nil {
 		t.Fatalf("NewDeployQueue (reopen): %v", err)
+	}
+	if err := q2.Migrate(); err != nil {
+		t.Fatalf("Migrate (reopen): %v", err)
 	}
 	defer q2.Close()
 
@@ -456,6 +466,9 @@ func TestLegacyQueueMigrationBackfillsAppID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := q.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	defer q.Close()
 
 	history, err := q.ListHistory("legacy", 10)
@@ -503,6 +516,9 @@ func TestEnqueueManual(t *testing.T) {
 	q, err := NewDeployQueue(db, 10)
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
+	}
+	if err := q.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
 	}
 
 	err = q.EnqueueManual("app1", "v1.0.0")

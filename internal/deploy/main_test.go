@@ -87,6 +87,9 @@ func setupTestWebhook(t *testing.T) (app.HandlerFunc, string) {
 	if err != nil {
 		t.Fatalf("new deploy queue: %v", err)
 	}
+	if err := q.Migrate(); err != nil {
+		t.Fatalf("migrate deploy queue: %v", err)
+	}
 	store, err := store.NewAppStore(db)
 	if err != nil {
 		t.Fatalf("new app store: %v", err)
@@ -106,6 +109,9 @@ func setupTestWebhookWithQueueMax(t *testing.T, maxPending int) (app.HandlerFunc
 	q, err := store.NewDeployQueue(db, maxPending)
 	if err != nil {
 		t.Fatalf("new deploy queue: %v", err)
+	}
+	if err := q.Migrate(); err != nil {
+		t.Fatalf("migrate deploy queue: %v", err)
 	}
 	store, err := store.NewAppStore(db)
 	if err != nil {

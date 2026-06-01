@@ -60,6 +60,11 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
+	if err := q.Migrate(); err != nil {
+		slog.Error("queue migrate failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
 	defer q.Close()
 	appStore, err := store.NewAppStore(db)
 	if err != nil {

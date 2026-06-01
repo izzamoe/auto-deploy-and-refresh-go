@@ -168,6 +168,9 @@ func newTestCoordinator(t *testing.T, runner CoordinatorRunner) (*Coordinator, *
 	if err != nil {
 		t.Fatalf("store.NewDeployQueue: %v", err)
 	}
+	if err := q.Migrate(); err != nil {
+		t.Fatalf("store.DeployQueue.Migrate: %v", err)
+	}
 	c := NewCoordinator(apps, q, runner, nil)
 	return c, apps, q
 }

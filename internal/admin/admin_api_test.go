@@ -64,6 +64,9 @@ func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.
 	if err != nil {
 		t.Fatalf("NewDeployQueue: %v", err)
 	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	handler := NewAdminAPIHandler(appStore, queue, progress.NewProgressTracker(), cancel.NewCancelService(queue))
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
 	RegisterAdminAPIRoutesHertz(h, handler, testHertzSessionAuth(t))

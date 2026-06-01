@@ -50,23 +50,27 @@ func generateJobID() (string, error) {
 }
 
 func NewDeployQueue(db *sql.DB, maxPending int) (*DeployQueue, error) {
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
-		return nil, fmt.Errorf("deploy_queue: set WAL: %w", err)
+	return &DeployQueue{db: db, maxPending: maxPending}, nil
+}
+
+func (q *DeployQueue) Migrate() error {
+	if _, err := q.db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		return fmt.Errorf("deploy_queue: set WAL: %w", err)
 	}
-	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
-		return nil, fmt.Errorf("deploy_queue: set busy_timeout: %w", err)
+	if _, err := q.db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		return fmt.Errorf("deploy_queue: set busy_timeout: %w", err)
 	}
 
 	var legacyExists bool
-	err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='deploy_queue'`).Scan(&legacyExists)
+	err := q.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='deploy_queue'`).Scan(&legacyExists)
 	if err != nil {
-		return nil, fmt.Errorf("deploy_queue: check legacy table: %w", err)
+		return fmt.Errorf("deploy_queue: check legacy table: %w", err)
 	}
 
 	var newExists bool
-	err = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='deploy_jobs'`).Scan(&newExists)
+	err = q.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='deploy_jobs'`).Scan(&newExists)
 	if err != nil {
-		return nil, fmt.Errorf("deploy_queue: check new table: %w", err)
+		return fmt.Errorf("deploy_queue: check new table: %w", err)
 	}
 
 	schema := `CREATE TABLE IF NOT EXISTS deploy_jobs (
@@ -84,26 +88,26 @@ func NewDeployQueue(db *sql.DB, maxPending int) (*DeployQueue, error) {
 		created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`
-	if _, err := db.Exec(schema); err != nil {
-		return nil, fmt.Errorf("deploy_queue: create table: %w", err)
+	if _, err := q.db.Exec(schema); err != nil {
+		return fmt.Errorf("deploy_queue: create table: %w", err)
 	}
 	for _, stmt := range []string{
 		`ALTER TABLE deploy_jobs ADD COLUMN download_bytes INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE deploy_jobs ADD COLUMN download_duration_ms INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE deploy_jobs ADD COLUMN download_speed_bps REAL NOT NULL DEFAULT 0`,
 	} {
-		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-			return nil, fmt.Errorf("deploy_queue: migrate deploy_jobs: %w", err)
+		if _, err := q.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("deploy_queue: migrate deploy_jobs: %w", err)
 		}
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_deploy_jobs_app_id ON deploy_jobs(app_id)`); err != nil {
-		return nil, fmt.Errorf("deploy_queue: create index: %w", err)
+	if _, err := q.db.Exec(`CREATE INDEX IF NOT EXISTS idx_deploy_jobs_app_id ON deploy_jobs(app_id)`); err != nil {
+		return fmt.Errorf("deploy_queue: create index: %w", err)
 	}
 
 	if legacyExists && !newExists {
-		rows, err := db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)
+		rows, err := q.db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)
 		if err != nil {
-			return nil, fmt.Errorf("deploy_queue: read legacy rows: %w", err)
+			return fmt.Errorf("deploy_queue: read legacy rows: %w", err)
 		}
 		defer rows.Close()
 
@@ -111,30 +115,30 @@ func NewDeployQueue(db *sql.DB, maxPending int) (*DeployQueue, error) {
 			var tag, status, errMsg string
 			var createdAt, updatedAt time.Time
 			if err := rows.Scan(&tag, &status, &errMsg, &createdAt, &updatedAt); err != nil {
-				return nil, fmt.Errorf("deploy_queue: scan legacy row: %w", err)
+				return fmt.Errorf("deploy_queue: scan legacy row: %w", err)
 			}
 			jobID, err := generateJobID()
 			if err != nil {
-				return nil, err
+				return err
 			}
 			var nullErrMsg *string
 			if errMsg != "" {
 				nullErrMsg = &errMsg
 			}
-			_, err = db.Exec(
+			_, err = q.db.Exec(
 				`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, error_msg, created_at, updated_at) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), 'legacy', ?, ?, 'webhook', ?, ?, ?)`,
 				jobID, tag, status, nullErrMsg, createdAt, updatedAt,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("deploy_queue: backfill legacy row: %w", err)
+				return fmt.Errorf("deploy_queue: backfill legacy row: %w", err)
 			}
 		}
 		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("deploy_queue: iterate legacy rows: %w", err)
+			return fmt.Errorf("deploy_queue: iterate legacy rows: %w", err)
 		}
 	}
 
-	return &DeployQueue{db: db, maxPending: maxPending}, nil
+	return nil
 }
 
 func (q *DeployQueue) DB() *sql.DB {

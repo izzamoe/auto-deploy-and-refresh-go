@@ -39,6 +39,9 @@ func setupHistoryTest(t *testing.T) (*sql.DB, *store.AppStore, *store.DeployQueu
 	if err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
+	if err := queue.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	handler := newTestHistoryAdminHandler(t, appStore, queue)
 	return db, appStore, queue, handler
 }
