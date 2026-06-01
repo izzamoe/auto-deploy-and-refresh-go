@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/izzamoe/auto-deploy/internal/store"
@@ -10,10 +11,20 @@ import (
 
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		db.Close()
+		t.Fatalf("WAL pragma: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		db.Close()
+		t.Fatalf("busy_timeout pragma: %v", err)
+	}
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
