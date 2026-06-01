@@ -1,6 +1,6 @@
 module github.com/izzamoe/auto-deploy
 
-go 1.26.1
+go 1.26.3
 
 require (
 	github.com/cloudwego/hertz v0.10.4
