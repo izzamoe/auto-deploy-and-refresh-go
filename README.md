@@ -24,12 +24,13 @@ GitHub Release → Optional/manual webhook call → Webhook Service (:9000)
 ## Admin UI
 
 Manage your applications via the built-in Admin UI.
-- **Access**: `http://YOUR_SERVER:9000/admin/apps`
-- **Authentication**: Protected by HTTP Basic Auth using `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+- **Access**: `http://YOUR_SERVER:9000/admin/login`
+- **Authentication**: Login form issues a signed JWT stored as an httpOnly cookie (24h TTL). Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in your env file.
 - **Features**:
   - Add, edit, enable, or disable applications.
   - View deployment history and status for each app.
   - Manually retry failed or successful deployments.
+  - Live deployment progress via WebSocket.
 
 ## Prerequisites
 
@@ -91,9 +92,9 @@ The recommended way to set up the server is using the installer.
    ```
 
 2. **Configure the environment**
-   The installer creates a default `/etc/auto-deploy.env`. Edit it to set your required settings:
+   The installer creates a default `/etc/auto-deploy.env`. Edit it to set your credentials:
    ```bash
-   # ADMIN_PASSWORD is required
+   # ADMIN_PASSWORD defaults to "hehe" if not set — change it in production
    sudo nano /etc/auto-deploy.env
    ```
 
@@ -128,7 +129,7 @@ The repository release workflow does not include that webhook call automatically
 | `DEPLOY_QUEUE_MAX` | `10` | No | Max pending deploys per app |
 | `DOWNLOAD_DNS` | `1.1.1.1` | No | DNS server used for downloader requests |
 | `ADMIN_USERNAME` | `admin` | No | Admin UI username |
-| `ADMIN_PASSWORD` | — | ✅ Yes | Admin UI password |
+| `ADMIN_PASSWORD` | `hehe` | No | Admin UI password — change in production |
 
 ### Bootstrap Settings (Legacy)
 These variables are only used on the first startup if the application registry is empty.

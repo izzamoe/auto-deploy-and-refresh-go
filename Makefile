@@ -10,18 +10,18 @@ admin-ui:
 	npm run admin:build
 
 build: admin-ui
-	go build $(RELEASE_GOFLAGS) -o auto-deploy .
+	go build $(RELEASE_GOFLAGS) -o auto-deploy ./cmd/server/
 
 build-arm64: admin-ui
-	GOOS=linux GOARCH=arm64 go build $(RELEASE_GOFLAGS) -o auto-deploy-arm64 .
+	GOOS=linux GOARCH=arm64 go build $(RELEASE_GOFLAGS) -o auto-deploy-arm64 ./cmd/server/
 
 build-linux-amd64: admin-ui
 	mkdir -p $(STAGING_DIR)/linux_amd64
-	GOOS=linux GOARCH=amd64 go build $(RELEASE_GOFLAGS) -o $(STAGING_DIR)/linux_amd64/auto-deploy .
+	GOOS=linux GOARCH=amd64 go build $(RELEASE_GOFLAGS) -o $(STAGING_DIR)/linux_amd64/auto-deploy ./cmd/server/
 
 build-linux-arm64: admin-ui
 	mkdir -p $(STAGING_DIR)/linux_arm64
-	GOOS=linux GOARCH=arm64 go build $(RELEASE_GOFLAGS) -o $(STAGING_DIR)/linux_arm64/auto-deploy .
+	GOOS=linux GOARCH=arm64 go build $(RELEASE_GOFLAGS) -o $(STAGING_DIR)/linux_arm64/auto-deploy ./cmd/server/
 
 package-release:
 	python3 ./release-package.py
