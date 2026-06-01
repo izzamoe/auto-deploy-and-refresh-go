@@ -1,4 +1,4 @@
-.PHONY: build build-arm64 build-linux-amd64 build-linux-arm64 package-release release release-validate-local vet clean test admin-ui
+.PHONY: build build-arm64 build-linux-amd64 build-linux-arm64 package-release release release-validate-local vet clean test admin-ui lint
 
 BUILD_DIR := dist
 STAGING_DIR := $(BUILD_DIR)/staging
@@ -33,6 +33,9 @@ release-validate-local:
 
 vet:
 	go vet ./...
+
+lint:
+	golangci-lint run --timeout 5m
 
 clean:
 	rm -rf $(BUILD_DIR) auto-deploy auto-deploy-arm64 web/admin/dist
