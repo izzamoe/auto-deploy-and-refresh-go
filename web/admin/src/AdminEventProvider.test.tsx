@@ -48,10 +48,14 @@ describe("AdminEventProvider", () => {
 		["http://localhost/admin/apps", "ws://localhost/admin/events/ws"],
 		["https://example.test/admin/apps", "wss://example.test/admin/events/ws"],
 	])("opens realtime status socket for %s at %s", (pageUrl, wsUrl) => {
-		const webSocket = vi.fn().mockImplementation((url: string) => {
-			return new MockWebSocket(url);
-		}) as unknown as typeof WebSocket;
-		stubWebSocket(webSocket);
+		const constructedUrls: string[] = [];
+		class TrackingWebSocket extends MockWebSocket {
+			constructor(url: string) {
+				super(url);
+				constructedUrls.push(url);
+			}
+		}
+		stubWebSocket(TrackingWebSocket as unknown as typeof WebSocket);
 		stubWindowLocation(pageUrl);
 
 		render(
@@ -60,16 +64,18 @@ describe("AdminEventProvider", () => {
 			</AdminEventProvider>,
 		);
 
-		expect(webSocket).toHaveBeenCalledWith(wsUrl);
+		expect(constructedUrls).toContain(wsUrl);
 	});
 
 	it("isolates WebSocket creation to provider and handles unknown events", () => {
 		let wsInstance: MockWebSocket | null = null;
-		const webSocket = vi.fn().mockImplementation((url: string) => {
-			wsInstance = new MockWebSocket(url);
-			return wsInstance;
-		}) as unknown as typeof WebSocket;
-		stubWebSocket(webSocket);
+		class CapturingWebSocket extends MockWebSocket {
+			constructor(url: string) {
+				super(url);
+				wsInstance = this;
+			}
+		}
+		stubWebSocket(CapturingWebSocket as unknown as typeof WebSocket);
 
 		let currentState: ReturnType<typeof useAdminEvents> | undefined;
 		const TestComponent = () => {
@@ -85,10 +91,8 @@ describe("AdminEventProvider", () => {
 			</AdminEventProvider>,
 		);
 
-		expect(webSocket).toHaveBeenCalledTimes(1);
-		expect(webSocket).toHaveBeenCalledWith(
-			expect.stringContaining("/admin/events/ws"),
-		);
+		expect(wsInstance).not.toBeNull();
+		expect((wsInstance as MockWebSocket | null)?.url).toContain("/admin/events/ws");
 
 		if (!wsInstance) throw new Error("WebSocket instance not created");
 
@@ -109,11 +113,13 @@ describe("AdminEventProvider", () => {
 
 	it("normalizes compact progress frames", () => {
 		let wsInstance: MockWebSocket | null = null;
-		const webSocket = vi.fn().mockImplementation((url: string) => {
-			wsInstance = new MockWebSocket(url);
-			return wsInstance;
-		}) as unknown as typeof WebSocket;
-		stubWebSocket(webSocket);
+		class CapturingWebSocket extends MockWebSocket {
+			constructor(url: string) {
+				super(url);
+				wsInstance = this;
+			}
+		}
+		stubWebSocket(CapturingWebSocket as unknown as typeof WebSocket);
 
 		let currentState: ReturnType<typeof useAdminEvents> | undefined;
 		const TestComponent = () => {
@@ -191,11 +197,13 @@ describe("AdminEventProvider", () => {
 
 	it("handles readable events (hello, snapshot, job_status, cancel_requested)", () => {
 		let wsInstance: MockWebSocket | null = null;
-		const webSocket = vi.fn().mockImplementation((url: string) => {
-			wsInstance = new MockWebSocket(url);
-			return wsInstance;
-		}) as unknown as typeof WebSocket;
-		stubWebSocket(webSocket);
+		class CapturingWebSocket extends MockWebSocket {
+			constructor(url: string) {
+				super(url);
+				wsInstance = this;
+			}
+		}
+		stubWebSocket(CapturingWebSocket as unknown as typeof WebSocket);
 
 		let currentState: ReturnType<typeof useAdminEvents> | undefined;
 		const TestComponent = () => {

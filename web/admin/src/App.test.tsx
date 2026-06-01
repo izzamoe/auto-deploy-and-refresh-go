@@ -5,15 +5,16 @@ import App from "./App";
 describe("App component", () => {
 	beforeEach(() => {
 		// Mock WebSocket to prevent actual connection attempt during test
-		const webSocket = vi.fn().mockImplementation(() => ({
-			onopen: vi.fn(),
-			onmessage: vi.fn(),
-			onclose: vi.fn(),
-			onerror: vi.fn(),
-			close: vi.fn(),
-		})) as unknown as typeof WebSocket;
-		vi.stubGlobal("WebSocket", webSocket);
-		window.WebSocket = webSocket;
+		class MockWebSocket {
+			onopen = vi.fn();
+			onmessage = vi.fn();
+			onclose = vi.fn();
+			onerror = vi.fn();
+			close = vi.fn();
+			constructor(public url: string) {}
+		}
+		vi.stubGlobal("WebSocket", MockWebSocket);
+		window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
 			ok: true,
