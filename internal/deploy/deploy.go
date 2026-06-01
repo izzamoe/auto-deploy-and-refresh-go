@@ -60,10 +60,7 @@ func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *pr
 	})
 
 	downloadStart := time.Now()
-	probeLimit := maxBytes + 1
-	if probeLimit < maxBytes {
-		probeLimit = maxBytes
-	}
+	probeLimit := max(maxBytes+1, maxBytes)
 	written, err := io.Copy(f, io.LimitReader(reader, probeLimit))
 	if err != nil {
 		cleanupRejectedDownload(f, tmpPath)

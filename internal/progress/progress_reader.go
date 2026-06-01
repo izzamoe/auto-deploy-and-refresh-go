@@ -71,10 +71,7 @@ func (cr *CountingReader) maybeReport(force bool) {
 	if !force && current.Sub(cr.lastReport) < cr.interval {
 		return
 	}
-	elapsed := current.Sub(cr.lastReport)
-	if elapsed < 0 {
-		elapsed = 0
-	}
+	elapsed := max(current.Sub(cr.lastReport), 0)
 	bytesSinceLast := cr.downloaded - cr.lastSent
 	if bytesSinceLast > 0 && elapsed > 0 {
 		cr.window = append(cr.window, speedSample{bytes: bytesSinceLast, elapsed: elapsed})

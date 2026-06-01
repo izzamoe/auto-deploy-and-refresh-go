@@ -26,11 +26,9 @@ func NewWorker(q *store.DeployQueue, runner DeployRunner) *Worker {
 }
 
 func (w *Worker) Start(ctx context.Context) {
-	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
+	w.wg.Go(func() {
 		w.loop(ctx)
-	}()
+	})
 }
 
 func (w *Worker) Wait() {
@@ -108,16 +106,12 @@ func NewCoordinator(apps *store.AppStore, q *store.DeployQueue, runner Coordinat
 }
 
 func (c *Coordinator) Start(ctx context.Context) {
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
+	c.wg.Go(func() {
 		c.schedule(ctx)
-	}()
+	})
 
 	if c.tracker != nil {
-		c.wg.Add(1)
-		go func() {
-			defer c.wg.Done()
+		c.wg.Go(func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -128,7 +122,7 @@ func (c *Coordinator) Start(ctx context.Context) {
 					c.tracker.Cleanup()
 				}
 			}
-		}()
+		})
 	}
 }
 
