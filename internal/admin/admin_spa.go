@@ -6,7 +6,9 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -67,7 +69,12 @@ func (h *adminSPAHandler) serveAssetHertz(ctx context.Context, c *app.RequestCon
 		return
 	}
 
+	mimeType := mime.TypeByExtension(filepath.Ext(assetPath))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
 	c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	c.Header("Content-Type", mimeType)
 	c.SetStatusCode(http.StatusOK)
 	io.Copy(c.Response.BodyWriter(), file)
 }

@@ -116,7 +116,7 @@ type loginPageData struct {
 func (h *LoginHandler) ShowLoginHertz(ctx context.Context, c *app.RequestContext) {
 	token := string(c.Cookie(jwtCookieName))
 	if _, ok := validateJWT(token); ok {
-		c.Redirect(consts.StatusFound, []byte("/admin/apps"))
+		c.Redirect(consts.StatusFound, []byte("/admin/"))
 		return
 	}
 	c.Header("Content-Type", "text/html; charset=utf-8")
@@ -153,7 +153,7 @@ func (h *LoginHandler) HandleLoginHertz(ctx context.Context, c *app.RequestConte
 	}
 
 	c.SetCookie(jwtCookieName, token, int(jwtTTL.Seconds()), "/", "", protocol.CookieSameSiteLaxMode, false, true)
-	c.Redirect(consts.StatusFound, []byte("/admin/apps"))
+	c.Redirect(consts.StatusFound, []byte("/admin/"))
 }
 
 func (h *LoginHandler) HandleLogoutHertz(ctx context.Context, c *app.RequestContext) {
