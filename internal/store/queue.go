@@ -170,6 +170,19 @@ func (q *DeployQueue) Migrate() error {
 	return nil
 }
 
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanJobRecord reads a full deploy_jobs row (in the column order used by
+// ListHistory/GetJob/ListByStatus) into a JobRecord.
+func scanJobRecord(sc rowScanner) (JobRecord, error) {
+	var item JobRecord
+	err := sc.Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.DownloadBytes, &item.DownloadDurationMs, &item.DownloadSpeedBPS, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
 func (q *DeployQueue) DB() *sql.DB {
 	return q.db
 }
@@ -341,8 +354,8 @@ func (q *DeployQueue) ListHistory(appID string, limit int) ([]JobRecord, error) 
 
 	var items []JobRecord
 	for rows.Next() {
-		var item JobRecord
-		if err := rows.Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.DownloadBytes, &item.DownloadDurationMs, &item.DownloadSpeedBPS, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		item, err := scanJobRecord(rows)
+		if err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -387,11 +400,10 @@ func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, 
 }
 
 func (q *DeployQueue) GetJob(jobID string) (*JobRecord, error) {
-	var item JobRecord
-	err := q.db.QueryRow(
+	item, err := scanJobRecord(q.db.QueryRow(
 		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), download_bytes, download_duration_ms, download_speed_bps, created_at, updated_at
 		 FROM deploy_jobs WHERE id = ?`, jobID,
-	).Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.DownloadBytes, &item.DownloadDurationMs, &item.DownloadSpeedBPS, &item.CreatedAt, &item.UpdatedAt)
+	))
 	if err != nil {
 		return nil, err
 	}
@@ -413,8 +425,8 @@ func (q *DeployQueue) ListByStatus(status string) ([]JobRecord, error) {
 
 	var items []JobRecord
 	for rows.Next() {
-		var item JobRecord
-		if err := rows.Scan(&item.ID, &item.AppID, &item.Tag, &item.Status, &item.Trigger, &item.RetryOfJobID, &item.ErrorMsg, &item.DownloadBytes, &item.DownloadDurationMs, &item.DownloadSpeedBPS, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		item, err := scanJobRecord(rows)
+		if err != nil {
 			return nil, err
 		}
 		items = append(items, item)

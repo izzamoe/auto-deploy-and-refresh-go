@@ -161,31 +161,7 @@ func (s *AppStore) GetBySecretHash(hash string) (*App, error) {
 }
 
 func (s *AppStore) Update(id, name, binaryPath, serviceName, githubRepo, artifactName string, enabled bool) error {
-	enabledInt := 0
-	if enabled {
-		enabledInt = 1
-	}
-
-	result, err := s.db.Exec(
-		`UPDATE apps SET name = ?, binary_path = ?, service_name = ?, github_repo = ?, artifact_name = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = ?`,
-		name, binaryPath, serviceName, githubRepo, artifactName, enabledInt, id,
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return ErrDuplicateApp
-		}
-		return fmt.Errorf("app_store: update: %w", err)
-	}
-
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("app_store: update rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("app_store: app %q not found", id)
-	}
-	return nil
+	return s.UpdateWithOptionalSecret(id, name, "", binaryPath, serviceName, githubRepo, artifactName, enabled)
 }
 
 func (s *AppStore) UpdateWithOptionalSecret(id, name, secret, binaryPath, serviceName, githubRepo, artifactName string, enabled bool) error {
@@ -194,7 +170,7 @@ func (s *AppStore) UpdateWithOptionalSecret(id, name, secret, binaryPath, servic
 		enabledInt = 1
 	}
 
-	var result interface{ RowsAffected() (int64, error) }
+	var result sql.Result
 	var err error
 	if secret == "" {
 		result, err = s.db.Exec(
