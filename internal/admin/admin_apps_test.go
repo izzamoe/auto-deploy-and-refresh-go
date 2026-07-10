@@ -17,6 +17,26 @@ import (
 	"github.com/cloudwego/hertz/pkg/route"
 )
 
+func TestActiveSnapshotForAppIncludesCancelRequested(t *testing.T) {
+	t.Parallel()
+	tracker := progress.NewProgressTracker()
+	tracker.Start("app1", "job1", "v1.0.0")
+
+	app := store.AppWithLastDeploy{
+		App:              store.App{ID: "app1"},
+		LastJobID:        "job1",
+		LastDeployStatus: "cancel_requested",
+	}
+
+	snap, ok := activeSnapshotForApp(tracker, app)
+	if !ok || snap == nil {
+		t.Fatal("expected live snapshot for a cancel_requested job that is still deploying")
+	}
+	if snap.JobID != "job1" {
+		t.Fatalf("snapshot jobID = %q, want job1", snap.JobID)
+	}
+}
+
 func newTestAppAdminHandler(t *testing.T, appStore *store.AppStore) *AppAdminHandler {
 	t.Helper()
 	tmpls := make(map[string]*template.Template)

@@ -406,7 +406,7 @@ func RegisterAdminAppActionRoutesHertz(h *server.Hertz, handler *AppAdminHandler
 }
 
 func isActiveDeployStatus(status string) bool {
-	return status == "pending" || status == "in_progress"
+	return status == "pending" || status == "in_progress" || status == "cancel_requested"
 }
 
 func activeSnapshotForApp(tracker *progress.ProgressTracker, app store.AppWithLastDeploy) (*progress.ProgressSnapshot, bool) {
