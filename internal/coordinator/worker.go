@@ -10,6 +10,17 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
 
+// sleepOrDone waits for d or until ctx is cancelled. It reports false when ctx
+// was cancelled, so callers can return promptly during shutdown.
+func sleepOrDone(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
 // DeployRunner is the legacy runner kept for backward compatibility with main.go.
 type DeployRunner func(tag string) error
 
@@ -36,9 +47,6 @@ func (w *Worker) Wait() {
 }
 
 func (w *Worker) loop(ctx context.Context) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -49,17 +57,17 @@ func (w *Worker) loop(ctx context.Context) {
 		id, tag, err := w.q.DequeueNext(w.appID)
 		if err != nil {
 			slog.Error("dequeue failed", "err", err)
-			time.Sleep(100 * time.Millisecond)
+			if !sleepOrDone(ctx, 100*time.Millisecond) {
+				return
+			}
 			continue
 		}
 
 		if id == "" {
-			select {
-			case <-ctx.Done():
+			if !sleepOrDone(ctx, 100*time.Millisecond) {
 				return
-			case <-ticker.C:
-				continue
 			}
+			continue
 		}
 
 		err = w.runner(tag)
@@ -131,9 +139,6 @@ func (c *Coordinator) Wait() {
 }
 
 func (c *Coordinator) schedule(ctx context.Context) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -144,7 +149,9 @@ func (c *Coordinator) schedule(ctx context.Context) {
 		apps, err := c.apps.List()
 		if err != nil {
 			slog.Error("coordinator: list apps failed", "err", err)
-			time.Sleep(100 * time.Millisecond)
+			if !sleepOrDone(ctx, 100*time.Millisecond) {
+				return
+			}
 			continue
 		}
 
@@ -181,10 +188,8 @@ func (c *Coordinator) schedule(ctx context.Context) {
 		}
 
 		if !dispatched {
-			select {
-			case <-ctx.Done():
+			if !sleepOrDone(ctx, 100*time.Millisecond) {
 				return
-			case <-ticker.C:
 			}
 		}
 	}
