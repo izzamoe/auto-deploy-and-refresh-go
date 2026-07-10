@@ -80,91 +80,68 @@ func (pt *ProgressTracker) Start(appID, jobID, tag string) {
 	publishProgress(sink, snapshot)
 }
 
-// Update sets the download progress for appID.
-// total == -1 means unknown size; Percent will be set to -1 in that case.
-func (pt *ProgressTracker) Update(appID string, downloaded, total int64, speedBPS float64) {
+// mutate applies fn to the entry for appID under the lock, then publishes the
+// resulting snapshot outside the lock. Missing entries are ignored.
+func (pt *ProgressTracker) mutate(appID string, fn func(e *progressEntry)) {
 	pt.mu.Lock()
-
 	e, ok := pt.entries[appID]
 	if !ok {
 		pt.mu.Unlock()
 		return
 	}
-
-	var pct float64
-	if total > 0 {
-		pct = float64(downloaded) / float64(total) * 100
-	} else {
-		pct = -1
-		total = -1
-	}
-
-	e.snapshot.DownloadedBytes = downloaded
-	e.snapshot.TotalBytes = total
-	e.snapshot.SpeedBPS = speedBPS
-	e.snapshot.Percent = pct
-	e.snapshot.UpdatedAt = pt.now()
+	fn(e)
 	snapshot := e.snapshot
 	sink := pt.sink
 	pt.mu.Unlock()
 	publishProgress(sink, snapshot)
+}
+
+// Update sets the download progress for appID.
+// total == -1 means unknown size; Percent will be set to -1 in that case.
+func (pt *ProgressTracker) Update(appID string, downloaded, total int64, speedBPS float64) {
+	pt.mutate(appID, func(e *progressEntry) {
+		var pct float64
+		if total > 0 {
+			pct = float64(downloaded) / float64(total) * 100
+		} else {
+			pct = -1
+			total = -1
+		}
+		e.snapshot.DownloadedBytes = downloaded
+		e.snapshot.TotalBytes = total
+		e.snapshot.SpeedBPS = speedBPS
+		e.snapshot.Percent = pct
+		e.snapshot.UpdatedAt = pt.now()
+	})
 }
 
 // SetPhase updates the current non-terminal phase for appID.
 // Missing entries are ignored.
 func (pt *ProgressTracker) SetPhase(appID, phase string) {
-	pt.mu.Lock()
-
-	e, ok := pt.entries[appID]
-	if !ok {
-		pt.mu.Unlock()
-		return
-	}
-
-	e.snapshot.Phase = phase
-	e.snapshot.UpdatedAt = pt.now()
-	snapshot := e.snapshot
-	sink := pt.sink
-	pt.mu.Unlock()
-	publishProgress(sink, snapshot)
+	pt.mutate(appID, func(e *progressEntry) {
+		e.snapshot.Phase = phase
+		e.snapshot.UpdatedAt = pt.now()
+	})
 }
 
 // Finish marks the deployment for appID as succeeded.
 // The entry remains readable until Cleanup removes it after the grace window.
 func (pt *ProgressTracker) Finish(appID string) {
-	pt.mu.Lock()
-
-	e, ok := pt.entries[appID]
-	if !ok {
-		pt.mu.Unlock()
-		return
-	}
-	e.snapshot.Phase = ProgressStageSucceeded
-	e.snapshot.UpdatedAt = pt.now()
-	e.finishedAt = pt.now()
-	snapshot := e.snapshot
-	sink := pt.sink
-	pt.mu.Unlock()
-	publishProgress(sink, snapshot)
+	pt.mutate(appID, func(e *progressEntry) {
+		e.snapshot.Phase = ProgressStageSucceeded
+		e.snapshot.UpdatedAt = pt.now()
+		e.finishedAt = pt.now()
+	})
 }
 
 // Fail marks the deployment for appID as failed.
 // The entry remains readable until Cleanup removes it after the grace window.
 func (pt *ProgressTracker) Fail(appID string) {
-	pt.mu.Lock()
-
-	e, ok := pt.entries[appID]
-	if !ok {
-		pt.mu.Unlock()
-		return
-	}
-	e.snapshot.Phase = ProgressStageFailed
-	e.snapshot.UpdatedAt = pt.now()
-	e.finishedAt = pt.now()
-	snapshot := e.snapshot
-	sink := pt.sink
-	pt.mu.Unlock()
-	publishProgress(sink, snapshot)
+	pt.mutate(appID, func(e *progressEntry) {
+		e.snapshot.Phase = ProgressStageFailed
+		e.snapshot.UpdatedAt = pt.now()
+		e.finishedAt = pt.now()
+	})
 }
 
 func publishProgress(sink ProgressSink, snapshot ProgressSnapshot) {
