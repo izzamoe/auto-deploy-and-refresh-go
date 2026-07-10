@@ -25,7 +25,7 @@ GitHub Release → Optional/manual webhook call → Webhook Service (:9000)
 
 Manage your applications via the built-in Admin UI.
 - **Access**: `http://YOUR_SERVER:9000/admin/login`
-- **Authentication**: Login form issues a signed JWT stored as an httpOnly cookie (24h TTL). Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in your env file.
+- **Authentication**: Login form issues a signed JWT stored as an httpOnly cookie (24h TTL). Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in your env file. When serving the admin UI over HTTPS (e.g. behind a TLS reverse proxy), set `COOKIE_SECURE=true` so the session cookie carries the `Secure` flag; leave it unset for plain-HTTP access.
 - **Features**:
   - Add, edit, enable, or disable applications.
   - View deployment history and status for each app.

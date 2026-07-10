@@ -1,14 +1,18 @@
 # Compiled binaries
 auto-deploy
 auto-deploy-arm64
+/server
 /dist/
 
 # Runtime data
 deploy-queue.db
 *.db
+*.db-wal
+*.db-shm
 
 # AI agent internal state
 .sisyphus/
+.omc/
 
 # Playwright MCP artifacts
 .playwright-mcp/
