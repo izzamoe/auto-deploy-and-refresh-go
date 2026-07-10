@@ -356,6 +356,10 @@ func (h *AppAdminHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 			fail("Deploy already queued for this tag")
 			return
 		}
+		if errors.Is(err, store.ErrInvalidTag) {
+			fail("Invalid tag")
+			return
+		}
 		if errors.Is(err, store.ErrQueueFull) {
 			fail("Queue is full")
 			return

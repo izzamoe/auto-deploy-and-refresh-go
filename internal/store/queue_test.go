@@ -39,6 +39,7 @@ func openTestDB(t *testing.T, dbPath string) *sql.DB {
 }
 
 func TestQueueFIFOAndPersistencePerApp(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "fifo.db")
 
@@ -92,6 +93,7 @@ func TestQueueFIFOAndPersistencePerApp(t *testing.T) {
 }
 
 func TestQueueDeduplicatePendingTagWithinApp(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -113,6 +115,7 @@ func TestQueueDeduplicatePendingTagWithinApp(t *testing.T) {
 }
 
 func TestQueueAllowsSameTagAcrossApps(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -135,7 +138,36 @@ func TestQueueAllowsSameTagAcrossApps(t *testing.T) {
 	}
 }
 
+func TestQueueRejectsInvalidTag(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t, 10)
+
+	rejected := []string{
+		"",
+		"../../../evil-owner/evil-repo/releases/download/v1",
+		"v1..0",
+		"v1?x=1",
+		"v1 0",
+		"/v1",
+		"v1/",
+		"tag#frag",
+	}
+	for _, tag := range rejected {
+		if err := q.Enqueue("app1", tag); !errors.Is(err, ErrInvalidTag) {
+			t.Errorf("Enqueue(%q) = %v, want ErrInvalidTag", tag, err)
+		}
+	}
+
+	accepted := []string{"v1.0.0", "v1.2.3-rc.1", "release/1.2", "2024_11_01"}
+	for _, tag := range accepted {
+		if err := q.Enqueue("app1", tag); err != nil {
+			t.Errorf("Enqueue(%q) = %v, want nil", tag, err)
+		}
+	}
+}
+
 func TestQueueRejectWhenFull(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 2)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -156,6 +188,7 @@ func TestQueueRejectWhenFull(t *testing.T) {
 }
 
 func TestQueueRecoverStale(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -184,6 +217,7 @@ func TestQueueRecoverStale(t *testing.T) {
 }
 
 func TestQueueDeduplicateInProgress(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -205,6 +239,7 @@ func TestQueueDeduplicateInProgress(t *testing.T) {
 }
 
 func TestQueueDeduplicateCompletedAllowed(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -237,6 +272,7 @@ func TestQueueDeduplicateCompletedAllowed(t *testing.T) {
 }
 
 func TestQueueMarkDone(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -289,6 +325,7 @@ func TestQueueMarkDone(t *testing.T) {
 }
 
 func TestQueueHistoryOrdering(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	for _, tag := range []string{"v1", "v2", "v3"} {
@@ -311,6 +348,7 @@ func TestQueueHistoryOrdering(t *testing.T) {
 }
 
 func TestQueueMarkDoneSummary(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -342,6 +380,7 @@ func TestQueueMarkDoneSummary(t *testing.T) {
 }
 
 func TestQueueNoLiveProgress(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -374,6 +413,7 @@ func TestQueueNoLiveProgress(t *testing.T) {
 }
 
 func TestQueueRetryCreatesNewRow(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -417,6 +457,7 @@ func TestQueueRetryCreatesNewRow(t *testing.T) {
 }
 
 func TestQueueRetryRejectsDuplicatePending(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -441,6 +482,7 @@ func TestQueueRetryRejectsDuplicatePending(t *testing.T) {
 }
 
 func TestLegacyQueueMigrationBackfillsAppID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "legacy.db")
 
@@ -490,6 +532,7 @@ func TestLegacyQueueMigrationBackfillsAppID(t *testing.T) {
 }
 
 func TestQueueRejectsDuplicateWithinSameApp(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("app1", "v1"); err != nil {
@@ -512,6 +555,7 @@ func TestQueueRejectsDuplicateWithinSameApp(t *testing.T) {
 }
 
 func TestEnqueueManual(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	q, err := NewDeployQueue(db, 10)
 	if err != nil {

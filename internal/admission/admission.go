@@ -61,6 +61,9 @@ func (s *AdmissionService) Admit(bearerToken, tag string) AdmissionResult {
 		if errors.Is(err, store.ErrDuplicate) {
 			return AdmissionResult{Outcome: OutcomeDuplicate, App: app, Tag: tag}
 		}
+		if errors.Is(err, store.ErrInvalidTag) {
+			return AdmissionResult{Outcome: OutcomeBadRequest, App: app, Tag: tag, Error: err}
+		}
 		if errors.Is(err, store.ErrQueueFull) {
 			return AdmissionResult{Outcome: OutcomeError, App: app, Tag: tag, Error: fmt.Errorf("queue full")}
 		}

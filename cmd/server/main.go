@@ -167,7 +167,11 @@ func multiAppWebhookHandler(admissionSvc *admission.AdmissionService) app.Handle
 		case admission.OutcomeUnauthorized:
 			c.JSON(consts.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
 		case admission.OutcomeBadRequest:
-			c.JSON(consts.StatusBadRequest, response{Status: "error", Error: "missing or empty tag"})
+			errMsg := "invalid tag"
+			if result.Tag == "" {
+				errMsg = "missing or empty tag"
+			}
+			c.JSON(consts.StatusBadRequest, response{Status: "error", Error: errMsg})
 		case admission.OutcomeDuplicate:
 			c.JSON(consts.StatusOK, response{Status: "duplicate", Tag: body.Tag})
 		case admission.OutcomeQueued:

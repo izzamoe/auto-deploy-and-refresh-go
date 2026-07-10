@@ -14,6 +14,35 @@ import (
 
 var ErrDuplicate = errors.New("tag already pending or in progress")
 var ErrQueueFull = errors.New("deploy queue is full")
+var ErrInvalidTag = errors.New("invalid tag")
+
+// validateTag guards the release tag before it is interpolated into the GitHub
+// download URL (https://github.com/{repo}/releases/download/{tag}/{artifact}).
+// It rejects path-traversal and URL-metacharacter sequences that could redirect
+// the download to an unintended repository or asset.
+func validateTag(tag string) error {
+	if tag == "" {
+		return fmt.Errorf("%w: empty", ErrInvalidTag)
+	}
+	if len(tag) > 128 {
+		return fmt.Errorf("%w: too long", ErrInvalidTag)
+	}
+	if strings.Contains(tag, "..") {
+		return fmt.Errorf("%w: contains %q", ErrInvalidTag, "..")
+	}
+	for _, r := range tag {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == '/':
+		default:
+			return fmt.Errorf("%w: illegal character %q", ErrInvalidTag, r)
+		}
+	}
+	if tag[0] == '/' || tag[len(tag)-1] == '/' {
+		return fmt.Errorf("%w: leading or trailing slash", ErrInvalidTag)
+	}
+	return nil
+}
 
 type JobRecord struct {
 	ID                 string
@@ -150,6 +179,9 @@ func (q *DeployQueue) Close() error {
 }
 
 func (q *DeployQueue) Enqueue(appID, tag string) error {
+	if err := validateTag(tag); err != nil {
+		return err
+	}
 	dup, err := q.IsDuplicate(appID, tag)
 	if err != nil {
 		return err
@@ -179,6 +211,9 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 }
 
 func (q *DeployQueue) EnqueueManual(appID, tag string) error {
+	if err := validateTag(tag); err != nil {
+		return err
+	}
 	dup, err := q.IsDuplicate(appID, tag)
 	if err != nil {
 		return err
@@ -316,6 +351,9 @@ func (q *DeployQueue) ListHistory(appID string, limit int) ([]JobRecord, error) 
 }
 
 func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, error) {
+	if err := validateTag(tag); err != nil {
+		return "", err
+	}
 	var exists int
 	err := q.db.QueryRow(`SELECT COUNT(*) FROM deploy_jobs WHERE id = ?`, originalJobID).Scan(&exists)
 	if err != nil {
