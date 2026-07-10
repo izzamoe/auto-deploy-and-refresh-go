@@ -9,6 +9,7 @@ import (
 )
 
 func TestCancelServicePendingJobIdempotent(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 	jobID := enqueueJob(t, q, "app1", "v1")
 	svc := NewCancelService(q)
@@ -40,6 +41,7 @@ func TestCancelServicePendingJobIdempotent(t *testing.T) {
 }
 
 func TestCancelServiceActiveJobIdempotent(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 	jobID := dequeueJob(t, q, "app1", "v1")
 	svc := NewCancelService(q)
@@ -63,6 +65,7 @@ func TestCancelServiceActiveJobIdempotent(t *testing.T) {
 }
 
 func TestCancelServiceUnknownJobNoop(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 	svc := NewCancelService(q)
 
@@ -84,6 +87,7 @@ func TestCancelServiceUnknownJobNoop(t *testing.T) {
 }
 
 func TestCancelServiceTerminalJobNoop(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 	jobID := dequeueJob(t, q, "app1", "v1")
 	if err := q.MarkDone(jobID, true, "", nil); err != nil {
@@ -110,6 +114,7 @@ func TestCancelServiceTerminalJobNoop(t *testing.T) {
 }
 
 func TestCancelServiceCheckpointSafeStopContract(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		phase           DeployPhase
@@ -168,6 +173,7 @@ func TestCancelServiceCheckpointSafeStopContract(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			q := newTestQueue(t, 10)
 			jobID := dequeueJob(t, q, "app1", "v1")
 			svc := NewCancelService(q)
@@ -200,6 +206,7 @@ func TestCancelServiceCheckpointSafeStopContract(t *testing.T) {
 }
 
 func TestDeployControlCancelRollbackFailureMarksFailed(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 	jobID := dequeueJob(t, q, "app1", "v1")
 	control := NewCancelService(q)
@@ -218,6 +225,7 @@ func TestDeployControlCancelRollbackFailureMarksFailed(t *testing.T) {
 }
 
 func TestCancelServiceCleanupFailureMarksFailed(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 	jobID := dequeueJob(t, q, "app1", "v1")
 	svc := NewCancelService(q)
@@ -236,6 +244,7 @@ func TestCancelServiceCleanupFailureMarksFailed(t *testing.T) {
 }
 
 func TestCancelServiceAppCancelAggregatesOutcomes(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 	activeID := dequeueJob(t, q, "app1", "v-active")
 	terminalID := dequeueJob(t, q, "app1", "v-terminal")

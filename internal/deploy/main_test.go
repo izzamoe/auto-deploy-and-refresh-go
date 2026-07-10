@@ -256,6 +256,7 @@ func TestWebhookUnauthorizedReturns401(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			body := []byte(`{"tag":"v1.0.0"}`)
 			headers := map[string]string{"Content-Type": "application/json"}
 			if tc.header != "" {
@@ -294,6 +295,7 @@ func TestWebhookInvalidPayloadReturns400(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			headers := map[string]string{
 				"Content-Type":  "application/json",
 				"Authorization": "Bearer " + secret,

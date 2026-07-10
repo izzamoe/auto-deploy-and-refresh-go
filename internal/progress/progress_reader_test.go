@@ -38,6 +38,7 @@ func (c *fakeClock) Now() time.Time { return c.t }
 func (c *fakeClock) Advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func TestCountingReaderBasic(t *testing.T) {
+	t.Parallel()
 	cr := NewCountingReader(bytes.NewReader(bytes.Repeat([]byte{'a'}, 1000)), 1000, nil)
 	_, err := io.Copy(io.Discard, cr)
 	if err != nil {
@@ -49,6 +50,7 @@ func TestCountingReaderBasic(t *testing.T) {
 }
 
 func TestCountingReaderSpeedCalculation(t *testing.T) {
+	t.Parallel()
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	var got []float64
 	cr := newCountingReaderWithClock(&scriptedRead{steps: []scriptStep{
@@ -90,6 +92,7 @@ func TestCountingReaderSpeedCalculation(t *testing.T) {
 }
 
 func TestCountingReaderUnknownTotal(t *testing.T) {
+	t.Parallel()
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	var seenTotal int64
 	cr := newCountingReaderWithClock(&scriptedRead{steps: []scriptStep{
@@ -109,6 +112,7 @@ func TestCountingReaderUnknownTotal(t *testing.T) {
 }
 
 func TestCountingReaderFinalCallback(t *testing.T) {
+	t.Parallel()
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	var calls int
 	var downloaded int64
@@ -143,6 +147,7 @@ func TestCountingReaderFinalCallback(t *testing.T) {
 }
 
 func TestCountingReaderThrottling(t *testing.T) {
+	t.Parallel()
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	var calls int
 	cr := newCountingReaderWithClock(&scriptedRead{steps: []scriptStep{
@@ -175,6 +180,7 @@ func TestCountingReaderThrottling(t *testing.T) {
 }
 
 func TestUnknownContentLengthFallback(t *testing.T) {
+	t.Parallel()
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	var total int64
 	var speed float64

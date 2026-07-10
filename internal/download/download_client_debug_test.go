@@ -12,6 +12,7 @@ import (
 )
 
 func TestDebugContentLength(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "33")
 		w.WriteHeader(http.StatusOK)

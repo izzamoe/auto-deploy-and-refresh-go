@@ -13,6 +13,7 @@ import (
 )
 
 func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
+	t.Parallel()
 	middleware := testHertzSessionAuth(t)
 	c := newHertzTestContext(http.MethodGet, "/admin/api/apps", nil, nil)
 
@@ -27,6 +28,7 @@ func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
 }
 
 func TestHertzAdminAuthRejectsWrongPassword(t *testing.T) {
+	t.Parallel()
 	middleware := testHertzSessionAuth(t)
 	c := newHertzTestContext(http.MethodGet, "/admin/api/apps", nil, nil)
 	c.Request.SetBasicAuth("admin", "wrong")
@@ -39,6 +41,7 @@ func TestHertzAdminAuthRejectsWrongPassword(t *testing.T) {
 }
 
 func TestHertzAdminAuthAcceptsCorrectCredentials(t *testing.T) {
+	t.Parallel()
 	middleware := testHertzSessionAuth(t)
 	c := newHertzTestContext(http.MethodGet, "/admin/apps", nil, nil)
 	setHertzSessionCookie(t, c)
@@ -58,6 +61,7 @@ func TestHertzAdminAuthAcceptsCorrectCredentials(t *testing.T) {
 }
 
 func TestAdminLayoutRendersAppsTableSelector(t *testing.T) {
+	t.Parallel()
 	cfg := &config.ServiceConfig{}
 	adminHandler, err := NewAdminHandler(cfg)
 	if err != nil {
@@ -78,6 +82,7 @@ func TestAdminLayoutRendersAppsTableSelector(t *testing.T) {
 }
 
 func TestAdminLayoutRendersNavigationLinks(t *testing.T) {
+	t.Parallel()
 	cfg := &config.ServiceConfig{}
 	adminHandler, err := NewAdminHandler(cfg)
 	if err != nil {

@@ -103,6 +103,7 @@ func decodeAdminAPIResponseHertz[T any](t *testing.T, c *app.RequestContext) T {
 }
 
 func TestAdminAPIUnauthorizedReturnsJSON(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newTestAdminAPIHertz(t)
 
 	c := app.NewContext(0)
@@ -127,6 +128,7 @@ func TestAdminAPIUnauthorizedReturnsJSON(t *testing.T) {
 }
 
 func TestAdminAPIAppsCRUD(t *testing.T) {
+	t.Parallel()
 	h, store, _, jwt := newTestAdminAPIHertz(t)
 
 	createBody := `{"name":"api-app","secret":"secret-1","binaryPath":"/opt/api-app","serviceName":"api-app.service","githubRepo":"owner/api-app","artifactName":"api-app-linux"}`
@@ -203,6 +205,7 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 }
 
 func TestAdminAPIUpdateDuplicateSecretDoesNotPartiallyUpdate(t *testing.T) {
+	t.Parallel()
 	h, store, _, jwt := newTestAdminAPIHertz(t)
 	appA, err := store.Create("app-a", "secret-a", "/bin/a", "a.service", "owner/a", "artifact-a")
 	if err != nil {
@@ -229,6 +232,7 @@ func TestAdminAPIUpdateDuplicateSecretDoesNotPartiallyUpdate(t *testing.T) {
 }
 
 func TestAdminAPIManualDeployQueuesJSON(t *testing.T) {
+	t.Parallel()
 	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("deploy-app", "secret", "/bin/deploy", "deploy.service", "owner/deploy", "artifact")
 	if err != nil {
@@ -265,6 +269,7 @@ func TestAdminAPIManualDeployQueuesJSON(t *testing.T) {
 }
 
 func TestAdminAPIHistoryListAndRetry(t *testing.T) {
+	t.Parallel()
 	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("history-app", "secret", "/bin/history", "history.service", "owner/history", "artifact")
 	if err != nil {
@@ -314,6 +319,7 @@ func TestAdminAPIHistoryListAndRetry(t *testing.T) {
 }
 
 func TestAdminAPICancelEndpoints(t *testing.T) {
+	t.Parallel()
 	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("cancel-app", "secret", "/bin/cancel", "cancel.service", "owner/cancel", "artifact")
 	if err != nil {
@@ -378,6 +384,7 @@ func TestAdminAPICancelEndpoints(t *testing.T) {
 }
 
 func TestAdminAPIAppCancelReturnsCounts(t *testing.T) {
+	t.Parallel()
 	h, store, queue, jwt := newTestAdminAPIHertz(t)
 	app, err := store.Create("cancel-counts-app", "secret", "/bin/cancel-counts", "cancel-counts.service", "owner/cancel-counts", "artifact")
 	if err != nil {
@@ -431,6 +438,7 @@ func TestAdminAPIAppCancelReturnsCounts(t *testing.T) {
 }
 
 func TestAdminAPIErrorBodiesAreJSON(t *testing.T) {
+	t.Parallel()
 	h, _, _, jwt := newTestAdminAPIHertz(t)
 
 	invalidCreate := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps", `{"name":"missing-fields"}`))

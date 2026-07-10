@@ -30,6 +30,7 @@ func newTestHistoryAdminHandler(t *testing.T, appStore *store.AppStore, queue *s
 }
 
 func setupHistoryTest(t *testing.T) (*sql.DB, *store.AppStore, *store.DeployQueue, *HistoryAdminHandler) {
+	t.Helper()
 	db := newTestDB(t)
 	appStore, err := store.NewAppStore(db)
 	if err != nil {
@@ -98,6 +99,7 @@ func newTestHertzHistoryServer(t *testing.T, handler *HistoryAdminHandler) *rout
 }
 
 func TestHertzAdminHistoryList(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, err := store.Create("Test store.App", "izzamoe/test", "test-bin", "abc", "/bin/false", "test.service")
@@ -159,6 +161,7 @@ func TestHertzAdminHistoryList(t *testing.T) {
 }
 
 func TestHertzAdminHistoryListTerminalRowIgnoresStaleTrackerProgress(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, err := store.Create("Test store.App", "izzamoe/test-2", "test-bin-2", "abc-2", "/bin/false-2", "test-2.service")
@@ -194,6 +197,7 @@ func TestHertzAdminHistoryListTerminalRowIgnoresStaleTrackerProgress(t *testing.
 }
 
 func TestHertzAdminHistoryListShowsActivePhaseLabel(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, err := store.Create("Installing store.App", "phase-secret", "/bin/phase", "phase.service", "owner/phase", "artifact-phase")
@@ -243,6 +247,7 @@ func TestHertzAdminHistoryListShowsActivePhaseLabel(t *testing.T) {
 }
 
 func TestHertzAdminHistoryListAdminUIReturnsFragment(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test store.App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -271,6 +276,7 @@ func TestHertzAdminHistoryListAdminUIReturnsFragment(t *testing.T) {
 }
 
 func TestHertzAdminHistoryRetry(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test store.App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -299,6 +305,7 @@ func TestHertzAdminHistoryRetry(t *testing.T) {
 }
 
 func TestHertzAdminHistoryRetryAdminUIReturnsUpdatedTableAndFlash(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test store.App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -338,6 +345,7 @@ func TestHertzAdminHistoryRetryAdminUIReturnsUpdatedTableAndFlash(t *testing.T) 
 }
 
 func TestHertzAdminHistoryRetryAdminUIDuplicateReturnsUpdatedTableAndErrorFlash(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test store.App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -366,6 +374,7 @@ func TestHertzAdminHistoryRetryAdminUIDuplicateReturnsUpdatedTableAndErrorFlash(
 }
 
 func TestHertzAdminHistoryRetryRejectsMismatchedJobApp(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	appA, _ := store.Create("store.App A", "secret-a", "/bin/app-a", "app-a.service", "izzamoe/app-a", "artifact-a")
@@ -392,6 +401,7 @@ func TestHertzAdminHistoryRetryRejectsMismatchedJobApp(t *testing.T) {
 }
 
 func TestHertzAdminHistoryRetryAdminUIRejectsMismatchedJobApp(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	appA, _ := store.Create("store.App A", "secret-a", "/bin/app-a", "app-a.service", "izzamoe/app-a", "artifact-a")
@@ -419,6 +429,7 @@ func TestHertzAdminHistoryRetryAdminUIRejectsMismatchedJobApp(t *testing.T) {
 }
 
 func TestHertzAdminHistoryRetryDisabledApp(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test store.App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")
@@ -443,6 +454,7 @@ func TestHertzAdminHistoryRetryDisabledApp(t *testing.T) {
 }
 
 func TestHertzAdminHistoryRetryDuplicatePending(t *testing.T) {
+	t.Parallel()
 	_, store, queue, handler := setupHistoryTest(t)
 
 	app, _ := store.Create("Test store.App", "abc", "/bin/false", "test.service", "izzamoe/test", "test-bin")

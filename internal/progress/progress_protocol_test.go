@@ -7,6 +7,7 @@ import (
 )
 
 func TestProgressFrameRoundTripNormal(t *testing.T) {
+	t.Parallel()
 	original := ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",
@@ -39,6 +40,7 @@ func TestProgressFrameRoundTripNormal(t *testing.T) {
 }
 
 func TestProgressFrameRoundTripUnknownSizeDownload(t *testing.T) {
+	t.Parallel()
 	original := ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",
@@ -66,6 +68,7 @@ func TestProgressFrameRoundTripUnknownSizeDownload(t *testing.T) {
 }
 
 func TestProgressFrameRoundTripEmptyMessage(t *testing.T) {
+	t.Parallel()
 	original := ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",
@@ -96,6 +99,7 @@ func TestProgressFrameRoundTripEmptyMessage(t *testing.T) {
 }
 
 func TestProgressFrameRoundTripUnicodeAndSeparatorsInMessage(t *testing.T) {
+	t.Parallel()
 	original := ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",
@@ -130,6 +134,7 @@ func TestProgressFrameRoundTripUnicodeAndSeparatorsInMessage(t *testing.T) {
 }
 
 func TestDecodeProgressFrameRejectsMalformedFrames(t *testing.T) {
+	t.Parallel()
 	valid := mustEncodeProgressFrame(t, ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",
@@ -166,6 +171,7 @@ func TestDecodeProgressFrameRejectsMalformedFrames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := DecodeProgressFrame(tt.frame); err == nil {
 				t.Fatal("DecodeProgressFrame returned nil error")
 			}
@@ -174,6 +180,7 @@ func TestDecodeProgressFrameRejectsMalformedFrames(t *testing.T) {
 }
 
 func TestDecodeProgressFrameRejectsMalformedCompactFrames(t *testing.T) {
+	t.Parallel()
 	valid := mustEncodeProgressFrame(t, ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",
@@ -198,6 +205,7 @@ func TestDecodeProgressFrameRejectsMalformedCompactFrames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := DecodeProgressFrame(tt.frame); err == nil {
 				t.Fatal("DecodeProgressFrame returned nil error")
 			}
@@ -206,6 +214,7 @@ func TestDecodeProgressFrameRejectsMalformedCompactFrames(t *testing.T) {
 }
 
 func TestEncodeProgressFrameRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
 	base := ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",
@@ -230,6 +239,7 @@ func TestEncodeProgressFrameRejectsInvalidValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			frame := base
 			tt.mut(&frame)
 			if _, err := EncodeProgressFrame(frame); err == nil {
@@ -240,6 +250,7 @@ func TestEncodeProgressFrameRejectsInvalidValues(t *testing.T) {
 }
 
 func TestAllRequiredProgressStagesAndStatusesAreAccepted(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{
 		ProgressStageQueued,
 		ProgressStageDownloading,
@@ -253,6 +264,7 @@ func TestAllRequiredProgressStagesAndStatusesAreAccepted(t *testing.T) {
 		ProgressStageFailed,
 	} {
 		t.Run("stage "+stage, func(t *testing.T) {
+			t.Parallel()
 			_, err := EncodeProgressFrame(ProgressFrame{
 				AppID:           "app1",
 				JobID:           "job1",
@@ -277,6 +289,7 @@ func TestAllRequiredProgressStagesAndStatusesAreAccepted(t *testing.T) {
 		ProgressStatusFailed,
 	} {
 		t.Run("status "+status, func(t *testing.T) {
+			t.Parallel()
 			_, err := EncodeProgressFrame(ProgressFrame{
 				AppID:           "app1",
 				JobID:           "job1",
@@ -296,6 +309,7 @@ func TestAllRequiredProgressStagesAndStatusesAreAccepted(t *testing.T) {
 }
 
 func TestProgressFrameSmallerThanEquivalentJSON(t *testing.T) {
+	t.Parallel()
 	frame := ProgressFrame{
 		AppID:           "app1",
 		JobID:           "job1",

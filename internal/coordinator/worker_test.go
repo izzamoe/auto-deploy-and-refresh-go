@@ -12,6 +12,7 @@ import (
 )
 
 func TestWorkerProcessesFIFOSequentially(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	for _, tag := range []string{"v1", "v2", "v3"} {
@@ -75,6 +76,7 @@ func TestWorkerProcessesFIFOSequentially(t *testing.T) {
 }
 
 func TestWorkerContinuesAfterFailure(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	if err := q.Enqueue("legacy", "v1"); err != nil {
@@ -132,6 +134,7 @@ func TestWorkerContinuesAfterFailure(t *testing.T) {
 }
 
 func TestWorkerStopsOnContextCancel(t *testing.T) {
+	t.Parallel()
 	q := newTestQueue(t, 10)
 
 	runner := DeployRunner(func(tag string) error {
@@ -176,6 +179,7 @@ func newTestCoordinator(t *testing.T, runner CoordinatorRunner) (*Coordinator, *
 }
 
 func TestCoordinatorSerializesJobsPerApp(t *testing.T) {
+	t.Parallel()
 	var running atomic.Int32
 	var maxConcurrent atomic.Int32
 	var mu sync.Mutex
@@ -245,6 +249,7 @@ func TestCoordinatorSerializesJobsPerApp(t *testing.T) {
 }
 
 func TestCoordinatorAllowsDifferentAppsToProgress(t *testing.T) {
+	t.Parallel()
 	appAStarted := make(chan struct{})
 	appARelease := make(chan struct{})
 	var appBDone atomic.Bool
@@ -302,6 +307,7 @@ func TestCoordinatorAllowsDifferentAppsToProgress(t *testing.T) {
 }
 
 func TestCoordinatorContinuesAfterFailure(t *testing.T) {
+	t.Parallel()
 	runner := func(app *store.App, jobID, tag string) (store.DownloadSummary, error) {
 		if tag == "v1" {
 			return store.DownloadSummary{}, fmt.Errorf("simulated failure")
@@ -355,6 +361,7 @@ func TestCoordinatorContinuesAfterFailure(t *testing.T) {
 }
 
 func TestCoordinatorStopsOnContextCancel(t *testing.T) {
+	t.Parallel()
 	runner := func(app *store.App, jobID, tag string) (store.DownloadSummary, error) {
 		return store.DownloadSummary{}, nil
 	}
@@ -383,6 +390,7 @@ func TestCoordinatorStopsOnContextCancel(t *testing.T) {
 }
 
 func TestCoordinatorSummaryPersisted(t *testing.T) {
+	t.Parallel()
 	wantSummary := store.DownloadSummary{Bytes: 4096, DurationMs: 200, SpeedBPS: 20480}
 
 	runner := func(app *store.App, jobID, tag string) (store.DownloadSummary, error) {

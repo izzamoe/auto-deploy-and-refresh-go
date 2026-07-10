@@ -141,6 +141,7 @@ func newTestHertzAppServer(t *testing.T, handler *AppAdminHandler) *route.Engine
 }
 
 func TestHertzAdminAppsListAdminUIReturnsFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	_, _ = store.Create("Test store.App", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -162,6 +163,7 @@ func TestHertzAdminAppsListAdminUIReturnsFragment(t *testing.T) {
 }
 
 func TestHertzAdminNewAppFormAdminUIReturnsFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	handler := newTestAppAdminHandler(t, store)
 	engine := newTestHertzAppServer(t, handler)
@@ -182,6 +184,7 @@ func TestHertzAdminNewAppFormAdminUIReturnsFragment(t *testing.T) {
 }
 
 func TestHertzAdminEditAppFormAdminUIReturnsFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -209,6 +212,7 @@ func TestHertzAdminEditAppFormAdminUIReturnsFragment(t *testing.T) {
 }
 
 func TestHertzAdminAppsDelete(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 	app, _ := store.Create("del-app", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -228,6 +232,7 @@ func TestHertzAdminAppsDelete(t *testing.T) {
 }
 
 func TestHertzAdminAppsDeleteBlockedByActiveJob(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 	app, _ := store.Create("active-app", "sec2", "/bin2", "svc2", "repo2", "art2")
 
@@ -257,6 +262,7 @@ func TestHertzAdminAppsDeleteBlockedByActiveJob(t *testing.T) {
 }
 
 func TestHertzAdminAppsCreate(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	handler := newTestAppAdminHandler(t, store)
 	engine := newTestHertzAppServer(t, handler)
@@ -290,6 +296,7 @@ func TestHertzAdminAppsCreate(t *testing.T) {
 }
 
 func TestHertzAdminAppsCreateAdminUIUsesAdminLocation(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	handler := newTestAppAdminHandler(t, store)
 	engine := newTestHertzAppServer(t, handler)
@@ -323,6 +330,7 @@ func TestHertzAdminAppsCreateAdminUIUsesAdminLocation(t *testing.T) {
 }
 
 func TestHertzAdminAppsCreateAdminUIValidationErrorsReturnInlineFormFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	handler := newTestAppAdminHandler(t, store)
 	engine := newTestHertzAppServer(t, handler)
@@ -363,6 +371,7 @@ func TestHertzAdminAppsCreateAdminUIValidationErrorsReturnInlineFormFragment(t *
 }
 
 func TestHertzAdminAppsToggleAdminUIReturnsFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -393,6 +402,7 @@ func TestHertzAdminAppsToggleAdminUIReturnsFragment(t *testing.T) {
 }
 
 func TestHertzAdminAppsDeleteAdminUIReturnsFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -419,6 +429,7 @@ func TestHertzAdminAppsDeleteAdminUIReturnsFragment(t *testing.T) {
 }
 
 func TestHertzAdminAppsEdit(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -436,6 +447,7 @@ func TestHertzAdminAppsEdit(t *testing.T) {
 }
 
 func TestHertzAdminAppsEnableDisable(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Test", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -469,6 +481,7 @@ func TestHertzAdminAppsEnableDisable(t *testing.T) {
 }
 
 func TestHertzAdminAppsEditLeavesSecretUnchangedWhenBlank(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Test", "original-secret", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -503,6 +516,7 @@ func TestHertzAdminAppsEditLeavesSecretUnchangedWhenBlank(t *testing.T) {
 }
 
 func TestHertzAdminAppsUpdateAdminUIValidationErrorsReturnInlineFormFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Original", "secret", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -545,6 +559,7 @@ func TestHertzAdminAppsUpdateAdminUIValidationErrorsReturnInlineFormFragment(t *
 }
 
 func TestHertzAdminAppsUpdateAdminUIUsesAdminLocation(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Test", "secret", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -586,6 +601,7 @@ func TestHertzAdminAppsUpdateAdminUIUsesAdminLocation(t *testing.T) {
 }
 
 func TestHertzAdminAppsCreateValidationErrorsPreserveFormValues(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	handler := newTestAppAdminHandler(t, store)
 	engine := newTestHertzAppServer(t, handler)
@@ -614,6 +630,7 @@ func TestHertzAdminAppsCreateValidationErrorsPreserveFormValues(t *testing.T) {
 }
 
 func TestHertzAdminAppsManualDeployAdminUIReturnsFragment(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("Deploy", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -647,6 +664,7 @@ func TestHertzAdminAppsManualDeployAdminUIReturnsFragment(t *testing.T) {
 }
 
 func TestHertzAdminAppsManualDeploy(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("deploy-app", "sec", "/bin", "svc", "repo", "art")
 	handler := newTestAppAdminHandler(t, store)
@@ -673,6 +691,7 @@ func TestHertzAdminAppsManualDeploy(t *testing.T) {
 }
 
 func TestHertzAdminAppsManualDeployDisabledApp(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("dis-app", "sec3", "/bin3", "svc3", "repo3", "art3")
 	store.SetEnabled(app.ID, false)
@@ -699,6 +718,7 @@ func TestHertzAdminAppsManualDeployDisabledApp(t *testing.T) {
 }
 
 func TestHertzAdminAppsManualDeployEmptyTag(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 	app, _ := store.Create("tag-app", "sec4", "/bin4", "svc4", "repo4", "art4")
 	handler := newTestAppAdminHandler(t, store)
@@ -724,6 +744,7 @@ func TestHertzAdminAppsManualDeployEmptyTag(t *testing.T) {
 }
 
 func TestHertzAdminAppsList(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 	app, _ := store.Create("Active Deploy store.App", "sec-test", "/bin", "svc", "repo", "art")
 
@@ -767,6 +788,7 @@ func TestHertzAdminAppsList(t *testing.T) {
 }
 
 func TestHertzAdminAppsListTerminalJobClearsActiveMarker(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 	app, _ := store.Create("Settled Deploy store.App", "sec-test-2", "/bin2", "svc2", "repo2", "art2")
 
@@ -798,6 +820,7 @@ func TestHertzAdminAppsListTerminalJobClearsActiveMarker(t *testing.T) {
 }
 
 func TestHertzAdminAppsListShowsActivePhaseLabel(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 	app, _ := store.Create("Installing Deploy store.App", "sec-test-3", "/bin3", "svc3", "repo3", "art3")
 

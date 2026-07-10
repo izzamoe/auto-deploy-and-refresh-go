@@ -45,6 +45,7 @@ func TestAdminSPAFallbackServesClientRoutes(t *testing.T) {
 }
 
 func TestAdminSPARouteOrderingKeepsAPIJSON(t *testing.T) {
+	t.Parallel()
 	engine := newTestAdminSPAFullHertzEngine(t)
 
 	w := ut.PerformRequest(engine.Engine, http.MethodGet, "/admin/api/apps", nil, ut.Header{Key: "Cookie", Value: testAdminSessionCookie(t)})
@@ -65,10 +66,12 @@ func TestAdminSPARouteOrderingKeepsAPIJSON(t *testing.T) {
 }
 
 func TestAdminSPARoutesKeepAPINotFoundJSON(t *testing.T) {
+	t.Parallel()
 	engine := newTestAdminSPAFullHertzEngine(t)
 
 	for _, path := range []string{"/admin/api", "/admin/api/does-not-exist"} {
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			w := ut.PerformRequest(engine.Engine, http.MethodGet, path, nil, ut.Header{Key: "Cookie", Value: testAdminSessionCookie(t)})
 			if w.Code != http.StatusNotFound {
 				t.Fatalf("expected 404, got %d body=%s", w.Code, w.Body.String())
@@ -100,10 +103,12 @@ func newTestAdminSPAHertzEngine(t *testing.T) *server.Hertz {
 }
 
 func TestAdminSPARoutesHertzFallbackServesClientRoutes(t *testing.T) {
+	t.Parallel()
 	engine := newTestAdminSPAHertzEngine(t)
 
 	for _, path := range []string{"/admin", "/admin/apps"} {
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			w := ut.PerformRequest(engine.Engine, http.MethodGet, path, nil, ut.Header{Key: "Cookie", Value: testAdminSessionCookie(t)})
 			if w.Code != http.StatusOK {
 				t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
@@ -120,6 +125,7 @@ func TestAdminSPARoutesHertzFallbackServesClientRoutes(t *testing.T) {
 }
 
 func TestAdminSPARoutesHertzServeAssetsWithCache(t *testing.T) {
+	t.Parallel()
 	engine := newTestAdminSPAHertzEngine(t)
 
 	indexW := ut.PerformRequest(engine.Engine, http.MethodGet, "/admin", nil, ut.Header{Key: "Cookie", Value: testAdminSessionCookie(t)})
@@ -143,10 +149,12 @@ func TestAdminSPARoutesHertzServeAssetsWithCache(t *testing.T) {
 }
 
 func TestAdminSPARoutesHertzRequireAuth(t *testing.T) {
+	t.Parallel()
 	engine := newTestAdminSPAHertzEngine(t)
 
 	for _, path := range []string{"/admin", "/admin/assets/missing.js"} {
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			w := ut.PerformRequest(engine.Engine, http.MethodGet, path, nil)
 			if w.Code != http.StatusFound {
 				t.Fatalf("expected 401, got %d body=%s", w.Code, w.Body.String())

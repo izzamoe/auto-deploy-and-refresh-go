@@ -9,6 +9,7 @@ import (
 )
 
 func TestAdminEventsLowFrequencyEventTypeConstants(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"hello":            adminEventTypeHello,
 		"snapshot":         adminEventTypeSnapshot,
@@ -26,6 +27,7 @@ func TestAdminEventsLowFrequencyEventTypeConstants(t *testing.T) {
 }
 
 func TestProgressEventKnownTotalIncludesPercentAndSpeed(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-known", "job-known", "v1.2.3")
 	hub := NewAdminEventHub(tracker)
@@ -58,6 +60,7 @@ func TestProgressEventKnownTotalIncludesPercentAndSpeed(t *testing.T) {
 }
 
 func TestProgressEventUnknownTotalIsIndeterminate(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-unknown", "job-unknown", "v9.9.9")
 	hub := NewAdminEventHub(tracker)
@@ -83,6 +86,7 @@ func TestProgressEventUnknownTotalIsIndeterminate(t *testing.T) {
 }
 
 func TestProgressTrackerUpdateDoesNotBlockWithoutClients(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-no-clients", "job-no-clients", "v1")
 	hub := NewAdminEventHub(tracker)
@@ -102,6 +106,7 @@ func TestProgressTrackerUpdateDoesNotBlockWithoutClients(t *testing.T) {
 }
 
 func TestProgressTrackerUpdateDropsSlowEventClient(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-slow", "job-slow", "v1")
 	hub := NewAdminEventHub(tracker)
@@ -134,6 +139,7 @@ func TestProgressTrackerUpdateDropsSlowEventClient(t *testing.T) {
 }
 
 func TestAdminEventHubSlowClientDoesNotBlockBroadcast(t *testing.T) {
+	t.Parallel()
 	hub := NewAdminEventHub(progress.NewProgressTracker())
 	client := hub.addClient()
 	for range adminEventClientBuffer {

@@ -28,6 +28,7 @@ func newTestAdmission(t *testing.T, maxPending int) (*AdmissionService, *store.A
 }
 
 func TestAdmissionResolvesAppByBearerToken(t *testing.T) {
+	t.Parallel()
 	svc, store, _ := newTestAdmission(t, 10)
 
 	secret := "my-app-secret"
@@ -53,6 +54,7 @@ func TestAdmissionResolvesAppByBearerToken(t *testing.T) {
 }
 
 func TestAdmissionRejectsUnknownToken(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newTestAdmission(t, 10)
 
 	result := svc.Admit("totally-unknown-token", "v1.0.0")
@@ -66,6 +68,7 @@ func TestAdmissionRejectsUnknownToken(t *testing.T) {
 }
 
 func TestAdmissionRejectsDisabledApp(t *testing.T) {
+	t.Parallel()
 	svc, store, _ := newTestAdmission(t, 10)
 
 	secret := "disabled-app-secret"
@@ -89,6 +92,7 @@ func TestAdmissionRejectsDisabledApp(t *testing.T) {
 }
 
 func TestAdmissionRejectsBadRequestEmptyTag(t *testing.T) {
+	t.Parallel()
 	svc, store, _ := newTestAdmission(t, 10)
 
 	secret := "tag-test-secret"
@@ -108,6 +112,7 @@ func TestAdmissionRejectsBadRequestEmptyTag(t *testing.T) {
 }
 
 func TestAdmissionDuplicateWithinSameApp(t *testing.T) {
+	t.Parallel()
 	svc, store, _ := newTestAdmission(t, 10)
 
 	secret := "dup-secret"
@@ -128,6 +133,7 @@ func TestAdmissionDuplicateWithinSameApp(t *testing.T) {
 }
 
 func TestAdmissionAllowsSameTagAcrossDifferentApps(t *testing.T) {
+	t.Parallel()
 	svc, store, _ := newTestAdmission(t, 10)
 
 	secretA := "app-a-secret"
@@ -154,6 +160,7 @@ func TestAdmissionAllowsSameTagAcrossDifferentApps(t *testing.T) {
 }
 
 func TestAdmissionRejectsQueueFull(t *testing.T) {
+	t.Parallel()
 	svc, store, _ := newTestAdmission(t, 1)
 
 	secret := "full-secret"

@@ -19,6 +19,7 @@ import (
 func noSleep(_ time.Duration) {}
 
 func TestNewDownloadClientHasBoundedTimeouts(t *testing.T) {
+	t.Parallel()
 	c := NewDownloadClient("1.1.1.1")
 	if c == nil {
 		t.Fatal("client must not be nil")
@@ -42,18 +43,21 @@ func TestNewDownloadClientHasBoundedTimeouts(t *testing.T) {
 }
 
 func TestNormalizeDNSServerAddsDefaultPort(t *testing.T) {
+	t.Parallel()
 	if got := normalizeDNSServer("1.1.1.1"); got != "1.1.1.1:53" {
 		t.Fatalf("expected default port to be added, got %q", got)
 	}
 }
 
 func TestNormalizeDNSServerKeepsExplicitPort(t *testing.T) {
+	t.Parallel()
 	if got := normalizeDNSServer("1.1.1.1:5353"); got != "1.1.1.1:5353" {
 		t.Fatalf("expected explicit port to be preserved, got %q", got)
 	}
 }
 
 func TestNewDownloadClientUsesCustomResolver(t *testing.T) {
+	t.Parallel()
 	dialer := newDownloadDialer("1.1.1.1")
 	if dialer.Resolver == nil {
 		t.Fatal("expected custom resolver to be configured")
@@ -77,6 +81,7 @@ func TestNewDownloadClientUsesCustomResolver(t *testing.T) {
 }
 
 func TestNewDownloadClientLeavesResolverUnsetWithoutDNS(t *testing.T) {
+	t.Parallel()
 	dialer := newDownloadDialer("")
 	if dialer.Resolver != nil {
 		t.Fatal("expected resolver to be unset when DNS is blank")
@@ -84,6 +89,7 @@ func TestNewDownloadClientLeavesResolverUnsetWithoutDNS(t *testing.T) {
 }
 
 func TestDownloadWithRetry200ReturnsImmediately(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "binary-data")
@@ -102,6 +108,7 @@ func TestDownloadWithRetry200ReturnsImmediately(t *testing.T) {
 }
 
 func TestDownloadWithRetry500RetriesAndSucceeds(t *testing.T) {
+	t.Parallel()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
@@ -128,6 +135,7 @@ func TestDownloadWithRetry500RetriesAndSucceeds(t *testing.T) {
 }
 
 func TestDownloadWithRetry429RetriesAndSucceeds(t *testing.T) {
+	t.Parallel()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
@@ -151,6 +159,7 @@ func TestDownloadWithRetry429RetriesAndSucceeds(t *testing.T) {
 }
 
 func TestDownloadWithRetry404FailsImmediately(t *testing.T) {
+	t.Parallel()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -169,6 +178,7 @@ func TestDownloadWithRetry404FailsImmediately(t *testing.T) {
 }
 
 func TestDownloadWithRetry403FailsImmediately(t *testing.T) {
+	t.Parallel()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -187,6 +197,7 @@ func TestDownloadWithRetry403FailsImmediately(t *testing.T) {
 }
 
 func TestDownloadWithRetryAllAttemptsExhaustedReturnsError(t *testing.T) {
+	t.Parallel()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -205,6 +216,7 @@ func TestDownloadWithRetryAllAttemptsExhaustedReturnsError(t *testing.T) {
 }
 
 func TestDownloadWithRetryNetworkErrorRetries(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -225,6 +237,7 @@ func TestDownloadWithRetryNetworkErrorRetries(t *testing.T) {
 }
 
 func TestDownloadWithRetryBackoffDurationsAreCorrect(t *testing.T) {
+	t.Parallel()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
@@ -258,6 +271,7 @@ func TestDownloadWithRetryBackoffDurationsAreCorrect(t *testing.T) {
 }
 
 func TestDownloadBinaryTooLargeContentLengthIsRejected(t *testing.T) {
+	t.Parallel()
 	maxBytes := int64(32)
 	body := bytes.Repeat([]byte{'a'}, int(maxBytes))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -280,6 +294,7 @@ func TestDownloadBinaryTooLargeContentLengthIsRejected(t *testing.T) {
 }
 
 func TestDownloadBinaryExceedsMaxBytesWhileStreamingIsRejected(t *testing.T) {
+	t.Parallel()
 	maxBytes := int64(32)
 	body := bytes.Repeat([]byte{'b'}, int(maxBytes+1))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -301,6 +316,7 @@ func TestDownloadBinaryExceedsMaxBytesWhileStreamingIsRejected(t *testing.T) {
 }
 
 func TestDownloadBinaryIncompleteContentLengthIsRejected(t *testing.T) {
+	t.Parallel()
 	maxBytes := int64(32)
 	body := bytes.Repeat([]byte{'c'}, int(maxBytes/2))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -340,6 +356,7 @@ func assertNoSuccessfulDownloadArtifact(t *testing.T, tmpPath string) {
 }
 
 func TestIsRetriableStatusReturnsTrueFor5xx(t *testing.T) {
+	t.Parallel()
 	for _, code := range []int{500, 502, 503, 504} {
 		if !isRetriableStatus(code) {
 			t.Errorf("expected %d to be retriable", code)
@@ -348,12 +365,14 @@ func TestIsRetriableStatusReturnsTrueFor5xx(t *testing.T) {
 }
 
 func TestIsRetriableStatusReturnsTrueFor429(t *testing.T) {
+	t.Parallel()
 	if !isRetriableStatus(429) {
 		t.Error("expected 429 to be retriable")
 	}
 }
 
 func TestIsRetriableStatusReturnsFalseFor4xx(t *testing.T) {
+	t.Parallel()
 	for _, code := range []int{400, 401, 403, 404} {
 		if isRetriableStatus(code) {
 			t.Errorf("expected %d to NOT be retriable", code)

@@ -7,6 +7,7 @@ import (
 )
 
 func TestProgressTrackerStartAndSnapshot(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1.0")
 
@@ -35,6 +36,7 @@ func TestProgressTrackerStartAndSnapshot(t *testing.T) {
 }
 
 func TestProgressTrackerSnapshotMissingApp(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	_, ok := pt.Snapshot("nonexistent")
 	if ok {
@@ -43,6 +45,7 @@ func TestProgressTrackerSnapshotMissingApp(t *testing.T) {
 }
 
 func TestProgressTrackerUpdate(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.Update("app1", 500, 1000, 250.0)
@@ -63,6 +66,7 @@ func TestProgressTrackerUpdate(t *testing.T) {
 }
 
 func TestProgressTrackerUnknownTotalBytesNoDiv(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.Update("app1", 1024, -1, 100.0)
@@ -95,6 +99,7 @@ func TestProgressTrackerUnknownTotalBytesNoDiv(t *testing.T) {
 }
 
 func TestProgressTrackerFinish(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.Finish("app1")
@@ -109,6 +114,7 @@ func TestProgressTrackerFinish(t *testing.T) {
 }
 
 func TestProgressTrackerSetPhase(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.SetPhase("app1", ProgressStageInstalling)
@@ -123,6 +129,7 @@ func TestProgressTrackerSetPhase(t *testing.T) {
 }
 
 func TestProgressTrackerStageConstants(t *testing.T) {
+	t.Parallel()
 	want := map[string]string{
 		"queued":      ProgressStageQueued,
 		"downloading": ProgressStageDownloading,
@@ -143,6 +150,7 @@ func TestProgressTrackerStageConstants(t *testing.T) {
 }
 
 func TestProgressTrackerFail(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.Fail("app1")
@@ -157,6 +165,7 @@ func TestProgressTrackerFail(t *testing.T) {
 }
 
 func TestProgressTrackerCleanupRemovesExpiredEntries(t *testing.T) {
+	t.Parallel()
 	var fakeNow time.Time
 	fakeNow = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -181,6 +190,7 @@ func TestProgressTrackerCleanupRemovesExpiredEntries(t *testing.T) {
 }
 
 func TestProgressTrackerCleanupKeepsActiveEntries(t *testing.T) {
+	t.Parallel()
 	var fakeNow time.Time
 	fakeNow = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -197,6 +207,7 @@ func TestProgressTrackerCleanupKeepsActiveEntries(t *testing.T) {
 }
 
 func TestProgressTrackerMultipleAppsIndependent(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.Start("app2", "job2", "v2")
@@ -227,6 +238,7 @@ func TestProgressTrackerMultipleAppsIndependent(t *testing.T) {
 }
 
 func TestProgressTrackerSnapshotAll(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.Start("app2", "job2", "v2")
@@ -249,6 +261,7 @@ func TestProgressTrackerSnapshotAll(t *testing.T) {
 }
 
 func TestProgressTrackerSnapshotAllEmpty(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	all := pt.SnapshotAll()
 	if len(all) != 0 {
@@ -257,6 +270,7 @@ func TestProgressTrackerSnapshotAllEmpty(t *testing.T) {
 }
 
 func TestProgressTrackerConcurrentStartUpdateSnapshot(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	const goroutines = 20
 	const apps = 4
@@ -277,6 +291,7 @@ func TestProgressTrackerConcurrentStartUpdateSnapshot(t *testing.T) {
 }
 
 func TestProgressTrackerConcurrentFinishCleanup(t *testing.T) {
+	t.Parallel()
 	var fakeNow time.Time
 	fakeNow = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	var mu sync.Mutex
@@ -325,6 +340,7 @@ func TestProgressTrackerConcurrentFinishCleanup(t *testing.T) {
 }
 
 func TestProgressTrackerGraceWindowReadable(t *testing.T) {
+	t.Parallel()
 	var fakeNow time.Time
 	fakeNow = time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
@@ -358,6 +374,7 @@ func TestProgressTrackerGraceWindowReadable(t *testing.T) {
 }
 
 func TestProgressTrackerUpdateIgnoresUnknownApp(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Update("ghost", 100, 200, 50.0)
 
@@ -367,12 +384,14 @@ func TestProgressTrackerUpdateIgnoresUnknownApp(t *testing.T) {
 }
 
 func TestProgressTrackerFinishIgnoresUnknownApp(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Finish("ghost")
 	pt.Fail("ghost")
 }
 
 func TestProgressTrackerStartOverwritesPreviousEntry(t *testing.T) {
+	t.Parallel()
 	pt := NewProgressTracker()
 	pt.Start("app1", "job1", "v1")
 	pt.Update("app1", 500, 1000, 100.0)

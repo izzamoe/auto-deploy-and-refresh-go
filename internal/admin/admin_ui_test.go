@@ -10,6 +10,7 @@ import (
 )
 
 func TestIsAdminUIRequestHertz(t *testing.T) {
+	t.Parallel()
 	c := app.NewContext(0)
 	if isAdminUIRequestHertz(c) {
 		t.Fatal("expected false without header")
@@ -21,6 +22,7 @@ func TestIsAdminUIRequestHertz(t *testing.T) {
 }
 
 func TestRenderAdminTemplateHertz_NormalGET(t *testing.T) {
+	t.Parallel()
 	tmpl := template.Must(template.New("base.html").Parse(`{{define "base.html"}}BASE{{end}}`))
 	c := app.NewContext(0)
 	c.Request.SetMethod(http.MethodGet)
@@ -33,6 +35,7 @@ func TestRenderAdminTemplateHertz_NormalGET(t *testing.T) {
 }
 
 func TestRenderAdminTemplateHertz_AdminUIFragment(t *testing.T) {
+	t.Parallel()
 	tmpl := template.Must(template.New("base.html").Parse(`
 {{define "fragment"}}FRAGMENT{{end}}
 {{define "flash"}}FLASH{{end}}
@@ -50,6 +53,7 @@ func TestRenderAdminTemplateHertz_AdminUIFragment(t *testing.T) {
 }
 
 func TestRenderAdminTemplateHertz_AdminUIPOST(t *testing.T) {
+	t.Parallel()
 	tmpl := template.Must(template.New("base.html").Parse(`
 {{define "fragment"}}FRAGMENT{{end}}
 {{define "flash"}}FLASH{{end}}
@@ -68,6 +72,7 @@ func TestRenderAdminTemplateHertz_AdminUIPOST(t *testing.T) {
 }
 
 func TestAdminUINavigateHertz_NormalRedirect(t *testing.T) {
+	t.Parallel()
 	c := app.NewContext(0)
 	adminUINavigateHertz(c, "/admin/apps")
 	if c.Response.StatusCode() != http.StatusSeeOther {
@@ -80,6 +85,7 @@ func TestAdminUINavigateHertz_NormalRedirect(t *testing.T) {
 }
 
 func TestAdminUINavigateHertz_AdminUI(t *testing.T) {
+	t.Parallel()
 	c := app.NewContext(0)
 	c.Request.Header.Set(adminUIRequestHeader, "true")
 	adminUINavigateHertz(c, "/admin/apps")

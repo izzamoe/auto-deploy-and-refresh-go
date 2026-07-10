@@ -41,6 +41,7 @@ func makeProgressHertzServer(t *testing.T, tracker *progress.ProgressTracker, ad
 }
 
 func TestOldProgressRouteNotRegistered(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	engine := makeProgressHertzServer(t, tracker, "127.0.0.1:0")
 
@@ -52,6 +53,7 @@ func TestOldProgressRouteNotRegistered(t *testing.T) {
 }
 
 func TestProgressWebSocketRequiresAuth(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	url := startProgressHertzServer(t, tracker, 19001)
 
@@ -75,6 +77,7 @@ func TestProgressWebSocketRequiresAuth(t *testing.T) {
 }
 
 func TestProgressWebSocketRejectsWrongPassword(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	url := startProgressHertzServer(t, tracker, 19002)
 
@@ -100,6 +103,7 @@ func TestProgressWebSocketRejectsWrongPassword(t *testing.T) {
 }
 
 func TestProgressWebSocketSendsAuthorizedCurrentState(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-current", "job-current", "v1.2.3")
 	tracker.Update("app-current", 512, 1024, 123.9)
@@ -121,6 +125,7 @@ func TestProgressWebSocketSendsAuthorizedCurrentState(t *testing.T) {
 }
 
 func TestProgressWebSocketFiltersCurrentState(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-one", "job-one", "v1.0.0")
 	tracker.Update("app-one", 100, 1000, 10)
@@ -141,6 +146,7 @@ func TestProgressWebSocketFiltersCurrentState(t *testing.T) {
 }
 
 func TestProgressWebSocketSupportsMultipleSimultaneousClients(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-shared", "job-shared", "v3.0.0")
 	tracker.Update("app-shared", 100, 1000, 100)
@@ -169,6 +175,7 @@ func TestProgressWebSocketSupportsMultipleSimultaneousClients(t *testing.T) {
 }
 
 func TestProgressWebSocketReconnectReceivesCurrentState(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-reconnect", "job-reconnect", "v4.0.0")
 	tracker.Update("app-reconnect", 100, 1000, 100)
@@ -195,6 +202,7 @@ func TestProgressWebSocketReconnectReceivesCurrentState(t *testing.T) {
 }
 
 func TestProgressWebSocketTerminalFrameIsIdempotent(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-terminal", "job-terminal", "v5.0.0")
 	tracker.Update("app-terminal", 1000, 1000, 500)
@@ -306,6 +314,7 @@ func makeProgressHertzEngine(t *testing.T, tracker *progress.ProgressTracker) *s
 }
 
 func TestRegisterAdminProgressRoutesHertz_RequiresAuth(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	engine := makeProgressHertzEngine(t, tracker)
 
@@ -319,6 +328,7 @@ func TestRegisterAdminProgressRoutesHertz_RequiresAuth(t *testing.T) {
 }
 
 func TestRegisterAdminProgressRoutesHertz_RejectsWrongPassword(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	engine := makeProgressHertzEngine(t, tracker)
 
@@ -329,6 +339,7 @@ func TestRegisterAdminProgressRoutesHertz_RejectsWrongPassword(t *testing.T) {
 }
 
 func TestRegisterAdminProgressRoutesHertz_AcceptsAuth(t *testing.T) {
+	t.Parallel()
 	tracker := progress.NewProgressTracker()
 	tracker.Start("app-hertz", "job-hertz", "v1")
 	url := startProgressHertzServer(t, tracker, 19008)
