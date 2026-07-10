@@ -18,6 +18,8 @@ import (
 //go:embed all:web/admin/dist
 var adminSPA embed.FS
 
+const msgAdminSPAUnavailable = "admin SPA unavailable"
+
 func getAdminSPA() http.FileSystem {
 	f, err := fs.Sub(adminSPA, "web/admin/dist")
 	if err != nil {
@@ -40,7 +42,7 @@ func RegisterAdminSPARoutesHertz(h *server.Hertz, auth app.HandlerFunc) {
 
 func (h *adminSPAHandler) serveAssetHertz(ctx context.Context, c *app.RequestContext) {
 	if h.fs == nil {
-		c.String(http.StatusInternalServerError, "admin SPA unavailable")
+		c.String(http.StatusInternalServerError, msgAdminSPAUnavailable)
 		return
 	}
 
@@ -81,26 +83,26 @@ func (h *adminSPAHandler) serveAssetHertz(ctx context.Context, c *app.RequestCon
 
 func (h *adminSPAHandler) serveIndexHertz(ctx context.Context, c *app.RequestContext) {
 	if h.fs == nil {
-		c.String(http.StatusInternalServerError, "admin SPA unavailable")
+		c.String(http.StatusInternalServerError, msgAdminSPAUnavailable)
 		return
 	}
 
 	file, err := h.fs.Open("index.html")
 	if err != nil {
-		c.String(http.StatusInternalServerError, "admin SPA unavailable")
+		c.String(http.StatusInternalServerError, msgAdminSPAUnavailable)
 		return
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil || info.IsDir() {
-		c.String(http.StatusInternalServerError, "admin SPA unavailable")
+		c.String(http.StatusInternalServerError, msgAdminSPAUnavailable)
 		return
 	}
 
 	content, err := io.ReadAll(file)
 	if err != nil {
-		c.String(http.StatusInternalServerError, "admin SPA unavailable")
+		c.String(http.StatusInternalServerError, msgAdminSPAUnavailable)
 		return
 	}
 

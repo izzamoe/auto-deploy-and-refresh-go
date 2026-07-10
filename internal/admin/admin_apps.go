@@ -160,14 +160,14 @@ func (h *AppAdminHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 
-	adminUINavigateHertz(c, "/admin/apps?flash=store.App+created+successfully&curl="+url.QueryEscape(secret)+"&appname="+url.QueryEscape(app.Name))
+	adminUINavigateHertz(c, "/admin/apps?flash=App+created+successfully&curl="+url.QueryEscape(secret)+"&appname="+url.QueryEscape(app.Name))
 }
 
 func (h *AppAdminHandler) EditAppFormHertz(ctx context.Context, c *app.RequestContext) {
 	id := c.Param("id")
 	app, err := h.store.Get(id)
 	if err != nil {
-		c.String(http.StatusNotFound, "store.App not found")
+		c.String(http.StatusNotFound, "App not found")
 		return
 	}
 
@@ -183,7 +183,7 @@ func (h *AppAdminHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 	id := c.Param("id")
 	app, err := h.store.Get(id)
 	if err != nil {
-		c.String(http.StatusNotFound, "store.App not found")
+		c.String(http.StatusNotFound, "App not found")
 		return
 	}
 
@@ -258,7 +258,7 @@ func (h *AppAdminHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 		}
 	}
 
-	adminUINavigateHertz(c, "/admin/apps?flash=store.App+updated+successfully")
+	adminUINavigateHertz(c, "/admin/apps?flash=App+updated+successfully")
 }
 
 func (h *AppAdminHandler) renderListInPlaceOrRedirectHertz(c *app.RequestContext, flashMsg string, isError bool) {
@@ -309,7 +309,7 @@ func (h *AppAdminHandler) DeleteAppHertz(ctx context.Context, c *app.RequestCont
 		c.String(http.StatusInternalServerError, "Failed to delete app")
 		return
 	}
-	h.renderListInPlaceOrRedirectHertz(c, "store.App deleted successfully", false)
+	h.renderListInPlaceOrRedirectHertz(c, "App deleted successfully", false)
 }
 
 func (h *AppAdminHandler) ManualDeployAppHertz(ctx context.Context, c *app.RequestContext) {
@@ -335,7 +335,7 @@ func (h *AppAdminHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 
 	app, err := h.store.Get(id)
 	if err != nil {
-		c.String(http.StatusNotFound, "store.App not found")
+		c.String(http.StatusNotFound, "App not found")
 		return
 	}
 
@@ -386,7 +386,7 @@ func (h *AppAdminHandler) ToggleAppHertz(ctx context.Context, c *app.RequestCont
 	if !enable {
 		status = "disabled"
 	}
-	h.renderListInPlaceOrRedirectHertz(c, "store.App "+status+" successfully", false)
+	h.renderListInPlaceOrRedirectHertz(c, "App "+status+" successfully", false)
 }
 
 func RegisterAdminAppRoutesHertz(h *server.Hertz, handler *AppAdminHandler, auth app.HandlerFunc) {

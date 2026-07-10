@@ -324,7 +324,7 @@ func TestHertzAdminAppsCreateAdminUIUsesAdminLocation(t *testing.T) {
 		t.Fatalf("Expected no raw redirect Location header, got %q", string(resp.Header.Peek("Location")))
 	}
 	adminLocation := string(resp.Header.Peek(adminUILocationHeader))
-	if !strings.Contains(adminLocation, "/admin/apps?flash=store.App+created+successfully") {
+	if !strings.Contains(adminLocation, "/admin/apps?flash=App+created+successfully") {
 		t.Fatalf("Expected AdminUI success navigation, got %q", adminLocation)
 	}
 }
@@ -396,7 +396,7 @@ func TestHertzAdminAppsToggleAdminUIReturnsFragment(t *testing.T) {
 	if !strings.Contains(body, `id="apps-table"`) {
 		t.Fatalf("Expected AdminUI apps fragment, got %s", body)
 	}
-	if !strings.Contains(body, `store.App disabled successfully`) {
+	if !strings.Contains(body, `App disabled successfully`) {
 		t.Fatalf("Expected flash message in body, got %s", body)
 	}
 }
@@ -423,7 +423,7 @@ func TestHertzAdminAppsDeleteAdminUIReturnsFragment(t *testing.T) {
 	if !strings.Contains(body, `id="apps-table"`) {
 		t.Fatalf("Expected AdminUI apps fragment, got %s", body)
 	}
-	if !strings.Contains(body, `store.App deleted successfully`) {
+	if !strings.Contains(body, `App deleted successfully`) {
 		t.Fatalf("Expected flash message in body, got %s", body)
 	}
 }
@@ -587,7 +587,7 @@ func TestHertzAdminAppsUpdateAdminUIUsesAdminLocation(t *testing.T) {
 	if string(resp.Header.Peek("Location")) != "" {
 		t.Fatalf("Expected no raw redirect Location header, got %q", string(resp.Header.Peek("Location")))
 	}
-	if got := string(resp.Header.Peek(adminUILocationHeader)); !strings.Contains(got, "/admin/apps?flash=store.App+updated+successfully") {
+	if got := string(resp.Header.Peek(adminUILocationHeader)); !strings.Contains(got, "/admin/apps?flash=App+updated+successfully") {
 		t.Fatalf("Expected AdminUI location for update, got %q", got)
 	}
 

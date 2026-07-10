@@ -147,6 +147,17 @@ func (h *AdminAPIHandler) updateAppWithOptionalSecret(id string, body adminAPIAp
 	return h.store.UpdateWithOptionalSecret(id, body.Name, body.webhookSecret(), body.BinaryPath, body.ServiceName, body.GithubRepo, body.ArtifactName, enabled)
 }
 
+// getAppOr404 loads an app by id, writing a 404 response and returning false
+// when it does not exist.
+func (h *AdminAPIHandler) getAppOr404(c *app.RequestContext, id string) (*store.App, bool) {
+	found, err := h.store.Get(id)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+		return nil, false
+	}
+	return found, true
+}
+
 func isAdminAPINotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
 }
@@ -323,9 +334,8 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 }
 
 func (h *AdminAPIHandler) GetAppHertz(ctx context.Context, c *app.RequestContext) {
-	app, err := h.store.Get(c.Param("id"))
-	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+	app, ok := h.getAppOr404(c, c.Param("id"))
+	if !ok {
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]any{"app": appResponse(*app)})
@@ -337,9 +347,8 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	id := c.Param("id")
-	app, err := h.store.Get(id)
-	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+	app, ok := h.getAppOr404(c, id)
+	if !ok {
 		return
 	}
 
@@ -386,13 +395,13 @@ func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestCont
 			return
 		}
 		if isAdminAPINotFoundError(err) {
-			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
 			return
 		}
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to delete app")
 		return
 	}
-	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: "store.App deleted successfully"})
+	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: "App deleted successfully"})
 }
 
 func (h *AdminAPIHandler) ToggleAppHertz(ctx context.Context, c *app.RequestContext) {
@@ -401,9 +410,8 @@ func (h *AdminAPIHandler) ToggleAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	id := c.Param("id")
-	app, err := h.store.Get(id)
-	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+	app, ok := h.getAppOr404(c, id)
+	if !ok {
 		return
 	}
 
@@ -436,9 +444,8 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 	}
 
 	id := c.Param("id")
-	app, err := h.store.Get(id)
-	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+	app, ok := h.getAppOr404(c, id)
+	if !ok {
 		return
 	}
 	if !app.Enabled {
@@ -473,9 +480,8 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 
 func (h *AdminAPIHandler) ListHistoryHertz(ctx context.Context, c *app.RequestContext) {
 	if appID := c.Query("appId"); appID != "" {
-		app, err := h.store.Get(appID)
-		if err != nil {
-			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+		app, ok := h.getAppOr404(c, appID)
+		if !ok {
 			return
 		}
 		jobs, err := h.queue.ListHistory(app.ID, 50)
@@ -516,9 +522,8 @@ func (h *AdminAPIHandler) RetryHistoryJobHertz(ctx context.Context, c *app.Reque
 		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "Job not found")
 		return
 	}
-	app, err := h.store.Get(job.AppID)
-	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+	app, ok := h.getAppOr404(c, job.AppID)
+	if !ok {
 		return
 	}
 	if !app.Enabled {
@@ -558,8 +563,7 @@ func (h *AdminAPIHandler) CancelAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	appID := c.Param("app_id")
-	if _, err := h.store.Get(appID); err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusNotFound, "store.App not found")
+	if _, ok := h.getAppOr404(c, appID); !ok {
 		return
 	}
 	result, err := h.cancel.RequestAppCancel(appID)

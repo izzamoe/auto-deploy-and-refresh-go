@@ -118,7 +118,7 @@ func (h *HistoryAdminHandler) HistoryHandlerHertz(ctx context.Context, c *app.Re
 	data, err := h.loadHistoryData(id, c.Query("flash"), c.Query("flash_error") == "1")
 	if err != nil {
 		if errors.Is(err, errHistoryAppNotFound) {
-			c.String(http.StatusNotFound, "store.App not found")
+			c.String(http.StatusNotFound, "App not found")
 			return
 		}
 		c.String(http.StatusInternalServerError, "Failed to list history")
@@ -134,7 +134,7 @@ func (h *HistoryAdminHandler) RetryHandlerHertz(ctx context.Context, c *app.Requ
 	id := c.Param("id")
 	app, err := h.store.Get(id)
 	if err != nil {
-		c.String(http.StatusNotFound, "store.App not found")
+		c.String(http.StatusNotFound, "App not found")
 		return
 	}
 
@@ -176,7 +176,7 @@ func (h *HistoryAdminHandler) respondRetryResultHertz(c *app.RequestContext, id,
 	data, err := h.loadHistoryData(id, flash, flashIsError)
 	if err != nil {
 		if errors.Is(err, errHistoryAppNotFound) {
-			c.String(http.StatusNotFound, "store.App not found")
+			c.String(http.StatusNotFound, "App not found")
 			return
 		}
 		c.String(http.StatusInternalServerError, "Failed to list history")
