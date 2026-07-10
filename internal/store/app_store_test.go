@@ -42,6 +42,7 @@ func newTestAppStore(t *testing.T) *AppStore {
 }
 
 func TestAppStoreCreate(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	app, err := store.Create("myapp", "secret123", "/usr/bin/myapp", "myapp.service", "owner/repo", "myapp-linux")
@@ -79,6 +80,7 @@ func TestAppStoreCreate(t *testing.T) {
 }
 
 func TestAppStoreList(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	for i, name := range []string{"app-a", "app-b", "app-c"} {
@@ -104,6 +106,7 @@ func TestAppStoreList(t *testing.T) {
 }
 
 func TestAppStoreGet(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	created, err := store.Create("testapp", "secret", "/bin/test", "test.service", "o/r", "art")
@@ -126,6 +129,7 @@ func TestAppStoreGet(t *testing.T) {
 }
 
 func TestAppStoreGetBySecretHash(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	_, err := store.Create("hashapp", "my-secret", "/bin/hashapp", "hashapp.service", "o/h", "h-art")
@@ -155,6 +159,7 @@ func TestAppStoreGetBySecretHash(t *testing.T) {
 }
 
 func TestAppStoreHashesSecret(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	rawSecret := "super-secret-value"
@@ -174,6 +179,7 @@ func TestAppStoreHashesSecret(t *testing.T) {
 }
 
 func TestAppStoreRejectsDuplicateBinaryPath(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	_, err := store.Create("app1", "secret1", "/bin/shared", "svc1.service", "o/r1", "art1")
@@ -188,6 +194,7 @@ func TestAppStoreRejectsDuplicateBinaryPath(t *testing.T) {
 }
 
 func TestAppStoreRejectsDuplicateServiceName(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	_, err := store.Create("app1", "secret1", "/bin/app1", "shared.service", "o/r1", "art1")
@@ -202,6 +209,7 @@ func TestAppStoreRejectsDuplicateServiceName(t *testing.T) {
 }
 
 func TestAppStoreRejectsDuplicateSecretHash(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	_, err := store.Create("app1", "same-secret", "/bin/app1", "svc1.service", "o/r1", "art1")
@@ -216,6 +224,7 @@ func TestAppStoreRejectsDuplicateSecretHash(t *testing.T) {
 }
 
 func TestAppStoreUpdate(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	app, err := store.Create("orig", "secret", "/bin/orig", "orig.service", "o/orig", "orig-art")
@@ -247,6 +256,7 @@ func TestAppStoreUpdate(t *testing.T) {
 }
 
 func TestAppStoreRotateSecret(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	app, err := store.Create("rotapp", "old-secret", "/bin/rot", "rot.service", "o/rot", "rot-art")
@@ -290,6 +300,7 @@ func TestAppStoreRotateSecret(t *testing.T) {
 }
 
 func TestAppStoreSetEnabled(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	app, err := store.Create("toggleapp", "toggle-secret", "/bin/toggle", "toggle.service", "o/tog", "tog-art")
@@ -334,6 +345,7 @@ func TestAppStoreSetEnabled(t *testing.T) {
 }
 
 func TestBootstrapFromLegacyConfigIsIdempotent(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	legacy := &config.LegacyBootstrapConfig{
@@ -374,6 +386,7 @@ func TestBootstrapFromLegacyConfigIsIdempotent(t *testing.T) {
 }
 
 func TestBootstrapSkipsWhenAppsExist(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStore(t)
 
 	_, err := store.Create("existing", "existing-secret", "/bin/existing", "existing.service", "o/existing", "existing-art")
@@ -434,6 +447,7 @@ func newTestAppStoreWithJobs(t *testing.T) *AppStore {
 }
 
 func TestAppStoreDeleteRemovesAppAndJobs(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 
 	app, err := store.Create("testapp", "secret", "/bin/app", "app.service", "user/repo", "app-linux")
@@ -467,6 +481,7 @@ func TestAppStoreDeleteRemovesAppAndJobs(t *testing.T) {
 }
 
 func TestAppStoreDeleteBlockedByActiveJob(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 
 	app, _ := store.Create("testapp", "secret", "/bin/app", "app.service", "user/repo", "app-linux")
@@ -482,7 +497,55 @@ func TestAppStoreDeleteBlockedByActiveJob(t *testing.T) {
 	}
 }
 
+func TestAppStoreDeleteBlockedByCancelRequestedJob(t *testing.T) {
+	t.Parallel()
+	store := newTestAppStoreWithJobs(t)
+
+	app, _ := store.Create("testapp", "secret", "/bin/app", "app.service", "user/repo", "app-linux")
+
+	if _, err := store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, download_bytes, download_duration_ms, download_speed_bps) VALUES ('job1', 1, ?, 'v1.0.0', 'cancel_requested', 'webhook', 0, 0, 0)`,
+		app.ID,
+	); err != nil {
+		t.Fatalf("insert job: %v", err)
+	}
+
+	if err := store.Delete(app.ID); err != ErrActiveDeployExists {
+		t.Errorf("Expected ErrActiveDeployExists for cancel_requested job, got %v", err)
+	}
+}
+
+func TestAppStoreLastDeployUsesHighestSeq(t *testing.T) {
+	t.Parallel()
+	store := newTestAppStoreWithJobs(t)
+
+	app, _ := store.Create("app", "secret", "/bin/app", "app.service", "user/repo", "art")
+
+	// Two jobs sharing an identical created_at; seq must break the tie so the
+	// later job (seq=2, tag v2) is reported as the last deploy, not v1.
+	if _, err := store.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, created_at, download_bytes, download_duration_ms, download_speed_bps)
+		 VALUES ('older', 1, ?, 'v1', 'succeeded', 'webhook', '2026-01-01 00:00:00', 0, 0, 0),
+		        ('newer', 2, ?, 'v2', 'failed',    'webhook', '2026-01-01 00:00:00', 0, 0, 0)`,
+		app.ID, app.ID,
+	); err != nil {
+		t.Fatalf("insert jobs: %v", err)
+	}
+
+	apps, err := store.ListWithLastDeploy()
+	if err != nil {
+		t.Fatalf("ListWithLastDeploy: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	if apps[0].LastDeployTag != "v2" || apps[0].LastJobID != "newer" {
+		t.Errorf("last deploy = %q (%s), want v2 (newer)", apps[0].LastDeployTag, apps[0].LastJobID)
+	}
+}
+
 func TestAppStoreListWithLastDeploy(t *testing.T) {
+	t.Parallel()
 	store := newTestAppStoreWithJobs(t)
 
 	app1, _ := store.Create("app1", "secret1", "/bin/app1", "app1.service", "user/repo1", "art1")

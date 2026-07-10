@@ -303,7 +303,7 @@ func (s *AppStore) Delete(id string) error {
 	defer tx.Rollback()
 
 	var activeCount int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND status = 'in_progress'`, id).Scan(&activeCount); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND status IN ('in_progress', 'cancel_requested')`, id).Scan(&activeCount); err != nil {
 		return fmt.Errorf("app_store: check active deploys: %w", err)
 	}
 	if activeCount > 0 {
@@ -334,7 +334,7 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 		FROM apps a
 		LEFT JOIN (
 		  SELECT id, app_id, tag, status, download_bytes, download_speed_bps, created_at,
-		         ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY created_at DESC) as rn
+		         ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY seq DESC) as rn
 		  FROM deploy_jobs
 		) j ON j.app_id = a.id AND j.rn = 1
 		ORDER BY a.created_at ASC
