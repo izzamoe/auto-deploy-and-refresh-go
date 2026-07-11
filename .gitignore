@@ -13,6 +13,7 @@ deploy-queue.db
 # AI agent internal state
 .sisyphus/
 .omc/
+skills-lock.json
 
 # Playwright MCP artifacts
 .playwright-mcp/

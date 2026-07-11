@@ -385,10 +385,6 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 }
 
 func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestContext) {
-	if !requireAdminAPIJSONRequestHertz(c) {
-		return
-	}
-
 	if err := h.store.Delete(c.Param("id")); err != nil {
 		if errors.Is(err, store.ErrActiveDeployExists) {
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Cannot delete app with active deploy")

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/config"
+	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -98,18 +99,39 @@ func (h *JWTHandler) validateJWT(token string) (string, bool) {
 	return claims.Sub, true
 }
 
-type LoginHandler struct {
-	cfg  *config.ServiceConfig
-	jwt  *JWTHandler
-	tmpl *template.Template
+// adminUserAuthenticator verifies admin credentials against the datastore.
+// Satisfied by *store.AdminUserStore.
+type adminUserAuthenticator interface {
+	VerifyPassword(username, password string) (*store.AdminUser, bool, error)
+	GetByUsername(username string) (*store.AdminUser, error)
 }
 
-func NewLoginHandler(cfg *config.ServiceConfig, jwt *JWTHandler) (*LoginHandler, error) {
+// ctxKeyAdminUser holds the authenticated admin username in the request context.
+const ctxKeyAdminUser = "adminUsername"
+
+// currentAdminUsername returns the username set by HertzSessionAuthMiddleware.
+func currentAdminUsername(c *app.RequestContext) string {
+	if v, ok := c.Get(ctxKeyAdminUser); ok {
+		if username, ok := v.(string); ok {
+			return username
+		}
+	}
+	return ""
+}
+
+type LoginHandler struct {
+	cfg   *config.ServiceConfig
+	jwt   *JWTHandler
+	users adminUserAuthenticator
+	tmpl  *template.Template
+}
+
+func NewLoginHandler(cfg *config.ServiceConfig, jwt *JWTHandler, users adminUserAuthenticator) (*LoginHandler, error) {
 	tmpl, err := template.ParseFS(templateFS, "templates/login.html")
 	if err != nil {
 		return nil, err
 	}
-	return &LoginHandler{cfg: cfg, jwt: jwt, tmpl: tmpl}, nil
+	return &LoginHandler{cfg: cfg, jwt: jwt, users: users, tmpl: tmpl}, nil
 }
 
 type loginPageData struct {
@@ -134,10 +156,13 @@ func (h *LoginHandler) HandleLoginHertz(ctx context.Context, c *app.RequestConte
 	username := strings.TrimSpace(string(c.FormValue("username")))
 	password := string(c.FormValue("password"))
 
-	uOK := subtle.ConstantTimeCompare([]byte(username), []byte(h.cfg.AdminUsername)) == 1
-	pOK := subtle.ConstantTimeCompare([]byte(password), []byte(h.cfg.AdminPassword)) == 1
-
-	if !uOK || !pOK {
+	_, ok, err := h.users.VerifyPassword(username, password)
+	if err != nil {
+		slog.Error("admin login verify failed", "err", err)
+		c.String(consts.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.SetStatusCode(consts.StatusUnauthorized)
 		if err := h.tmpl.Execute(c.Response.BodyWriter(), loginPageData{
@@ -165,44 +190,60 @@ func (h *LoginHandler) HandleLogoutHertz(ctx context.Context, c *app.RequestCont
 	c.Redirect(consts.StatusFound, []byte("/admin/login"))
 }
 
-func HertzSessionAuthMiddleware(cfg *config.ServiceConfig, jwt *JWTHandler) app.HandlerFunc {
+func HertzSessionAuthMiddleware(jwt *JWTHandler, users adminUserAuthenticator) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		path := string(c.Request.URI().Path())
 		isAPIOrEvents := strings.HasPrefix(path, "/admin/api") || strings.HasPrefix(path, "/admin/events")
 
-		if isAPIOrEvents {
-			authHeader := string(c.GetHeader("Authorization"))
-			if strings.HasPrefix(authHeader, "Basic ") {
-				username, password, ok := c.Request.BasicAuth()
-				if ok {
-					uOK := subtle.ConstantTimeCompare([]byte(username), []byte(cfg.AdminUsername)) == 1
-					pOK := subtle.ConstantTimeCompare([]byte(password), []byte(cfg.AdminPassword)) == 1
-					if uOK && pOK {
-						c.Next(ctx)
-						return
-					}
-				}
+		username, ok := authenticateAdminRequest(c, jwt, users, isAPIOrEvents)
+		if !ok {
+			if isAPIOrEvents {
 				hertzRequireAuth(c)
+			} else {
+				c.Redirect(consts.StatusFound, []byte("/admin/login"))
+			}
+			c.Abort()
+			return
+		}
+
+		// Force-password-change gate: until the seeded default is replaced, the
+		// data/action API is blocked except the account endpoints. The SPA HTML
+		// shell is never gated (it decides to show the change-password screen).
+		if isAPIOrEvents && !strings.HasPrefix(path, "/admin/api/account") {
+			if user, err := users.GetByUsername(username); err == nil && user.MustChangePassword {
+				writeAdminAPIErrorHertz(c, consts.StatusForbidden, "Password change required")
 				c.Abort()
 				return
 			}
 		}
 
-		token := string(c.Cookie(jwtCookieName))
-		if _, ok := jwt.validateJWT(token); ok {
-			c.Next(ctx)
-			return
-		}
-
-		if isAPIOrEvents {
-			hertzRequireAuth(c)
-			c.Abort()
-			return
-		}
-
-		c.Redirect(consts.StatusFound, []byte("/admin/login"))
-		c.Abort()
+		c.Set(ctxKeyAdminUser, username)
+		c.Next(ctx)
 	}
+}
+
+// authenticateAdminRequest resolves the caller's admin username from Basic auth
+// (API paths) or the session cookie. A Basic header that is present but invalid
+// fails without falling back to the cookie.
+func authenticateAdminRequest(c *app.RequestContext, jwt *JWTHandler, users adminUserAuthenticator, isAPIOrEvents bool) (string, bool) {
+	if isAPIOrEvents {
+		authHeader := string(c.GetHeader("Authorization"))
+		if strings.HasPrefix(authHeader, "Basic ") {
+			username, password, hasAuth := c.Request.BasicAuth()
+			if hasAuth {
+				if user, ok, err := users.VerifyPassword(username, password); err == nil && ok {
+					return user.Username, true
+				}
+			}
+			return "", false
+		}
+	}
+
+	token := string(c.Cookie(jwtCookieName))
+	if sub, ok := jwt.validateJWT(token); ok {
+		return sub, true
+	}
+	return "", false
 }
 
 func RegisterLoginRoutesHertz(h *server.Hertz, handler *LoginHandler) {

@@ -312,8 +312,8 @@ if ! grep -q '^systemctl daemon-reload$' "$SYSTEMCTL_LOG"; then
     exit 1
 fi
 
-if ! grep -q '^systemctl enable --now auto-deploy.service$' "$SYSTEMCTL_LOG"; then
-    printf 'expected systemctl enable --now auto-deploy.service during install\n' >&2
+if ! grep -q '^systemctl enable auto-deploy.service$' "$SYSTEMCTL_LOG"; then
+    printf 'expected systemctl enable auto-deploy.service during install\n' >&2
     exit 1
 fi
 

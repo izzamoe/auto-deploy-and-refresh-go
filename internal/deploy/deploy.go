@@ -19,9 +19,13 @@ import (
 )
 
 var (
-	runSystemctl = func(name string, args ...string) ([]byte, error) {
+	systemctlTimeout = 30 * time.Second
+	runSystemctl     = func(name string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), systemctlTimeout)
+		defer cancel()
 		cmdArgs := append([]string{name}, args...)
-		return exec.Command("systemctl", cmdArgs...).CombinedOutput()
+		cmd := exec.CommandContext(ctx, "systemctl", cmdArgs...)
+		return cmd.CombinedOutput()
 	}
 	renameFile             = os.Rename
 	chmodFile              = os.Chmod

@@ -15,6 +15,8 @@ type ServiceConfig struct {
 	AdminPassword string
 	// CookieSecure sets the Secure flag on the admin JWT cookie. Set to true when behind a TLS-terminating reverse proxy (e.g. nginx). Do NOT set if accessed over plain HTTP.
 	CookieSecure bool
+	// GitHubToken authenticates GitHub Releases API calls. Optional; empty means unauthenticated requests (subject to GitHub's lower rate limit).
+	GitHubToken string
 }
 
 type LegacyBootstrapConfig struct {
@@ -54,6 +56,7 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		AdminUsername: username,
 		AdminPassword: password,
 		CookieSecure:  os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
+		GitHubToken:   envOrDefault("GITHUB_TOKEN", ""),
 	}, nil
 }
 

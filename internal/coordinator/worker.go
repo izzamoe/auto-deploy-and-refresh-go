@@ -2,12 +2,14 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
+	"github.com/izzamoe/auto-deploy/internal/telegram"
 )
 
 // sleepOrDone waits for d or until ctx is cancelled. It reports false when ctx
@@ -93,11 +95,12 @@ func (w *Worker) loop(ctx context.Context) {
 type CoordinatorRunner func(app *store.App, jobID, tag string) (store.DownloadSummary, error)
 
 type Coordinator struct {
-	apps    *store.AppStore
-	q       *store.DeployQueue
-	runner  CoordinatorRunner
-	tracker *progress.ProgressTracker
-	wg      sync.WaitGroup
+	apps     *store.AppStore
+	q        *store.DeployQueue
+	runner   CoordinatorRunner
+	tracker  *progress.ProgressTracker
+	notifier telegram.Notifier
+	wg       sync.WaitGroup
 
 	mu         sync.Mutex
 	activeApps map[string]bool
@@ -109,8 +112,21 @@ func NewCoordinator(apps *store.AppStore, q *store.DeployQueue, runner Coordinat
 		q:          q,
 		runner:     runner,
 		tracker:    tracker,
+		notifier:   telegram.NopNotifier{},
 		activeApps: make(map[string]bool),
 	}
+}
+
+// SetNotifier attaches a Telegram (or other) notifier used to announce
+// deploy outcomes. It defaults to telegram.NopNotifier{} so callers of
+// NewCoordinator never need a nil check. Safe to call before Start.
+func (c *Coordinator) SetNotifier(n telegram.Notifier) {
+	if n == nil {
+		n = telegram.NopNotifier{}
+	}
+	c.mu.Lock()
+	c.notifier = n
+	c.mu.Unlock()
 }
 
 func (c *Coordinator) Start(ctx context.Context) {
@@ -222,7 +238,19 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 
 	if success {
 		slog.Info("coordinator: deploy succeeded", "app", app.ID, "tag", tag)
+		c.notify(fmt.Sprintf("✅ %s: deploy of %s succeeded", app.Name, tag))
 	} else {
 		slog.Error("coordinator: deploy failed", "app", app.ID, "tag", tag, "err", err)
+		c.notify(fmt.Sprintf("❌ %s: deploy of %s failed: %s", app.Name, tag, errMsg))
+	}
+}
+
+// notify announces a deploy outcome via the configured Notifier, if any.
+func (c *Coordinator) notify(text string) {
+	c.mu.Lock()
+	n := c.notifier
+	c.mu.Unlock()
+	if n != nil {
+		n.Notify(text)
 	}
 }

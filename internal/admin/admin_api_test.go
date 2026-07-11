@@ -67,7 +67,7 @@ func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.
 	}
 	handler := NewAdminAPIHandler(appStore, queue, progress.NewProgressTracker(), cancel.NewCancelService(queue))
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
-	RegisterAdminAPIRoutesHertz(h, handler, HertzSessionAuthMiddleware(testServiceConfig(), jwt))
+	RegisterAdminAPIRoutesHertz(h, handler, HertzSessionAuthMiddleware(jwt, testAuthenticator()))
 	return h, appStore, queue, jwt
 }
 
@@ -124,6 +124,29 @@ func TestAdminAPIUnauthorizedReturnsJSON(t *testing.T) {
 	body := decodeAdminAPIResponseHertz[adminAPIErrorResponse](t, c)
 	if body.Status != "error" || body.Error != "unauthorized" {
 		t.Fatalf("unexpected auth error body: %+v", body)
+	}
+}
+
+func TestDeleteAppHertzWorksWithoutContentType(t *testing.T) {
+	t.Parallel()
+	h, _, _, jwt := newTestAdminAPIHertz(t)
+
+	createBody := `{"name":"del-test","secret":"secret-del","binaryPath":"/opt/del-test","serviceName":"del-test.service","githubRepo":"owner/del-test","artifactName":"del-test-linux"}`
+	createRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps", createBody))
+	created := decodeAdminAPIResponseHertz[struct {
+		Status string              `json:"status"`
+		App    adminAPIAppResponse `json:"app"`
+	}](t, createRR)
+
+	c := app.NewContext(0)
+	c.Request.SetRequestURI("/admin/api/apps/" + created.App.ID)
+	c.Request.SetMethod(http.MethodDelete)
+	token, _ := jwt.issueJWT("admin")
+	c.Request.Header.Set("Cookie", jwtCookieName+"="+token)
+	h.ServeHTTP(context.Background(), c)
+
+	if c.Response.StatusCode() != http.StatusOK {
+		t.Fatalf("DELETE without Content-Type should succeed, got %d body=%s", c.Response.StatusCode(), string(c.Response.Body()))
 	}
 }
 

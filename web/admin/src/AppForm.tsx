@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { WebhookSnippet } from "./WebhookSnippet";
 
 export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (hash: string, flashMessage?: string) => void; setFlash: (flash: { message: string, type: "success" | "error" }) => void }) {
 	const [formData, setFormData] = useState({
@@ -19,6 +20,7 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 		enabled: true
 	});
 	const [errors, setErrors] = useState<string[]>([]);
+	const [createdApp, setCreatedApp] = useState<{ name: string; secret: string } | null>(null);
 
 	useEffect(() => {
 		if (id) {
@@ -76,7 +78,7 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 					method: "POST",
 					body: JSON.stringify(body)
 				});
-				navigate("#/", "App created successfully");
+				setCreatedApp({ name: formData.name, secret: formData.webhook_secret });
 			}
 		} catch (err: unknown) {
 			if (err instanceof AdminAPIError) {
@@ -114,7 +116,15 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 				</Alert>
 			)}
 
-			<Card className="border-border/70 bg-card/80 shadow-sm">
+			{createdApp && (
+				<WebhookSnippet
+					appName={createdApp.name}
+					secret={createdApp.secret}
+					onDismiss={() => navigate("#/", "App created successfully")}
+				/>
+			)}
+
+			{!createdApp && <Card className="border-border/70 bg-card/80 shadow-sm">
 				<form id="app-form" onSubmit={handleSubmit}>
 					<CardContent className="grid gap-5 p-6">
 						<div className="grid gap-2">
@@ -185,7 +195,7 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 						<Button type="submit" id="submit-btn">{id ? "Update App" : "Create App"}</Button>
 					</CardFooter>
 				</form>
-			</Card>
+				</Card>}
 		</div>
 	);
 }

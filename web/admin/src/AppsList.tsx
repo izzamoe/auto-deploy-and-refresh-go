@@ -1,7 +1,7 @@
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useAdminEvents } from "./AdminEventProvider";
-import { AdminAPIError, apiRequest } from "./api";
+import { AdminAPIError, apiRequest, listAppReleases } from "./api";
 import { ProgressBadge } from "./ProgressBadge";
 
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +44,14 @@ export function AppsList({ setFlash }: AppsListProps) {
 	const [apps, setApps] = useState<AppItem[]>([]);
 	const { progress: liveProgress } = useAdminEvents();
 	const [tagMap, setTagMap] = useState<Record<string, string>>({});
+	const [releasesByApp, setReleasesByApp] = useState<Record<string, string[]>>({});
+	const [releasesLoading, setReleasesLoading] = useState<Record<string, boolean>>({});
+	// Tracks apps where the release dropdown should fall back to a plain text
+	// input: the fetch failed, or GitHub returned zero matching releases.
+	const [releasesFallback, setReleasesFallback] = useState<Record<string, boolean>>({});
+	const [serviceUnitDialog, setServiceUnitDialog] = useState<{ appId: string; unit: string } | null>(null);
+	const [serviceUnitLoadingId, setServiceUnitLoadingId] = useState<string | null>(null);
+	const [serviceUnitApplying, setServiceUnitApplying] = useState(false);
 
 	const loadApps = useCallback(async () => {
 		try {
@@ -61,6 +69,30 @@ export function AppsList({ setFlash }: AppsListProps) {
 	useEffect(() => {
 		loadApps();
 	}, [loadApps]);
+
+	const loadReleases = useCallback(async (appId: string) => {
+		setReleasesLoading((prev) => ({ ...prev, [appId]: true }));
+		try {
+			const res = await listAppReleases(appId);
+			const releases = res.releases || [];
+			setReleasesByApp((prev) => ({ ...prev, [appId]: releases }));
+			setReleasesFallback((prev) => ({ ...prev, [appId]: releases.length === 0 }));
+		} catch {
+			// GitHub unreachable/rate-limited: don't block manual deploy, just
+			// fall back to a plain text tag input for this app.
+			setReleasesFallback((prev) => ({ ...prev, [appId]: true }));
+		} finally {
+			setReleasesLoading((prev) => ({ ...prev, [appId]: false }));
+		}
+	}, []);
+
+	useEffect(() => {
+		for (const app of apps) {
+			if (app.enabled && releasesByApp[app.id] === undefined && !releasesLoading[app.id]) {
+				loadReleases(app.id);
+			}
+		}
+	}, [apps, releasesByApp, releasesLoading, loadReleases]);
 
 	const disableApp = async (id: string) => {
 		try {
@@ -115,6 +147,32 @@ export function AppsList({ setFlash }: AppsListProps) {
 			loadApps();
 		} catch (err: unknown) {
 			if (err instanceof AdminAPIError) setFlash({ message: err.message, type: "error" });
+		}
+	};
+
+	const previewServiceUnit = async (id: string) => {
+		setServiceUnitLoadingId(id);
+		try {
+			const res = await apiRequest(`/apps/${id}/service-unit/preview`);
+			setServiceUnitDialog({ appId: id, unit: res.unit });
+		} catch (err: unknown) {
+			if (err instanceof AdminAPIError) setFlash({ message: err.message, type: "error" });
+		} finally {
+			setServiceUnitLoadingId(null);
+		}
+	};
+
+	const applyServiceUnit = async () => {
+		if (!serviceUnitDialog) return;
+		setServiceUnitApplying(true);
+		try {
+			const res = await apiRequest(`/apps/${serviceUnitDialog.appId}/service-unit/apply`, { method: "POST" });
+			setFlash({ message: res.message || "Service unit created and enabled", type: "success" });
+			setServiceUnitDialog(null);
+		} catch (err: unknown) {
+			if (err instanceof AdminAPIError) setFlash({ message: err.message, type: "error" });
+		} finally {
+			setServiceUnitApplying(false);
 		}
 	};
 
@@ -187,6 +245,16 @@ export function AppsList({ setFlash }: AppsListProps) {
 										<Button type="button" variant="secondary" size="sm" onClick={() => enableApp(app.id)}>Enable</Button>
 									)}
 
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										onClick={() => previewServiceUnit(app.id)}
+										disabled={serviceUnitLoadingId === app.id}
+									>
+										{serviceUnitLoadingId === app.id ? "Loading..." : "Generate service unit"}
+									</Button>
+
 									<Dialog>
 										<DialogTrigger asChild>
 											<Button type="button" variant="destructive" size="sm">Delete</Button>
@@ -234,20 +302,41 @@ export function AppsList({ setFlash }: AppsListProps) {
 									<>
 										<Separator />
 										<form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => deployApp(app.id, e)}>
-											<input 
-												type="hidden" 
-												name="source" 
-												value="list" 
+											<input
+												type="hidden"
+												name="source"
+												value="list"
 											/>
-											<Input 
-												type="text" 
-												name="tag" 
-												placeholder="Tag (e.g. v1.2.3)" 
-												required 
-												value={tagMap[app.id] || ""}
-												onChange={(e) => setTagMap({ ...tagMap, [app.id]: e.target.value })}
-												className="sm:flex-1"
-											/>
+											{releasesLoading[app.id] && (
+												<div className="flex h-9 flex-1 items-center rounded-md border border-input px-3 text-sm text-muted-foreground">
+													Loading releases…
+												</div>
+											)}
+											{!releasesLoading[app.id] && !releasesFallback[app.id] && (
+												<select
+													name="tag"
+													required
+													value={tagMap[app.id] || ""}
+													onChange={(e) => setTagMap({ ...tagMap, [app.id]: e.target.value })}
+													className="flex h-9 flex-1 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+												>
+													<option value="" disabled>Select a release tag</option>
+													{(releasesByApp[app.id] || []).map((tag) => (
+														<option key={tag} value={tag}>{tag}</option>
+													))}
+												</select>
+											)}
+											{!releasesLoading[app.id] && releasesFallback[app.id] && (
+												<Input
+													type="text"
+													name="tag"
+													placeholder="Tag (e.g. v1.2.3)"
+													required
+													value={tagMap[app.id] || ""}
+													onChange={(e) => setTagMap({ ...tagMap, [app.id]: e.target.value })}
+													className="sm:flex-1"
+												/>
+											)}
 											<Button type="submit">Deploy</Button>
 										</form>
 									</>
@@ -258,6 +347,41 @@ export function AppsList({ setFlash }: AppsListProps) {
 				})}
 				</CardContent>
 			</Card>
+
+			<Dialog
+				open={serviceUnitDialog !== null}
+				onOpenChange={(open) => {
+					if (!open) setServiceUnitDialog(null);
+				}}
+			>
+				<DialogContent className="max-w-2xl">
+					<DialogHeader>
+						<DialogTitle>Generate systemd service unit</DialogTitle>
+						<DialogDescription>
+							Applying this writes a unit file to /etc/systemd/system as root and runs
+							"systemctl daemon-reload" and "systemctl enable". Review the generated content below
+							before confirming.
+						</DialogDescription>
+					</DialogHeader>
+					<pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-4 text-xs">
+						{serviceUnitDialog?.unit}
+					</pre>
+					<DialogFooter>
+						<Button type="button" variant="outline" onClick={() => setServiceUnitDialog(null)}>
+							Cancel
+						</Button>
+						<Button
+							type="button"
+							variant="destructive"
+							onClick={applyServiceUnit}
+							disabled={serviceUnitApplying}
+							aria-label="Confirm and apply service unit"
+						>
+							{serviceUnitApplying ? "Applying..." : "Confirm and Apply"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

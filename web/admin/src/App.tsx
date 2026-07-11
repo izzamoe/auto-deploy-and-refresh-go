@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AdminEventProvider } from "./AdminEventProvider";
 import { AppForm } from "./AppForm";
 import { AppsList } from "./AppsList";
 import { HistoryList } from "./HistoryList";
+import { AccountSettings, ForcePasswordChange } from "./Account";
+import { getAccount, type Account } from "./api";
+import { TelegramSettings } from "./TelegramSettings";
 
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -11,6 +14,19 @@ import { Separator } from "@/components/ui/separator";
 function AdminRouter() {
 	const [route, setRoute] = useState(window.location.hash || "#/");
 	const [flash, setFlash] = useState<{ message: string, type: "success" | "error" } | null>(null);
+	const [account, setAccount] = useState<Account | null>(null);
+	const [accountLoaded, setAccountLoaded] = useState(false);
+
+	const refreshAccount = useCallback(() => {
+		getAccount()
+			.then(setAccount)
+			.catch(() => setAccount(null))
+			.finally(() => setAccountLoaded(true));
+	}, []);
+
+	useEffect(() => {
+		refreshAccount();
+	}, [refreshAccount]);
 
 	useEffect(() => {
 		const handleHashChange = () => {
@@ -36,6 +52,12 @@ function AdminRouter() {
 		window.location.hash = hash;
 	};
 
+	// Block the whole UI on the forced password change until the seeded default
+	// (admin/11) is replaced.
+	if (accountLoaded && account?.mustChangePassword) {
+		return <ForcePasswordChange onDone={refreshAccount} />;
+	}
+
 	return (
 		<div data-testid="admin-shell" className="min-h-screen bg-background flex flex-col font-sans">
 			<nav id="admin-nav" data-testid="admin-nav" className="flex items-center justify-between px-6 py-4">
@@ -46,6 +68,12 @@ function AdminRouter() {
 					</Button>
 					<Button variant="ghost" asChild>
 						<a href="#/history">History</a>
+					</Button>
+					<Button variant="ghost" asChild>
+						<a href="#/account">Account</a>
+					</Button>
+					<Button variant="ghost" asChild>
+						<a href="#/telegram">Telegram</a>
 					</Button>
 				</div>
 			</nav>
@@ -81,6 +109,10 @@ function AdminRouter() {
 					<AppForm id={route.split("/")[2]} navigate={navigate} setFlash={setFlash} />
 				) : route.startsWith("#/history") ? (
 					<HistoryList setFlash={setFlash} />
+				) : route.startsWith("#/account") ? (
+					<AccountSettings username={account?.username ?? ""} onUpdated={refreshAccount} setFlash={setFlash} />
+				) : route.startsWith("#/telegram") ? (
+					<TelegramSettings setFlash={setFlash} />
 				) : (
 					<div className="flex flex-col items-center justify-center py-12 text-center">
 						<h2 className="text-2xl font-bold mb-4">404 Not Found</h2>

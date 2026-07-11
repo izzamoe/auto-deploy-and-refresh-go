@@ -868,6 +868,15 @@ func TestDeployChmodFailureSetsFailedAfterValidating(t *testing.T) {
 	}
 }
 
+func TestRunSystemctlHasTimeout(t *testing.T) {
+	t.Parallel()
+	// systemctlTimeout must be set to a reasonable value so hung systemd
+	// calls do not block deploy goroutines indefinitely.
+	if systemctlTimeout <= 0 || systemctlTimeout > 60*time.Second {
+		t.Fatalf("systemctlTimeout=%v, expected 0 < timeout <= 60s", systemctlTimeout)
+	}
+}
+
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

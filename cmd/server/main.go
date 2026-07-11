@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/coordinator"
 	"github.com/izzamoe/auto-deploy/internal/deploy"
 	"github.com/izzamoe/auto-deploy/internal/download"
+	"github.com/izzamoe/auto-deploy/internal/github"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
@@ -73,6 +75,19 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
+	adminUsers, err := store.NewAdminUserStore(db)
+	if err != nil {
+		slog.Error("admin user store init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	if seeded, err := adminUsers.EnsureSeed("admin", "11"); err != nil {
+		slog.Error("admin user seed failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	} else if seeded {
+		slog.Warn("seeded default admin account admin/11 — change the password immediately via the admin UI")
+	}
 	if err := q.RecoverStale(); err != nil {
 		slog.Warn("stale recovery", "err", err)
 	}
@@ -94,6 +109,17 @@ func main() {
 		return deploy.DeployWithControl(app, jobID, tag, tracker, dlClient, cancelService)
 	}, tracker)
 	coord.Start(ctx)
+	telegramConfigStore, err := store.NewTelegramConfigStore(db)
+	if err != nil {
+		slog.Error("telegram config store init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	telegramSessionPath := filepath.Join(filepath.Dir(serviceCfg.QueueDBPath), "telegram-session.json")
+	telegramHandler := admin.NewTelegramConfigHandler(ctx, telegramConfigStore, telegramSessionPath, coord)
+	if err := telegramHandler.Reload(); err != nil {
+		slog.Warn("telegram config reload failed", "err", err)
+	}
 	adminHandler, err := admin.NewAdminHandler(serviceCfg)
 	if err != nil {
 		slog.Error("admin handler init failed", "err", err)
@@ -103,7 +129,11 @@ func main() {
 	templates := adminHandler.Templates()
 	progressAdminHandler := admin.NewProgressAdminHandler(tracker, appStore, q, templates)
 	adminAPIHandler := admin.NewAdminAPIHandler(appStore, q, tracker, cancelService)
-	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler)
+	accountHandler := admin.NewAccountHandler(adminUsers, jwtHandler, serviceCfg)
+	githubClient := github.NewClient(serviceCfg.GitHubToken)
+	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
+	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore)
+	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler, adminUsers)
 	if err != nil {
 		slog.Error("login handler init failed", "err", err)
 		db.Close()
@@ -124,11 +154,15 @@ func main() {
 		server.WithNetwork("tcp"),
 	)
 	admin.SetupMiddleware(h)
-	auth := admin.HertzSessionAuthMiddleware(serviceCfg, jwtHandler)
+	auth := admin.HertzSessionAuthMiddleware(jwtHandler, adminUsers)
 	admin.RegisterLoginRoutesHertz(h, loginHandler)
 	h.POST("/webhook", multiAppWebhookHandler(admissionSvc))
 	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, auth)
+	admin.RegisterAccountRoutesHertz(h, accountHandler, auth)
+	admin.RegisterTelegramRoutesHertz(h, telegramHandler, auth)
 	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, auth)
+	admin.RegisterReleasesRoutesHertz(h, releasesHandler, auth)
+	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, auth)
 	admin.RegisterAdminProgressRoutesHertz(h, progressAdminHandler, auth)
 	admin.RegisterAdminSPARoutesHertz(h, auth)
 	go func() {

@@ -2,7 +2,6 @@ package download
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +15,7 @@ func TestDebugContentLength(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "33")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+		w.Write([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
 	}))
 	defer srv.Close()
 
@@ -27,8 +26,13 @@ func TestDebugContentLength(t *testing.T) {
 	resp := &protocol.Response{}
 
 	err := c.Do(context.Background(), req, resp)
-	fmt.Printf("err=%v\n", err)
-	fmt.Printf("status=%d\n", resp.StatusCode())
-	fmt.Printf("header.ContentLength=%d\n", resp.Header.ContentLength())
-	fmt.Printf("header.Peek=%q\n", resp.Header.Peek("Content-Length"))
+	if err != nil {
+		t.Fatalf("unexpected Do error: %v", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode())
+	}
+	if got := resp.Header.ContentLength(); got != 33 {
+		t.Fatalf("expected Content-Length 33, got %d", got)
+	}
 }

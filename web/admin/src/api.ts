@@ -34,3 +34,51 @@ export async function apiRequest(endpoint: string, options: RequestInit = {}) {
   }
   return res.json();
 }
+
+export interface Account {
+  username: string;
+  mustChangePassword: boolean;
+}
+
+export function getAccount(): Promise<Account> {
+  return apiRequest("/account");
+}
+
+export function changePassword(currentPassword: string, newPassword: string) {
+  return apiRequest("/account/password", {
+    method: "POST",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
+export function changeUsername(currentPassword: string, newUsername: string) {
+  return apiRequest("/account/username", {
+    method: "POST",
+    body: JSON.stringify({ currentPassword, newUsername }),
+  });
+}
+
+export function listAppReleases(id: string): Promise<{ releases: string[] }> {
+  return apiRequest(`/apps/${id}/releases`);
+}
+
+export interface TelegramConfig {
+  appId: number;
+  appHash: string;
+  botToken: string;
+  chatUsername: string;
+  enabled: boolean;
+}
+
+export async function getTelegramConfig(): Promise<TelegramConfig> {
+  const res = await apiRequest("/telegram");
+  return res.config;
+}
+
+export async function saveTelegramConfig(config: TelegramConfig): Promise<TelegramConfig> {
+  const res = await apiRequest("/telegram", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+  return res.config;
+}

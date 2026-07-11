@@ -38,11 +38,18 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 	const [retriedSourceIds, setRetriedSourceIds] = useState<Set<string>>(() => new Set());
 	const { progress: liveProgress } = useAdminEvents();
 
-	const appId = useMemo(() => {
-		const searchParams = new URLSearchParams(window.location.hash.split("?")[1] || "");
-		return searchParams.get("appId");
+	const [hash, setHash] = useState(() => window.location.hash);
+	useEffect(() => {
+		const onHashChange = () => setHash(window.location.hash);
+		window.addEventListener("hashchange", onHashChange);
+		return () => window.removeEventListener("hashchange", onHashChange);
 	}, []);
-	
+
+	const appId = useMemo(() => {
+		const searchParams = new URLSearchParams(hash.split("?")[1] || "");
+		return searchParams.get("appId");
+	}, [hash]);
+
 	const loadHistory = useCallback(async () => {
 		try {
 			const url = appId ? `/history?appId=${appId}` : "/history";

@@ -38,7 +38,9 @@ describe("App component", () => {
 		expect(screen.getByRole("link", { name: "Apps" })).toHaveAttribute("href", "#/");
 		expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "#/history");
 		expect(container.querySelectorAll('[data-admin-ws-url="/admin/events/ws"]')).toHaveLength(1);
-		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		// AdminRouter fetches /admin/api/account (force-change gate) in addition
+		// to AppsList's /admin/api/apps fetch.
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 	});
 
 	it("renders and dismisses flash messaging accessibly", async () => {
@@ -51,7 +53,9 @@ describe("App component", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
 
 		expect(screen.queryByTestId("admin-flash")).toBeNull();
-		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		// AdminRouter fetches /admin/api/account (force-change gate) in addition
+		// to AppsList's /admin/api/apps fetch.
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 	});
 
 	it("does not show the enabled switch while creating an app", () => {
