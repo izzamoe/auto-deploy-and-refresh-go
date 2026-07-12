@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withTestServer points apiBaseURL at server for the duration of the test
@@ -138,5 +139,40 @@ func TestFilterReleasesWithAsset(t *testing.T) {
 
 	if none := FilterReleasesWithAsset(releases, "does-not-exist"); len(none) != 0 {
 		t.Errorf("expected no matches for a nonexistent asset, got %+v", none)
+	}
+}
+
+// TestNewClientSetsRequestTimeout guards the fix for the Cloudflare 502: the
+// HTTP client MUST have a non-zero timeout so a host that cannot reach GitHub
+// fails fast with the handler's own error instead of hanging until the reverse
+// proxy returns its own 502.
+func TestNewClientSetsRequestTimeout(t *testing.T) {
+	t.Parallel()
+
+	if got := NewClient("").httpClient.Timeout; got != requestTimeout {
+		t.Fatalf("client timeout = %v, want %v", got, requestTimeout)
+	}
+}
+
+// TestListReleasesTimesOutOnSlowServer verifies ListReleases returns an error
+// (rather than blocking forever) when the upstream never responds within the
+// client timeout — the exact condition that produced the hung origin.
+func TestListReleasesTimesOutOnSlowServer(t *testing.T) {
+	// close(block) via defer runs when this function returns, i.e. BEFORE the
+	// t.Cleanup(server.Close) that withTestServer registers. Closing it in a
+	// t.Cleanup would run after server.Close (cleanups are LIFO), so Close
+	// would deadlock waiting on the still-blocked handler goroutine.
+	block := make(chan struct{})
+	defer close(block)
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		<-block // never respond within the client timeout
+	})
+
+	// Use a tiny timeout so the test is fast; NewClient's real value is
+	// asserted separately in TestNewClientSetsRequestTimeout.
+	c := &Client{httpClient: &http.Client{Timeout: 50 * time.Millisecond}}
+
+	if _, err := c.ListReleases(context.Background(), "owner", "repo"); err == nil {
+		t.Fatal("expected a timeout error, got nil")
 	}
 }

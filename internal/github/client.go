@@ -8,7 +8,16 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 )
+
+// requestTimeout bounds a single GitHub API call end to end (connect, TLS,
+// response, body read). Without it a host that cannot reach api.github.com —
+// blocked egress, DNS blackhole — makes http.Client.Do hang indefinitely, so
+// the releases request never returns and the reverse proxy in front (e.g.
+// Cloudflare) answers with its own 502 instead of the handler's graceful
+// error. Fail fast so the app returns its JSON error and the UI can fall back.
+const requestTimeout = 10 * time.Second
 
 // apiBaseURL is the GitHub REST API base URL. It is an unexported
 // package-level var so tests can point it at an httptest.Server.
@@ -32,7 +41,7 @@ type Client struct {
 // unauthenticated (subject to GitHub's lower rate limit for anonymous
 // callers) — that is fine and expected for public repos.
 func NewClient(token string) *Client {
-	return &Client{httpClient: &http.Client{}, token: token}
+	return &Client{httpClient: &http.Client{Timeout: requestTimeout}, token: token}
 }
 
 type releaseAssetJSON struct {
