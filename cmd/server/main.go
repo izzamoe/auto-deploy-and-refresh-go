@@ -34,6 +34,15 @@ type response struct {
 }
 
 func main() {
+	// Subcommands run and exit before the server boots. "upgrade"/"update"
+	// re-run the install script to replace this binary in place.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "upgrade", "update":
+			os.Exit(runUpgrade(os.Args[2:]))
+		}
+	}
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	hertzLogger, err := admin.NewZapLogger()
 	if err != nil {

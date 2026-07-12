@@ -80,7 +80,21 @@ curl -fsSL https://raw.githubusercontent.com/izzamoe/auto-deploy-and-refresh-go/
 curl -fsSL https://raw.githubusercontent.com/izzamoe/auto-deploy-and-refresh-go/master/install.sh | sudo sh -s -- v1.2.3
 ```
 
-On upgrade, the installer overwrites the binary and service unit but preserves your existing `/etc/auto-deploy.env` configuration.
+On upgrade, the installer overwrites the binary and service unit but preserves your existing `/etc/auto-deploy.env` configuration **and the existing database** (`/opt/auto-deploy/deploy-queue.db`) — registered apps, the admin password, Telegram settings, and job history all survive an upgrade.
+
+### Upgrade in place with the `upgrade` subcommand
+
+Once installed, you can upgrade without remembering the one-liner. The binary ships an `upgrade` subcommand (alias `update`) that re-runs the install script:
+
+```bash
+# Upgrade to the latest stable release
+sudo auto-deploy upgrade
+
+# Upgrade (or pin) to a specific tagged version
+sudo auto-deploy upgrade v1.2.3
+```
+
+This is equivalent to piping `install.sh` to `sh`: it requires `root` and `curl`, preserves `/etc/auto-deploy.env` and the database, then restarts the service. Override the script source with `AUTO_DEPLOY_INSTALL_URL` if you host your own mirror.
 
 ## Server Setup
 
