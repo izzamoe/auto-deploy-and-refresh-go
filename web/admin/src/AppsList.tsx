@@ -79,7 +79,11 @@ export function AppsList({ setFlash }: AppsListProps) {
 			setReleasesFallback((prev) => ({ ...prev, [appId]: releases.length === 0 }));
 		} catch {
 			// GitHub unreachable/rate-limited: don't block manual deploy, just
-			// fall back to a plain text tag input for this app.
+			// fall back to a plain text tag input for this app. Record an empty
+			// result so the load-once guard in the effect below stops firing —
+			// otherwise releasesByApp[appId] stays undefined and the effect
+			// re-fetches on every render, hammering the failing endpoint.
+			setReleasesByApp((prev) => ({ ...prev, [appId]: [] }));
 			setReleasesFallback((prev) => ({ ...prev, [appId]: true }));
 		} finally {
 			setReleasesLoading((prev) => ({ ...prev, [appId]: false }));
