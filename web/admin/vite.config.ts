@@ -15,7 +15,10 @@ export default defineConfig(async () => {
   base: '/admin/',
   root: resolve(__dirname),
   build: {
-    outDir: 'dist',
+    // Output straight into the location the Go binary embeds
+    // (internal/admin/admin_spa.go: //go:embed all:web/admin/dist). Building
+    // into the repo-root web/admin/dist left the embedded copy stale.
+    outDir: resolve(__dirname, '../../internal/admin/web/admin/dist'),
     assetsDir: 'assets',
     emptyOutDir: true,
   },

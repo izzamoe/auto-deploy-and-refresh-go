@@ -11,22 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 
-function AdminRouter() {
+function AdminRouter({ account, refreshAccount }: { account: Account | null; refreshAccount: () => void }) {
 	const [route, setRoute] = useState(window.location.hash || "#/");
 	const [flash, setFlash] = useState<{ message: string, type: "success" | "error" } | null>(null);
-	const [account, setAccount] = useState<Account | null>(null);
-	const [accountLoaded, setAccountLoaded] = useState(false);
-
-	const refreshAccount = useCallback(() => {
-		getAccount()
-			.then(setAccount)
-			.catch(() => setAccount(null))
-			.finally(() => setAccountLoaded(true));
-	}, []);
-
-	useEffect(() => {
-		refreshAccount();
-	}, [refreshAccount]);
 
 	useEffect(() => {
 		const handleHashChange = () => {
@@ -51,12 +38,6 @@ function AdminRouter() {
 		}
 		window.location.hash = hash;
 	};
-
-	// Block the whole UI on the forced password change until the seeded default
-	// (admin/11) is replaced.
-	if (accountLoaded && account?.mustChangePassword) {
-		return <ForcePasswordChange onDone={refreshAccount} />;
-	}
 
 	return (
 		<div data-testid="admin-shell" className="min-h-screen bg-background flex flex-col font-sans">
@@ -127,9 +108,38 @@ function AdminRouter() {
 }
 
 export default function App() {
+	const [account, setAccount] = useState<Account | null>(null);
+	const [accountLoaded, setAccountLoaded] = useState(false);
+
+	const refreshAccount = useCallback(() => {
+		getAccount()
+			.then(setAccount)
+			.catch(() => setAccount(null))
+			.finally(() => setAccountLoaded(true));
+	}, []);
+
+	useEffect(() => {
+		refreshAccount();
+	}, [refreshAccount]);
+
+	// Wait for the account probe before mounting anything that talks to the
+	// gated data/event API. Otherwise the force-change gate answers the first
+	// AppsList/WebSocket calls with 403 — leaving a stale "Password change
+	// required" flash and a reconnecting WebSocket behind the change screen.
+	if (!accountLoaded) {
+		return null;
+	}
+
+	// Block the whole UI on the forced password change until the seeded default
+	// (admin/11) is replaced. The event WebSocket stays unmounted here — it is
+	// gated server-side and would just 403-loop.
+	if (account?.mustChangePassword) {
+		return <ForcePasswordChange onDone={refreshAccount} />;
+	}
+
 	return (
 		<AdminEventProvider>
-			<AdminRouter />
+			<AdminRouter account={account} refreshAccount={refreshAccount} />
 		</AdminEventProvider>
 	);
 }

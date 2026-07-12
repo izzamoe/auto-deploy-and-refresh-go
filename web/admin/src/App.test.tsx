@@ -31,7 +31,8 @@ describe("App component", () => {
 	it("renders the shadcn admin shell without changing stable selectors", async () => {
 		const { container } = render(<App />);
 
-		expect(screen.getByTestId("admin-shell")).toBeDefined();
+		// The shell mounts only after the /admin/api/account probe resolves.
+		expect(await screen.findByTestId("admin-shell")).toBeDefined();
 		expect(screen.getByTestId("admin-nav")).toBeDefined();
 		expect(screen.getByTestId("admin-content")).toBeDefined();
 		expect(screen.getByRole("link", { name: /Auto Deploy Admin/i })).toHaveAttribute("href", "#/");
@@ -48,7 +49,7 @@ describe("App component", () => {
 
 		render(<App />);
 
-		expect(screen.getByTestId("admin-flash")).toHaveTextContent("Saved");
+		expect(await screen.findByTestId("admin-flash")).toHaveTextContent("Saved");
 
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
 
@@ -58,12 +59,12 @@ describe("App component", () => {
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 	});
 
-	it("does not show the enabled switch while creating an app", () => {
+	it("does not show the enabled switch while creating an app", async () => {
 		window.history.replaceState({}, "", "/admin/apps#/apps/new");
 
 		render(<App />);
 
-		expect(screen.getByRole("heading", { name: "New App" })).toBeDefined();
+		expect(await screen.findByRole("heading", { name: "New App" })).toBeDefined();
 		expect(screen.queryByRole("switch", { name: "Enable deployments" })).toBeNull();
 	});
 });

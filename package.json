@@ -7,7 +7,7 @@
     "pw:smoke": "playwright test",
     "test:playwright": "playwright test",
     "admin:dev": "vite web/admin --config web/admin/vite.config.ts",
-    "admin:build": "vite build web/admin --config web/admin/vite.config.ts && touch web/admin/dist/.keep",
+    "admin:build": "vite build web/admin --config web/admin/vite.config.ts && touch internal/admin/web/admin/dist/.keep",
     "admin:test": "vitest run web/admin --config web/admin/vite.config.ts"
   },
   "dependencies": {
