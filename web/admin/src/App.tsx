@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, History, LayoutGrid, Rocket, Send, UserCog } from "lucide-react";
+import { GitBranch, History, LayoutGrid, Rocket, ScrollText, Send, UserCog } from "lucide-react";
 import { AdminEventProvider } from "./AdminEventProvider";
 import { AppForm } from "./AppForm";
 import { AppsList } from "./AppsList";
@@ -8,6 +8,7 @@ import { AccountSettings, ForcePasswordChange } from "./Account";
 import { getAccount, type Account } from "./api";
 import { TelegramSettings } from "./TelegramSettings";
 import { GitHubSettings } from "./GitHubSettings";
+import { SystemLogs } from "./SystemLogs";
 import { ThemeToggle } from "./ThemeToggle";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
 	{ label: "Account", href: "#/account", icon: UserCog, match: (r: string) => r.startsWith("#/account") },
 	{ label: "Telegram", href: "#/telegram", icon: Send, match: (r: string) => r.startsWith("#/telegram") },
 	{ label: "GitHub", href: "#/github", icon: GitBranch, match: (r: string) => r.startsWith("#/github") },
+	{ label: "App Logs", href: "#/system-logs", icon: ScrollText, match: (r: string) => r.startsWith("#/system-logs") },
 ];
 
 function AdminRouter({ account, refreshAccount }: { account: Account | null; refreshAccount: () => void }) {
@@ -133,6 +135,8 @@ function AdminRouter({ account, refreshAccount }: { account: Account | null; ref
 							<TelegramSettings setFlash={setFlash} />
 						) : route.startsWith("#/github") ? (
 							<GitHubSettings setFlash={setFlash} />
+						) : route.startsWith("#/system-logs") ? (
+							<SystemLogs setFlash={setFlash} />
 						) : (
 							<div className="flex flex-col items-center justify-center py-12 text-center">
 								<h2 className="mb-4 text-2xl font-bold">404 Not Found</h2>

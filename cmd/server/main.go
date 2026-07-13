@@ -160,6 +160,7 @@ func main() {
 	}
 	appEnvHandler := admin.NewAppEnvHandler(appStore, appEnvStore)
 	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore, appEnvStore)
+	systemLogsHandler := admin.NewSystemLogsHandler(serviceCfg.SelfServiceName)
 	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler, adminUsers)
 	if err != nil {
 		slog.Error("login handler init failed", "err", err)
@@ -192,6 +193,7 @@ func main() {
 	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, auth)
 	admin.RegisterReleasesRoutesHertz(h, releasesHandler, auth)
 	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, auth)
+	admin.RegisterSystemRoutesHertz(h, systemLogsHandler, auth)
 	admin.RegisterAdminProgressRoutesHertz(h, progressAdminHandler, auth)
 	admin.RegisterAdminSPARoutesHertz(h, auth)
 	go func() {

@@ -101,3 +101,34 @@ func TestCaptureServiceLogsEmptyServiceName(t *testing.T) {
 		t.Errorf("CaptureServiceLogs(blank) = %q, want empty", got)
 	}
 }
+
+func TestCaptureServiceLogsLinesPassesCount(t *testing.T) {
+	var gotArgs string
+	restore := SetRunJournalctlForTest(func(args ...string) ([]byte, error) {
+		gotArgs = strings.Join(args, " ")
+		return []byte("out"), nil
+	})
+	defer restore()
+
+	CaptureServiceLogsLines("bot.service", 50)
+	if !strings.Contains(gotArgs, "-n 50") {
+		t.Errorf("journalctl args = %q, want -n 50", gotArgs)
+	}
+}
+
+func TestCaptureServiceLogsLinesUnlimitedOmitsCount(t *testing.T) {
+	var gotArgs string
+	restore := SetRunJournalctlForTest(func(args ...string) ([]byte, error) {
+		gotArgs = strings.Join(args, " ")
+		return []byte("out"), nil
+	})
+	defer restore()
+
+	CaptureServiceLogsLines("bot.service", 0)
+	if strings.Contains(gotArgs, "-n ") {
+		t.Errorf("journalctl args = %q, want no -n limit for unlimited", gotArgs)
+	}
+	if !strings.Contains(gotArgs, "--no-tail") {
+		t.Errorf("journalctl args = %q, want --no-tail for unlimited", gotArgs)
+	}
+}

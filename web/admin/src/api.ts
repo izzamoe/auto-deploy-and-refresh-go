@@ -148,9 +148,23 @@ export async function getJobLog(jobId: string): Promise<string> {
   return res.log || "";
 }
 
+// linesQuery builds the ?lines= query shared by the live log endpoints.
+// lines <= 0 means "all" (the full available journal).
+function linesQuery(lines: number): string {
+  return `?lines=${lines > 0 ? lines : "all"}`;
+}
+
 // getAppLogs returns the current (live) systemd journal for an app's service.
-export async function getAppLogs(id: string): Promise<string> {
-  const res = await apiRequest(`/apps/${id}/logs`);
+// lines caps how many recent lines to fetch (<= 0 means all).
+export async function getAppLogs(id: string, lines = 100): Promise<string> {
+  const res = await apiRequest(`/apps/${id}/logs${linesQuery(lines)}`);
+  return res.log || "";
+}
+
+// getSystemLogs returns auto-deploy's own systemd journal, for diagnosing the
+// service itself. lines caps how many recent lines to fetch (<= 0 means all).
+export async function getSystemLogs(lines = 100): Promise<string> {
+  const res = await apiRequest(`/system/logs${linesQuery(lines)}`);
   return res.log || "";
 }
 

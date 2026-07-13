@@ -451,7 +451,8 @@ export function AppsList({ setFlash }: AppsListProps) {
 				onOpenChange={(open) => { if (!open) setLogsAppId(null); }}
 				title="Live service logs"
 				description="Current systemd journal (journalctl) for this app's service."
-				fetchLog={() => (logsAppId ? getAppLogs(logsAppId) : Promise.resolve(""))}
+				live
+				fetchLog={(lines) => (logsAppId ? getAppLogs(logsAppId, lines) : Promise.resolve(""))}
 			/>
 		</div>
 	);

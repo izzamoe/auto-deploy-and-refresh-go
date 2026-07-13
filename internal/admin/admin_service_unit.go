@@ -89,13 +89,16 @@ func (h *ServiceUnitAdminHandler) ApplyServiceUnitHertz(ctx context.Context, c *
 }
 
 // LiveLogsHertz returns the current systemd journal for the app's service, for
-// live inspection independent of any particular deploy job.
+// live inspection independent of any particular deploy job. The optional
+// "lines" query parameter caps how many recent lines to return (0 or "all"
+// means the full available journal); it defaults to defaultLiveLogLines.
 func (h *ServiceUnitAdminHandler) LiveLogsHertz(ctx context.Context, c *app.RequestContext) {
 	appRecord, ok := h.getServiceUnitAppOr404(c, c.Param("id"))
 	if !ok {
 		return
 	}
-	c.JSON(consts.StatusOK, map[string]any{"log": deploy.CaptureServiceLogs(appRecord.ServiceName)})
+	lines := parseLogLinesParam(c)
+	c.JSON(consts.StatusOK, map[string]any{"log": deploy.CaptureServiceLogsLines(appRecord.ServiceName, lines)})
 }
 
 // ServiceStatusHertz returns the systemd active-state of the app's service.

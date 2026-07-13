@@ -78,16 +78,77 @@ export function GitHubSettings({ setFlash }: { setFlash: (flash: { message: stri
 							<h1>GitHub Access</h1>
 						</CardTitle>
 						<CardDescription>
-							Personal access token used to read release tags from the GitHub API. Authenticating
-							raises the rate limit from 60 to 5000 requests/hour and allows reading private repos.
-							Saving here stores the token in the database, so it no longer needs to be set via the
-							GITHUB_TOKEN environment variable.
+							Personal access token auto-deploy uses to talk to the GitHub API. Saving here stores the
+							token in the database, so it no longer needs to be set via the GITHUB_TOKEN environment
+							variable.
 						</CardDescription>
 					</div>
 					<Button variant="outline" asChild>
 						<a href="#/">Back to Apps</a>
 					</Button>
 				</CardHeader>
+			</Card>
+
+			<Card className="border-border/70 bg-card/80 shadow-sm">
+				<CardHeader>
+					<CardTitle className="text-lg font-semibold">Which token do I need?</CardTitle>
+					<CardDescription>What auto-deploy uses this token for, and how to create the right one.</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-5 text-sm">
+					<div className="space-y-1.5">
+						<p className="font-medium text-foreground">Used for</p>
+						<ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+							<li>Listing release tags in the deploy dropdown (GitHub Releases API).</li>
+							<li>Downloading the release artifact for a deploy — <span className="font-medium text-foreground">including from private repositories</span>.</li>
+						</ul>
+					</div>
+
+					<div className="space-y-1.5">
+						<p className="font-medium text-foreground">Public repositories only?</p>
+						<p className="text-muted-foreground">
+							No token is strictly required, but anonymous calls are limited to 60 requests/hour and
+							private repos will not work. A token raises the limit to 5,000/hour.
+						</p>
+					</div>
+
+					<div className="space-y-2 rounded-md border border-border/60 bg-muted/40 p-4">
+						<div className="flex items-center gap-2">
+							<Badge>Recommended</Badge>
+							<span className="font-medium text-foreground">Fine-grained personal access token</span>
+						</div>
+						<ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
+							<li><span className="font-medium text-foreground">Repository access</span> → Only select repositories → pick the repos you deploy.</li>
+							<li><span className="font-medium text-foreground">Permissions</span> → Repository permissions → <span className="font-medium text-foreground">Contents</span> → <span className="font-medium text-foreground">Read-only</span>.</li>
+						</ol>
+						<p className="text-xs text-muted-foreground">
+							That single permission covers both listing releases and downloading assets. Nothing else is needed.
+						</p>
+						<a
+							href="https://github.com/settings/personal-access-tokens/new"
+							target="_blank"
+							rel="noreferrer noopener"
+							className="inline-block text-sm font-medium text-primary underline underline-offset-4"
+						>
+							Create a fine-grained token →
+						</a>
+					</div>
+
+					<div className="space-y-2 rounded-md border border-border/60 p-4">
+						<p className="font-medium text-foreground">Alternative: classic token</p>
+						<p className="text-muted-foreground">
+							Select the <span className="font-medium text-foreground">repo</span> scope (full control of
+							private repositories). For public-only access, <span className="font-medium text-foreground">public_repo</span> is enough.
+						</p>
+						<a
+							href="https://github.com/settings/tokens/new?scopes=repo&description=auto-deploy"
+							target="_blank"
+							rel="noreferrer noopener"
+							className="inline-block text-sm font-medium text-primary underline underline-offset-4"
+						>
+							Create a classic token →
+						</a>
+					</div>
+				</CardContent>
 			</Card>
 
 			{errors.length > 0 && (

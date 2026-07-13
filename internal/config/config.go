@@ -17,6 +17,10 @@ type ServiceConfig struct {
 	CookieSecure bool
 	// GitHubToken authenticates GitHub Releases API calls. Optional; empty means unauthenticated requests (subject to GitHub's lower rate limit).
 	GitHubToken string
+	// SelfServiceName is the systemd unit name of auto-deploy itself, used by the
+	// admin "Application Logs" view to read this service's own journal for
+	// diagnosis. Override via SELF_SERVICE_NAME when the unit is named differently.
+	SelfServiceName string
 }
 
 type LegacyBootstrapConfig struct {
@@ -49,14 +53,15 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 	}
 
 	return &ServiceConfig{
-		ListenAddr:    envOrDefault("LISTEN_ADDR", ":9000"),
-		QueueDBPath:   queueDBPath,
-		QueueMax:      queueMax,
-		DownloadDNS:   envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
-		AdminUsername: username,
-		AdminPassword: password,
-		CookieSecure:  os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
-		GitHubToken:   envOrDefault("GITHUB_TOKEN", ""),
+		ListenAddr:      envOrDefault("LISTEN_ADDR", ":9000"),
+		QueueDBPath:     queueDBPath,
+		QueueMax:        queueMax,
+		DownloadDNS:     envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
+		AdminUsername:   username,
+		AdminPassword:   password,
+		CookieSecure:    os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
+		GitHubToken:     envOrDefault("GITHUB_TOKEN", ""),
+		SelfServiceName: envOrDefault("SELF_SERVICE_NAME", "auto-deploy.service"),
 	}, nil
 }
 

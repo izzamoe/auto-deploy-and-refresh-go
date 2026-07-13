@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,19 +40,34 @@ var (
 	}
 )
 
-// journalctlLines is how many recent journal lines CaptureServiceLogs fetches.
-const journalctlLines = "200"
+// defaultJournalctlLines is how many recent journal lines CaptureServiceLogs
+// fetches when capturing a deploy's logs.
+const defaultJournalctlLines = 200
 
 // CaptureServiceLogs returns the recent systemd journal for serviceName (the
-// last journalctlLines lines), used to diagnose why a deploy's health check
-// failed. It never returns an error: on a non-zero journalctl exit the
+// last defaultJournalctlLines lines), used to diagnose why a deploy's health
+// check failed. It never returns an error: on a non-zero journalctl exit the
 // combined output (which usually explains the problem) is returned as-is, so
 // the caller always has something to show or store.
 func CaptureServiceLogs(serviceName string) string {
+	return CaptureServiceLogsLines(serviceName, defaultJournalctlLines)
+}
+
+// CaptureServiceLogsLines is CaptureServiceLogs with a caller-chosen line
+// count: lines > 0 fetches the last lines entries, lines <= 0 fetches the full
+// available journal (no -n limit). Used by the live log viewers so operators
+// can widen the window. It never returns an error, matching CaptureServiceLogs.
+func CaptureServiceLogsLines(serviceName string, lines int) string {
 	if strings.TrimSpace(serviceName) == "" {
 		return ""
 	}
-	out, err := runJournalctl("-u", serviceName, "--no-pager", "-n", journalctlLines)
+	args := []string{"-u", serviceName, "--no-pager"}
+	if lines > 0 {
+		args = append(args, "-n", strconv.Itoa(lines))
+	} else {
+		args = append(args, "--no-tail")
+	}
+	out, err := runJournalctl(args...)
 	if err != nil {
 		if len(out) > 0 {
 			return string(out)
