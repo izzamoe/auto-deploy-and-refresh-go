@@ -114,8 +114,9 @@ func main() {
 	cancelService.SetEventSink(adminEventHub)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	githubClient := github.NewClient(serviceCfg.GitHubToken)
 	coord := coordinator.NewCoordinator(appStore, q, func(app *store.App, jobID, tag string) (store.DownloadSummary, error) {
-		return deploy.DeployWithControl(app, jobID, tag, tracker, dlClient, cancelService)
+		return deploy.DeployArtifact(app, jobID, tag, tracker, dlClient, cancelService, githubClient)
 	}, tracker)
 	coord.Start(ctx)
 	telegramConfigStore, err := store.NewTelegramConfigStore(db)
@@ -139,7 +140,6 @@ func main() {
 	progressAdminHandler := admin.NewProgressAdminHandler(tracker, appStore, q, templates)
 	adminAPIHandler := admin.NewAdminAPIHandler(appStore, q, tracker, cancelService)
 	accountHandler := admin.NewAccountHandler(adminUsers, jwtHandler, serviceCfg)
-	githubClient := github.NewClient(serviceCfg.GitHubToken)
 	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
 	githubConfigStore, err := store.NewGitHubConfigStore(db)
 	if err != nil {

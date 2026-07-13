@@ -13,7 +13,7 @@ import (
 )
 
 func downloadBinaryWithMaxBytes(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, maxBytes int64) (store.DownloadSummary, error) {
-	resp, err := DownloadWithRetryContext(context.Background(), client, url, nil)
+	resp, err := DownloadWithRetryContext(context.Background(), client, url, nil, nil)
 	if err != nil {
 		return store.DownloadSummary{}, fmt.Errorf("download failed: %w", err)
 	}

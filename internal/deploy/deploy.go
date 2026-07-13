@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,13 +37,32 @@ const maxArtifactBytes int64 = 100 * 1024 * 1024
 
 var errDeployCanceled = errors.New("deploy canceled at safe checkpoint")
 
-func downloadBinary(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client) (store.DownloadSummary, error) {
-	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, maxArtifactBytes)
+// ArtifactResolver resolves where and how to download an app's release
+// artifact. It is implemented by *github.Client: with a token configured it
+// returns an authenticated GitHub API asset URL plus auth headers (which works
+// for private repositories), otherwise the public browser download URL and no
+// headers. A nil resolver falls back to the public URL, keeping the
+// unauthenticated public-repo path working with no extra dependencies.
+type ArtifactResolver interface {
+	ArtifactDownload(ctx context.Context, repo, tag, artifact string) (url string, headers map[string]string, err error)
 }
 
-func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, maxBytes int64) (store.DownloadSummary, error) {
+// resolveArtifactDownload asks resolver for the artifact URL and headers,
+// falling back to the public download URL when no resolver is supplied.
+func resolveArtifactDownload(ctx context.Context, resolver ArtifactResolver, repo, tag, artifact string) (string, map[string]string, error) {
+	if resolver == nil {
+		return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, tag, artifact), nil, nil
+	}
+	return resolver.ArtifactDownload(ctx, repo, tag, artifact)
+}
+
+func downloadBinary(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client) (store.DownloadSummary, error) {
+	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, nil, maxArtifactBytes)
+}
+
+func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, headers map[string]string, maxBytes int64) (store.DownloadSummary, error) {
 	slog.Info("downloading", "url", url)
-	resp, err := download.DownloadWithRetryContext(ctx, client, url, nil)
+	resp, err := download.DownloadWithRetryContext(ctx, client, url, headers, nil)
 	if err != nil {
 		return store.DownloadSummary{}, fmt.Errorf("download failed: %w", err)
 	}
@@ -140,7 +160,17 @@ func validateDownloadedArtifact(path string) error {
 	return nil
 }
 
+// DeployWithControl deploys app's release from the public GitHub download URL
+// (no authentication). Kept for callers that do not need private-repo support;
+// it delegates to DeployArtifact with a nil resolver.
 func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client, control *cancel.CancelService) (store.DownloadSummary, error) {
+	return DeployArtifact(app, jobID, tag, tracker, client, control, nil)
+}
+
+// DeployArtifact is DeployWithControl with an ArtifactResolver, which lets the
+// download authenticate against the GitHub API (required for assets in private
+// repositories). A nil resolver reproduces DeployWithControl's public-URL path.
+func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
 	tracker.Start(app.ID, jobID, tag)
 
 	tmpPath := app.BinaryPath + ".tmp"
@@ -152,9 +182,24 @@ func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.Prog
 		}
 	}()
 
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", app.GithubRepo, tag, app.ArtifactName)
+	// Ensure the target directory exists before writing the temp file. On a
+	// first-ever deploy the binary's parent directory may not exist yet, which
+	// otherwise fails as "create tmp file: ... no such file or directory".
+	if dir := filepath.Dir(app.BinaryPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			tracker.Fail(app.ID)
+			return store.DownloadSummary{}, fmt.Errorf("create binary directory %s: %w", dir, err)
+		}
+	}
+
 	downloadCtx, stopDownloadCancelWatcher := deployDownloadContext(jobID, control)
-	summary, err := downloadBinaryContext(downloadCtx, url, tmpPath, tracker, app.ID, client, maxArtifactBytes)
+	url, headers, err := resolveArtifactDownload(downloadCtx, resolver, app.GithubRepo, tag, app.ArtifactName)
+	if err != nil {
+		stopDownloadCancelWatcher()
+		tracker.Fail(app.ID)
+		return store.DownloadSummary{}, fmt.Errorf("resolve artifact download: %w", err)
+	}
+	summary, err := downloadBinaryContext(downloadCtx, url, tmpPath, tracker, app.ID, client, headers, maxArtifactBytes)
 	stopDownloadCancelWatcher()
 	if err != nil {
 		if errors.Is(err, context.Canceled) && control != nil {

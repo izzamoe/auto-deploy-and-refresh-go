@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -66,6 +67,13 @@ func (c *Client) currentToken() string {
 
 type releaseAssetJSON struct {
 	Name string `json:"name"`
+	ID   int64  `json:"id"`
+	// URL is the GitHub API asset URL
+	// (https://api.github.com/repos/{owner}/{repo}/releases/assets/{id}).
+	// Requesting it with Accept: application/octet-stream and an
+	// Authorization header downloads the asset (redirecting to a signed URL),
+	// which is the only way to fetch assets from private repositories.
+	URL string `json:"url"`
 }
 
 type releaseJSON struct {
@@ -126,4 +134,80 @@ func FilterReleasesWithAsset(releases []Release, assetName string) []Release {
 		}
 	}
 	return filtered
+}
+
+// ArtifactDownload resolves where and how to download the named release
+// artifact for tag in repo ("owner/name").
+//
+//   - With no token configured it returns the public browser download URL and
+//     no headers — unchanged behaviour, sufficient for public repositories.
+//   - With a token it looks the release up via the API, finds the matching
+//     asset, and returns that asset's API URL plus Authorization and
+//     Accept: application/octet-stream headers. This is the only reliable way
+//     to download assets from private repositories, and also works for public
+//     ones. The download follows the API's redirect to a signed URL; the
+//     Authorization header is dropped on that cross-host hop by the downloader.
+func (c *Client) ArtifactDownload(ctx context.Context, repo, tag, artifact string) (string, map[string]string, error) {
+	token := c.currentToken()
+	if token == "" {
+		return publicDownloadURL(repo, tag, artifact), nil, nil
+	}
+
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return "", nil, fmt.Errorf("github: invalid repo %q (want owner/name)", repo)
+	}
+
+	assetURL, err := c.assetAPIURL(ctx, owner, name, tag, artifact, token)
+	if err != nil {
+		return "", nil, err
+	}
+	headers := map[string]string{
+		"Authorization": "Bearer " + token,
+		"Accept":        "application/octet-stream",
+	}
+	return assetURL, headers, nil
+}
+
+func publicDownloadURL(repo, tag, artifact string) string {
+	return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, tag, artifact)
+}
+
+// assetAPIURL looks up the release for tag and returns the API URL of the
+// asset named assetName, used for authenticated (octet-stream) downloads.
+func (c *Client) assetAPIURL(ctx context.Context, owner, repo, tag, assetName, token string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s", apiBaseURL, owner, repo, tag)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("github: build release request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github: release request for %s/%s@%s failed: %w", owner, repo, tag, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("github: release request for %s/%s@%s returned status %d", owner, repo, tag, resp.StatusCode)
+	}
+
+	var rel releaseJSON
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", fmt.Errorf("github: decode release response for %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	for _, a := range rel.Assets {
+		if a.Name == assetName {
+			if a.URL == "" {
+				return "", fmt.Errorf("github: asset %q in %s/%s@%s has no API URL", assetName, owner, repo, tag)
+			}
+			return a.URL, nil
+		}
+	}
+	return "", fmt.Errorf("github: asset %q not found in release %s of %s/%s", assetName, tag, owner, repo)
 }

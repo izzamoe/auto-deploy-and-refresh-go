@@ -119,12 +119,15 @@ func normalizeDNSServer(dnsServer string) string {
 var defaultSleep = time.Sleep
 
 func DownloadWithRetry(client *client.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
-	return DownloadWithRetryContext(context.Background(), client, url, sleepFn)
+	return DownloadWithRetryContext(context.Background(), client, url, nil, sleepFn)
 }
 
 const maxRedirects = 10
 
-func DownloadWithRetryContext(ctx context.Context, client *client.Client, url string, sleepFn func(time.Duration)) (*http.Response, error) {
+// DownloadWithRetryContext GETs url with retries. headers, if non-nil, are set
+// on the request; any Authorization header among them is stripped automatically
+// on a cross-host redirect so a token is never leaked to a signed storage URL.
+func DownloadWithRetryContext(ctx context.Context, client *client.Client, url string, headers map[string]string, sleepFn func(time.Duration)) (*http.Response, error) {
 	if sleepFn == nil {
 		sleepFn = defaultSleep
 	}
@@ -138,7 +141,7 @@ func DownloadWithRetryContext(ctx context.Context, client *client.Client, url st
 			return nil, err
 		}
 
-		httpResp, err := doWithRedirects(ctx, client, url)
+		httpResp, err := doWithRedirects(ctx, client, url, headers)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -174,8 +177,10 @@ func DownloadWithRetryContext(ctx context.Context, client *client.Client, url st
 }
 
 // doWithRedirects performs a single GET following up to maxRedirects redirects.
-// Authorization header is stripped on cross-host redirects (security).
-func doWithRedirects(ctx context.Context, c *client.Client, url string) (*http.Response, error) {
+// The caller's headers are applied to every hop, except the Authorization
+// header, which is stripped on cross-host redirects (security) so a token is
+// never sent to the storage host GitHub redirects asset downloads to.
+func doWithRedirects(ctx context.Context, c *client.Client, url string, headers map[string]string) (*http.Response, error) {
 	currentURL := url
 	var originalHost string
 
@@ -187,6 +192,10 @@ func doWithRedirects(ctx context.Context, c *client.Client, url string) (*http.R
 		req := &protocol.Request{}
 		req.SetRequestURI(currentURL)
 		req.SetMethod(http.MethodGet)
+
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
 
 		if i > 0 && originalHost != "" {
 			parsedHost := extractHost(currentURL)

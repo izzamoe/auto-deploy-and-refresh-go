@@ -758,6 +758,36 @@ func TestDeploySuccessStageLifecycle(t *testing.T) {
 	}
 }
 
+func TestDeployCreatesMissingBinaryDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := testApp(tmpDir)
+	// Point the binary at a directory that does not exist yet, reproducing a
+	// first-ever deploy. Previously this failed with
+	// "create tmp file: ... no such file or directory".
+	app.BinaryPath = filepath.Join(tmpDir, "nested", "dir", "bot")
+
+	tracker := progress.NewProgressTracker()
+	stubDeploySleep(t)
+	stubSystemctl(t, func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "restart":
+			return []byte("restarted"), nil
+		case "is-active":
+			return []byte("active\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected systemctl command %q", name)
+		}
+	})
+
+	if _, err := DeployWithControl(app, "job-first-deploy", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+		t.Fatalf("deploy into missing directory: %v", err)
+	}
+
+	if _, err := os.Stat(app.BinaryPath); err != nil {
+		t.Fatalf("expected binary to exist at %s: %v", app.BinaryPath, err)
+	}
+}
+
 func TestDeployFailureStageLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	app := testApp(tmpDir)
