@@ -82,3 +82,22 @@ export async function saveTelegramConfig(config: TelegramConfig): Promise<Telegr
   });
   return res.config;
 }
+
+export interface GitHubConfig {
+  token: string;
+  hasToken: boolean;
+  source: "database" | "environment" | "none";
+}
+
+export async function getGitHubConfig(): Promise<GitHubConfig> {
+  const res = await apiRequest("/github");
+  return res.config;
+}
+
+export async function saveGitHubConfig(token: string): Promise<GitHubConfig> {
+  const res = await apiRequest("/github", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+  return res.config;
+}

@@ -6,6 +6,7 @@ import { HistoryList } from "./HistoryList";
 import { AccountSettings, ForcePasswordChange } from "./Account";
 import { getAccount, type Account } from "./api";
 import { TelegramSettings } from "./TelegramSettings";
+import { GitHubSettings } from "./GitHubSettings";
 
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -56,6 +57,9 @@ function AdminRouter({ account, refreshAccount }: { account: Account | null; ref
 					<Button variant="ghost" asChild>
 						<a href="#/telegram">Telegram</a>
 					</Button>
+					<Button variant="ghost" asChild>
+						<a href="#/github">GitHub</a>
+					</Button>
 				</div>
 			</nav>
 
@@ -94,6 +98,8 @@ function AdminRouter({ account, refreshAccount }: { account: Account | null; ref
 					<AccountSettings username={account?.username ?? ""} onUpdated={refreshAccount} setFlash={setFlash} />
 				) : route.startsWith("#/telegram") ? (
 					<TelegramSettings setFlash={setFlash} />
+				) : route.startsWith("#/github") ? (
+					<GitHubSettings setFlash={setFlash} />
 				) : (
 					<div className="flex flex-col items-center justify-center py-12 text-center">
 						<h2 className="text-2xl font-bold mb-4">404 Not Found</h2>

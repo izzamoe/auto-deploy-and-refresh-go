@@ -141,6 +141,16 @@ func main() {
 	accountHandler := admin.NewAccountHandler(adminUsers, jwtHandler, serviceCfg)
 	githubClient := github.NewClient(serviceCfg.GitHubToken)
 	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
+	githubConfigStore, err := store.NewGitHubConfigStore(db)
+	if err != nil {
+		slog.Error("github config store init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	githubConfigHandler := admin.NewGitHubConfigHandler(githubConfigStore, githubClient, serviceCfg.GitHubToken)
+	if err := githubConfigHandler.Reload(); err != nil {
+		slog.Warn("github config reload failed", "err", err)
+	}
 	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore)
 	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler, adminUsers)
 	if err != nil {
@@ -169,6 +179,7 @@ func main() {
 	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, auth)
 	admin.RegisterAccountRoutesHertz(h, accountHandler, auth)
 	admin.RegisterTelegramRoutesHertz(h, telegramHandler, auth)
+	admin.RegisterGitHubRoutesHertz(h, githubConfigHandler, auth)
 	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, auth)
 	admin.RegisterReleasesRoutesHertz(h, releasesHandler, auth)
 	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, auth)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -31,10 +32,14 @@ type Release struct {
 	Assets []string
 }
 
-// Client is a minimal GitHub REST API client for listing releases.
+// Client is a minimal GitHub REST API client for listing releases. Its token
+// is guarded by a mutex so it can be updated at runtime (e.g. from the admin
+// UI) while concurrent requests are in flight.
 type Client struct {
 	httpClient *http.Client
-	token      string
+
+	mu    sync.RWMutex
+	token string
 }
 
 // NewClient creates a Client. token may be empty, meaning requests are made
@@ -42,6 +47,21 @@ type Client struct {
 // callers) — that is fine and expected for public repos.
 func NewClient(token string) *Client {
 	return &Client{httpClient: &http.Client{Timeout: requestTimeout}, token: token}
+}
+
+// SetToken replaces the token used to authenticate subsequent requests. An
+// empty token switches back to unauthenticated calls. Safe for concurrent use.
+func (c *Client) SetToken(token string) {
+	c.mu.Lock()
+	c.token = token
+	c.mu.Unlock()
+}
+
+// currentToken returns the token under a read lock.
+func (c *Client) currentToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.token
 }
 
 type releaseAssetJSON struct {
@@ -66,8 +86,8 @@ func (c *Client) ListReleases(ctx context.Context, owner, repo string) ([]Releas
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token := c.currentToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.httpClient.Do(req)
