@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -29,6 +30,16 @@ import (
 // notifier, so Notify always drops (with a log) rather than waiting for
 // room in the queue.
 const jobQueueSize = 16
+
+// Reconnect backoff bounds. The MTProto connection can fail transiently at
+// startup (e.g. "migrate to dc: context deadline exceeded" when the initial
+// data-center migration is slow). Such a failure must not kill the notifier
+// permanently — run() retries with exponential backoff between these bounds
+// until it connects or the manager is stopped.
+const (
+	initialReconnectBackoff = 2 * time.Second
+	maxReconnectBackoff     = 60 * time.Second
+)
 
 // Notifier sends a short text notification. Callers should always hold a
 // non-nil Notifier (defaulting to NopNotifier) so they never need a nil
@@ -83,9 +94,10 @@ type Config struct {
 type Manager struct {
 	cfg Config
 
-	jobs chan string
-	done chan struct{}
-	wg   sync.WaitGroup
+	jobs   chan string
+	done   chan struct{}
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewManager creates a Manager for cfg. Call Start to bring up the
@@ -110,9 +122,24 @@ var _ Notifier = (*Manager)(nil)
 // manager_test.go for what IS covered (Notify's drop-when-full behavior,
 // NopNotifier, and the message-delivery loop against a fake sender).
 func (m *Manager) Start(ctx context.Context) {
+	runCtx, cancel := context.WithCancel(ctx)
+	m.cancel = cancel
 	m.wg.Go(func() {
 		defer close(m.done)
+		m.run(runCtx)
+	})
+}
 
+// run keeps the MTProto connection alive, reconnecting with exponential
+// backoff whenever client.Run returns an error, until ctx is cancelled
+// (parent shutdown or Stop). A single transient connect/auth failure —
+// notably "migrate to dc: context deadline exceeded" on a slow first
+// connect — must NOT leave the notifier dead until the whole process is
+// restarted, which was the prior behaviour when client.Run was called only
+// once. The backoff resets to its floor after every successful connection.
+func (m *Manager) run(ctx context.Context) {
+	backoff := initialReconnectBackoff
+	for ctx.Err() == nil {
 		client := telegram.NewClient(m.cfg.AppID, m.cfg.AppHash, telegram.Options{
 			SessionStorage: &session.FileStorage{Path: m.cfg.SessionPath},
 		})
@@ -121,13 +148,25 @@ func (m *Manager) Start(ctx context.Context) {
 			if _, err := client.Auth().Bot(rctx, m.cfg.BotToken); err != nil {
 				return err
 			}
+			backoff = initialReconnectBackoff // connected: reset backoff
 			sender := &gotdSender{sender: message.NewSender(client.API())}
 			return m.loop(rctx, sender)
 		})
-		if err != nil && ctx.Err() == nil {
-			slog.Error("telegram: client run failed", "err", err)
+
+		if ctx.Err() != nil {
+			return // Stop() called or parent context cancelled: clean exit.
 		}
-	})
+		if err != nil {
+			slog.Error("telegram: client run failed, reconnecting", "err", err, "retry_in", backoff)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, maxReconnectBackoff)
+	}
 }
 
 // loop delivers queued messages via sender until ctx is cancelled or the
@@ -160,10 +199,12 @@ func (m *Manager) Notify(text string) {
 	}
 }
 
-// Stop closes the jobs channel and waits for the background goroutine
-// launched by Start to exit.
+// Stop cancels the run context and waits for the background goroutine
+// launched by Start to exit. It is safe to call only after Start.
 func (m *Manager) Stop() {
-	close(m.jobs)
+	if m.cancel != nil {
+		m.cancel()
+	}
 	<-m.done
 	m.wg.Wait()
 }
