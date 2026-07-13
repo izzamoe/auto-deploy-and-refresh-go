@@ -31,3 +31,7 @@ playwright-report/
 auto-deploy.env
 web/admin/dist/*
 !web/admin/dist/.keep
+
+# Installed agent skills / local agent tooling
+.agents/
+.claude/
