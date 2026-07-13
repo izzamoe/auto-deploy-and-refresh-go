@@ -42,6 +42,17 @@ type App struct {
 	Enabled           bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// EnvVars holds environment variables injected into the generated systemd
+	// unit for this app. It is NOT persisted by AppStore — it is stored
+	// separately (AppEnvStore) and populated on demand by callers that render
+	// the service unit. Empty unless explicitly loaded.
+	EnvVars []EnvVar
+}
+
+// EnvVar is a single environment variable for an app's service.
+type EnvVar struct {
+	Name  string
+	Value string
 }
 
 type AppStore struct {

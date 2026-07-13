@@ -151,7 +151,14 @@ func main() {
 	if err := githubConfigHandler.Reload(); err != nil {
 		slog.Warn("github config reload failed", "err", err)
 	}
-	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore)
+	appEnvStore, err := store.NewAppEnvStore(db)
+	if err != nil {
+		slog.Error("app env store init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	appEnvHandler := admin.NewAppEnvHandler(appStore, appEnvStore)
+	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore, appEnvStore)
 	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler, adminUsers)
 	if err != nil {
 		slog.Error("login handler init failed", "err", err)
@@ -180,6 +187,7 @@ func main() {
 	admin.RegisterAccountRoutesHertz(h, accountHandler, auth)
 	admin.RegisterTelegramRoutesHertz(h, telegramHandler, auth)
 	admin.RegisterGitHubRoutesHertz(h, githubConfigHandler, auth)
+	admin.RegisterAppEnvRoutesHertz(h, appEnvHandler, auth)
 	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, auth)
 	admin.RegisterReleasesRoutesHertz(h, releasesHandler, auth)
 	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, auth)

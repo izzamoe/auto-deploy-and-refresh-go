@@ -77,6 +77,60 @@ func TestRenderServiceUnit(t *testing.T) {
 	}
 }
 
+func TestRenderServiceUnitIncludesEnvVars(t *testing.T) {
+	t.Parallel()
+
+	app := store.App{
+		Name:        "bot",
+		BinaryPath:  "/opt/bot/bot",
+		ServiceName: "bot.service",
+		EnvVars: []store.EnvVar{
+			{Name: "BOT_TOKEN", Value: "123:abc"},
+			{Name: "LOG_LEVEL", Value: "info"},
+		},
+	}
+
+	got := RenderServiceUnit(app)
+	want := generatedUnitMarker + "\n" +
+		"[Unit]\n" +
+		"Description=bot (managed by auto-deploy)\n" +
+		"After=network.target\n\n" +
+		"[Service]\n" +
+		"ExecStart=/opt/bot/bot\n" +
+		"WorkingDirectory=/opt/bot\n" +
+		"Restart=on-failure\n" +
+		"RestartSec=5\n" +
+		"Environment=BOT_TOKEN=\"123:abc\"\n" +
+		"Environment=LOG_LEVEL=\"info\"\n\n" +
+		"[Install]\n" +
+		"WantedBy=multi-user.target\n"
+
+	if got != want {
+		t.Fatalf("RenderServiceUnit() with env =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRenderServiceUnitSanitisesEnvValue(t *testing.T) {
+	t.Parallel()
+
+	app := store.App{
+		Name:        "bot",
+		BinaryPath:  "/opt/bot/bot",
+		ServiceName: "bot.service",
+		EnvVars: []store.EnvVar{
+			{Name: "EVIL", Value: "x\nExecStartPre=/bin/malicious"},
+		},
+	}
+
+	got := RenderServiceUnit(app)
+
+	// The newline is stripped, so the injected directive cannot appear at the
+	// start of a line.
+	if strings.Contains(got, "\nExecStartPre=") {
+		t.Fatalf("env value newline injection not sanitised:\n%q", got)
+	}
+}
+
 func TestRenderServiceUnitSanitisesName(t *testing.T) {
 	t.Parallel()
 

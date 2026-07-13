@@ -42,7 +42,11 @@ func newTestServiceUnitAdminHertz(t *testing.T) (*server.Hertz, *store.AppStore,
 	if err != nil {
 		t.Fatalf("NewAppStore: %v", err)
 	}
-	handler := NewServiceUnitAdminHandler(appStore)
+	envStore, err := store.NewAppEnvStore(db)
+	if err != nil {
+		t.Fatalf("NewAppEnvStore: %v", err)
+	}
+	handler := NewServiceUnitAdminHandler(appStore, envStore)
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
 	RegisterServiceUnitRoutesHertz(h, handler, HertzSessionAuthMiddleware(jwt, testAuthenticator()))
 	return h, appStore, jwt

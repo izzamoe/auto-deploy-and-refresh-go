@@ -101,3 +101,42 @@ export async function saveGitHubConfig(token: string): Promise<GitHubConfig> {
   });
   return res.config;
 }
+
+export interface EnvVar {
+  name: string;
+  value: string;
+}
+
+export async function getAppEnv(id: string): Promise<EnvVar[]> {
+  const res = await apiRequest(`/apps/${id}/env`);
+  return res.envVars || [];
+}
+
+export async function saveAppEnv(id: string, envVars: EnvVar[]): Promise<EnvVar[]> {
+  const res = await apiRequest(`/apps/${id}/env`, {
+    method: "PUT",
+    body: JSON.stringify({ envVars }),
+  });
+  return res.envVars || [];
+}
+
+// parseEnvText turns a "NAME=VALUE" per-line textarea value into EnvVar[],
+// skipping blank lines and # comments. The value keeps any "=" after the first.
+export function parseEnvText(text: string): EnvVar[] {
+  const vars: EnvVar[] = [];
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq === -1) {
+      vars.push({ name: line, value: "" });
+      continue;
+    }
+    vars.push({ name: line.slice(0, eq).trim(), value: line.slice(eq + 1) });
+  }
+  return vars;
+}
+
+export function envVarsToText(vars: EnvVar[]): string {
+  return vars.map((v) => `${v.name}=${v.value}`).join("\n");
+}

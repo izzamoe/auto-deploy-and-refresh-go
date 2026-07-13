@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AdminAPIError, apiRequest } from "./api";
+import { AdminAPIError, apiRequest, envVarsToText, getAppEnv, parseEnvText, saveAppEnv } from "./api";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 	});
 	const [errors, setErrors] = useState<string[]>([]);
 	const [createdApp, setCreatedApp] = useState<{ name: string; secret: string } | null>(null);
+	const [envText, setEnvText] = useState("");
 
 	useEffect(() => {
 		if (id) {
@@ -42,6 +43,9 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 				}
 				navigate("#/");
 			});
+			getAppEnv(id)
+				.then((vars) => setEnvText(envVarsToText(vars)))
+				.catch(() => { /* non-fatal: leave the env editor empty */ });
 		}
 	}, [id, navigate, setFlash]);
 
@@ -67,17 +71,22 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 				enabled: formData.enabled
 			};
 			
+			const envVars = parseEnvText(envText);
 			if (id) {
 				await apiRequest(`/apps/${id}`, {
 					method: "PUT",
 					body: JSON.stringify(body)
 				});
+				await saveAppEnv(id, envVars);
 				navigate("#/", "App updated successfully");
 			} else {
-				await apiRequest(`/apps`, {
+				const res = await apiRequest(`/apps`, {
 					method: "POST",
 					body: JSON.stringify(body)
 				});
+				if (envVars.length > 0 && res.app?.id) {
+					await saveAppEnv(res.app.id, envVars);
+				}
 				setCreatedApp({ name: formData.name, secret: formData.webhook_secret });
 			}
 		} catch (err: unknown) {
@@ -167,6 +176,25 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 								<Label htmlFor="artifact_name">Artifact Name</Label>
 								<Input type="text" id="artifact_name" name="artifact_name" value={formData.artifact_name} onChange={handleChange} required />
 							</div>
+						</div>
+
+						<div className="grid gap-2">
+							<Label htmlFor="env_vars">Environment Variables</Label>
+							<textarea
+								id="env_vars"
+								name="env_vars"
+								value={envText}
+								onChange={(e) => setEnvText(e.target.value)}
+								rows={4}
+								spellCheck={false}
+								placeholder={"BOT_TOKEN=123:abc\nLOG_LEVEL=info"}
+								className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+							/>
+							<p className="text-sm text-muted-foreground">
+								One <code>NAME=VALUE</code> per line (e.g. the bot reads <code>BOT_TOKEN</code> from its
+								environment). Injected into the systemd unit — run <strong>Generate/Apply service unit</strong> and
+								restart the service for changes to take effect.
+							</p>
 						</div>
 
 						{id && (

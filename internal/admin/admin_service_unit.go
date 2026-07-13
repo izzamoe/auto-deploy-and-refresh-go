@@ -17,10 +17,23 @@ import (
 // apply step is only reachable via an explicit follow-up call.
 type ServiceUnitAdminHandler struct {
 	store *store.AppStore
+	env   *store.AppEnvStore
 }
 
-func NewServiceUnitAdminHandler(store *store.AppStore) *ServiceUnitAdminHandler {
-	return &ServiceUnitAdminHandler{store: store}
+func NewServiceUnitAdminHandler(store *store.AppStore, env *store.AppEnvStore) *ServiceUnitAdminHandler {
+	return &ServiceUnitAdminHandler{store: store, env: env}
+}
+
+// loadEnvInto populates appRecord.EnvVars from the env store so the rendered
+// unit includes the app's Environment= lines. A load failure is non-fatal:
+// the unit is still rendered without env vars rather than failing the request.
+func (h *ServiceUnitAdminHandler) loadEnvInto(appRecord *store.App) {
+	if h.env == nil {
+		return
+	}
+	if vars, err := h.env.Get(appRecord.ID); err == nil {
+		appRecord.EnvVars = vars
+	}
 }
 
 // getServiceUnitAppOr404 loads an app by id, writing a 404 JSON response and
@@ -42,6 +55,7 @@ func (h *ServiceUnitAdminHandler) PreviewServiceUnitHertz(ctx context.Context, c
 	if !ok {
 		return
 	}
+	h.loadEnvInto(appRecord)
 
 	unit, err := deploy.PreviewServiceUnit(*appRecord)
 	if err != nil {
@@ -60,6 +74,7 @@ func (h *ServiceUnitAdminHandler) ApplyServiceUnitHertz(ctx context.Context, c *
 	if !ok {
 		return
 	}
+	h.loadEnvInto(appRecord)
 
 	if err := deploy.ApplyServiceUnit(*appRecord); err != nil {
 		if deploy.IsRefuseOverwriteError(err) {

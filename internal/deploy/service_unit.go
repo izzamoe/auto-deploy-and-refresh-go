@@ -92,7 +92,17 @@ func RenderServiceUnit(app store.App) string {
 	b.WriteString(generatedUnitMarker)
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "[Unit]\nDescription=%s (managed by auto-deploy)\nAfter=network.target\n\n", cleanSystemdValue(app.Name))
-	fmt.Fprintf(&b, "[Service]\nExecStart=%s\nWorkingDirectory=%s\nRestart=on-failure\nRestartSec=5\n\n", cleanSystemdValue(app.BinaryPath), workingDir)
+	fmt.Fprintf(&b, "[Service]\nExecStart=%s\nWorkingDirectory=%s\nRestart=on-failure\nRestartSec=5\n", cleanSystemdValue(app.BinaryPath), workingDir)
+	for _, env := range app.EnvVars {
+		name := cleanSystemdValue(env.Name)
+		if name == "" {
+			continue
+		}
+		// systemd Environment= quotes the value; cleanSystemdValue strips any
+		// newline/control chars so the value cannot inject further directives.
+		fmt.Fprintf(&b, "Environment=%s=%q\n", name, cleanSystemdValue(env.Value))
+	}
+	b.WriteString("\n")
 	b.WriteString("[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
 }
