@@ -31,7 +31,44 @@ var (
 	renameFile             = os.Rename
 	chmodFile              = os.Chmod
 	deployHealthCheckSleep = time.Sleep
+	runJournalctl          = func(args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), systemctlTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "journalctl", args...)
+		return cmd.CombinedOutput()
+	}
 )
+
+// journalctlLines is how many recent journal lines CaptureServiceLogs fetches.
+const journalctlLines = "200"
+
+// CaptureServiceLogs returns the recent systemd journal for serviceName (the
+// last journalctlLines lines), used to diagnose why a deploy's health check
+// failed. It never returns an error: on a non-zero journalctl exit the
+// combined output (which usually explains the problem) is returned as-is, so
+// the caller always has something to show or store.
+func CaptureServiceLogs(serviceName string) string {
+	if strings.TrimSpace(serviceName) == "" {
+		return ""
+	}
+	out, err := runJournalctl("-u", serviceName, "--no-pager", "-n", journalctlLines)
+	if err != nil {
+		if len(out) > 0 {
+			return string(out)
+		}
+		return fmt.Sprintf("failed to read logs for %s: %v", serviceName, err)
+	}
+	return string(out)
+}
+
+// SetRunJournalctlForTest overrides the journalctl-invoking function and
+// returns a restore func, so other packages' tests can stub log capture
+// without invoking the real journalctl binary.
+func SetRunJournalctlForTest(fn func(args ...string) ([]byte, error)) (restore func()) {
+	original := runJournalctl
+	runJournalctl = fn
+	return func() { runJournalctl = original }
+}
 
 const maxArtifactBytes int64 = 100 * 1024 * 1024
 

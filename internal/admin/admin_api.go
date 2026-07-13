@@ -652,6 +652,18 @@ func writeAdminAPIErrorHertz(c *app.RequestContext, status int, msg string) {
 	c.JSON(status, adminAPIErrorResponse{Status: "error", Error: msg})
 }
 
+// JobLogsHertz returns the service logs captured for a job when its deploy
+// completed (used to review why a deploy failed its health check).
+func (h *AdminAPIHandler) JobLogsHertz(ctx context.Context, c *app.RequestContext) {
+	jobID := c.Param("job_id")
+	logText, err := h.queue.GetJobLog(jobID)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load job logs")
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"log": logText})
+}
+
 func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth app.HandlerFunc) {
 	api := h.Group("/admin/api", auth)
 	api.GET("/apps", handler.ListAppsHertz)
@@ -664,6 +676,7 @@ func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth
 	api.GET("/history", handler.ListHistoryHertz)
 	api.POST("/history/:id/retry", handler.RetryHistoryJobHertz)
 	api.POST("/jobs/:job_id/cancel", handler.CancelJobHertz)
+	api.GET("/jobs/:job_id/logs", handler.JobLogsHertz)
 	api.POST("/apps/:app_id/cancel", handler.CancelAppHertz)
 
 	notFound := handler.NotFoundHertz

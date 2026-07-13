@@ -95,12 +95,13 @@ func (w *Worker) loop(ctx context.Context) {
 type CoordinatorRunner func(app *store.App, jobID, tag string) (store.DownloadSummary, error)
 
 type Coordinator struct {
-	apps     *store.AppStore
-	q        *store.DeployQueue
-	runner   CoordinatorRunner
-	tracker  *progress.ProgressTracker
-	notifier telegram.Notifier
-	wg       sync.WaitGroup
+	apps        *store.AppStore
+	q           *store.DeployQueue
+	runner      CoordinatorRunner
+	tracker     *progress.ProgressTracker
+	notifier    telegram.Notifier
+	logCapturer func(serviceName string) string
+	wg          sync.WaitGroup
 
 	mu         sync.Mutex
 	activeApps map[string]bool
@@ -126,6 +127,17 @@ func (c *Coordinator) SetNotifier(n telegram.Notifier) {
 	}
 	c.mu.Lock()
 	c.notifier = n
+	c.mu.Unlock()
+}
+
+// SetLogCapturer attaches a function that returns a service's recent logs
+// (e.g. deploy.CaptureServiceLogs). When set, the coordinator snapshots the
+// service log after every completed deploy and stores it on the job, so a
+// failed deploy's health-check logs can be reviewed later. Safe to call before
+// Start; a nil capturer disables the feature.
+func (c *Coordinator) SetLogCapturer(fn func(serviceName string) string) {
+	c.mu.Lock()
+	c.logCapturer = fn
 	c.mu.Unlock()
 }
 
@@ -236,12 +248,33 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
 	}
 
+	c.captureJobLog(app.ServiceName, jobID)
+
 	if success {
 		slog.Info("coordinator: deploy succeeded", "app", app.ID, "tag", tag)
 		c.notify(fmt.Sprintf("✅ %s: deploy of %s succeeded", app.Name, tag))
 	} else {
 		slog.Error("coordinator: deploy failed", "app", app.ID, "tag", tag, "err", err)
 		c.notify(fmt.Sprintf("❌ %s: deploy of %s failed: %s", app.Name, tag, errMsg))
+	}
+}
+
+// captureJobLog snapshots the service's recent logs (via the configured
+// capturer) and stores them on the job, so a completed — especially failed —
+// deploy's logs can be reviewed later. Best-effort: failures are logged only.
+func (c *Coordinator) captureJobLog(serviceName, jobID string) {
+	c.mu.Lock()
+	capture := c.logCapturer
+	c.mu.Unlock()
+	if capture == nil {
+		return
+	}
+	logText := capture(serviceName)
+	if logText == "" {
+		return
+	}
+	if err := c.q.SaveJobLog(jobID, logText); err != nil {
+		slog.Error("coordinator: save job log failed", "id", jobID, "err", err)
 	}
 }
 

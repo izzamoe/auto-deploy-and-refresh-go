@@ -1,7 +1,8 @@
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useAdminEvents } from "./AdminEventProvider";
-import { AdminAPIError, apiRequest, listAppReleases } from "./api";
+import { AdminAPIError, apiRequest, controlService, getAppLogs, getServiceStatus, listAppReleases, type ServiceAction } from "./api";
+import { LogsDialog } from "./LogsDialog";
 import { ProgressBadge } from "./ProgressBadge";
 
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,13 @@ interface AppsListProps {
 
 const terminalDeployStatuses = new Set(["succeeded", "failed", "canceled", "unknown"]);
 
+function serviceStatusVariant(status: string): "default" | "destructive" | "secondary" | "outline" {
+	if (status === "active") return "default";
+	if (status === "failed") return "destructive";
+	if (status === "activating" || status === "reloading") return "outline";
+	return "secondary";
+}
+
 export function AppsList({ setFlash }: AppsListProps) {
 	const [apps, setApps] = useState<AppItem[]>([]);
 	const { progress: liveProgress } = useAdminEvents();
@@ -52,6 +60,9 @@ export function AppsList({ setFlash }: AppsListProps) {
 	const [serviceUnitDialog, setServiceUnitDialog] = useState<{ appId: string; unit: string } | null>(null);
 	const [serviceUnitLoadingId, setServiceUnitLoadingId] = useState<string | null>(null);
 	const [serviceUnitApplying, setServiceUnitApplying] = useState(false);
+	const [statusMap, setStatusMap] = useState<Record<string, string>>({});
+	const [controlBusyId, setControlBusyId] = useState<string | null>(null);
+	const [logsAppId, setLogsAppId] = useState<string | null>(null);
 
 	const loadApps = useCallback(async () => {
 		try {
@@ -69,6 +80,40 @@ export function AppsList({ setFlash }: AppsListProps) {
 	useEffect(() => {
 		loadApps();
 	}, [loadApps]);
+
+	const loadStatus = useCallback(async (appId: string) => {
+		try {
+			const status = await getServiceStatus(appId);
+			setStatusMap((prev) => ({ ...prev, [appId]: status }));
+		} catch {
+			setStatusMap((prev) => ({ ...prev, [appId]: "unknown" }));
+		}
+	}, []);
+
+	// Fetch each app's live service status once after it appears in the list.
+	useEffect(() => {
+		for (const app of apps) {
+			if (statusMap[app.id] === undefined) {
+				setStatusMap((prev) => ({ ...prev, [app.id]: "…" }));
+				loadStatus(app.id);
+			}
+		}
+	}, [apps, statusMap, loadStatus]);
+
+	const controlAction = async (id: string, action: ServiceAction) => {
+		setControlBusyId(id);
+		try {
+			const res = await controlService(id, action);
+			setStatusMap((prev) => ({ ...prev, [id]: res.status }));
+			setFlash({ message: res.message || `Service ${action} requested`, type: "success" });
+		} catch (err: unknown) {
+			if (err instanceof AdminAPIError) setFlash({ message: err.message, type: "error" });
+			else setFlash({ message: String(err), type: "error" });
+			loadStatus(id);
+		} finally {
+			setControlBusyId(null);
+		}
+	};
 
 	const loadReleases = useCallback(async (appId: string) => {
 		setReleasesLoading((prev) => ({ ...prev, [appId]: true }));
@@ -302,6 +347,20 @@ export function AppsList({ setFlash }: AppsListProps) {
 									)}
 								</div>
 
+								<Separator />
+								<div className="flex flex-wrap items-center gap-2">
+									<span className="text-xs font-medium text-muted-foreground">Service</span>
+									<Badge variant={serviceStatusVariant(statusMap[app.id] || "")} data-testid={`service-status-${app.id}`}>
+										{statusMap[app.id] || "…"}
+									</Badge>
+									<div className="ml-auto flex flex-wrap gap-2">
+										<Button type="button" variant="outline" size="sm" disabled={controlBusyId === app.id} onClick={() => controlAction(app.id, "start")}>Start</Button>
+										<Button type="button" variant="outline" size="sm" disabled={controlBusyId === app.id} onClick={() => controlAction(app.id, "stop")}>Stop</Button>
+										<Button type="button" variant="outline" size="sm" disabled={controlBusyId === app.id} onClick={() => controlAction(app.id, "restart")}>Restart</Button>
+										<Button type="button" variant="secondary" size="sm" onClick={() => setLogsAppId(app.id)}>View Logs</Button>
+									</div>
+								</div>
+
 								{app.enabled && (
 									<>
 										<Separator />
@@ -386,6 +445,14 @@ export function AppsList({ setFlash }: AppsListProps) {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
+			<LogsDialog
+				open={logsAppId !== null}
+				onOpenChange={(open) => { if (!open) setLogsAppId(null); }}
+				title="Live service logs"
+				description="Current systemd journal (journalctl) for this app's service."
+				fetchLog={() => (logsAppId ? getAppLogs(logsAppId) : Promise.resolve(""))}
+			/>
 		</div>
 	);
 }

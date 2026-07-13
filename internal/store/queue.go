@@ -124,6 +124,7 @@ func (q *DeployQueue) Migrate() error {
 		`ALTER TABLE deploy_jobs ADD COLUMN download_bytes INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE deploy_jobs ADD COLUMN download_duration_ms INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE deploy_jobs ADD COLUMN download_speed_bps REAL NOT NULL DEFAULT 0`,
+		`ALTER TABLE deploy_jobs ADD COLUMN deploy_log TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := q.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("deploy_queue: migrate deploy_jobs: %w", err)
@@ -311,6 +312,35 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 		status, nullMsg, downloadBytes, downloadDurationMs, downloadSpeedBPS, id,
 	)
 	return err
+}
+
+// SaveJobLog stores captured service logs (e.g. journalctl output) for a job,
+// so a failed deploy's health-check logs can be reviewed later. It is a
+// best-effort UPDATE keyed by job id; unknown ids are a no-op.
+func (q *DeployQueue) SaveJobLog(id, log string) error {
+	_, err := q.db.Exec(
+		`UPDATE deploy_jobs SET deploy_log = ? WHERE id = ?`,
+		log, id,
+	)
+	if err != nil {
+		return fmt.Errorf("deploy_queue: save job log: %w", err)
+	}
+	return nil
+}
+
+// GetJobLog returns the stored service log for a job, or an empty string if the
+// job has none. A missing job returns ("", nil) so callers need not special
+// case it.
+func (q *DeployQueue) GetJobLog(id string) (string, error) {
+	var log string
+	err := q.db.QueryRow(`SELECT COALESCE(deploy_log, '') FROM deploy_jobs WHERE id = ?`, id).Scan(&log)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("deploy_queue: get job log: %w", err)
+	}
+	return log, nil
 }
 
 func (q *DeployQueue) RecoverStale() error {

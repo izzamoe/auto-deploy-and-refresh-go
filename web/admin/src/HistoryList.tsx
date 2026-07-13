@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAdminEvents } from "./AdminEventProvider";
-import { AdminAPIError, apiRequest } from "./api";
+import { AdminAPIError, apiRequest, getJobLog } from "./api";
+import { LogsDialog } from "./LogsDialog";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,7 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 	const [history, setHistory] = useState<HistoryJob[]>([]);
 	const [total, setTotal] = useState(0);
 	const [page, setPage] = useState(1);
+	const [logsJobId, setLogsJobId] = useState<string | null>(null);
 	const [optimisticRetryIds, setOptimisticRetryIds] = useState<Set<string>>(() => new Set());
 	const [retriedSourceIds, setRetriedSourceIds] = useState<Set<string>>(() => new Set());
 	const { progress: liveProgress } = useAdminEvents();
@@ -194,17 +196,26 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 									<TableCell>
 										<div className="flex flex-wrap gap-2">
 										{showRetry && (
-											<Button 
+											<Button
 												type="button"
 												variant="outline"
 												size="sm"
-												className="retry-button" 
+												className="retry-button"
 												data-testid={`retry-button-${job.id}`}
 												onClick={() => retryJob(job)}
 											>
 												↻ Retry Deploy
 											</Button>
 										)}
+										<Button
+											type="button"
+											variant="secondary"
+											size="sm"
+											data-testid={`logs-button-${job.id}`}
+											onClick={() => setLogsJobId(job.id)}
+										>
+											View Logs
+										</Button>
 										{!isTerminal && (
 											<Button type="button" variant="destructive" size="sm" onClick={() => cancelJob(job.id)}>Cancel</Button>
 										)}
@@ -251,6 +262,14 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 					)}
 				</CardContent>
 			</Card>
+
+			<LogsDialog
+				open={logsJobId !== null}
+				onOpenChange={(open) => { if (!open) setLogsJobId(null); }}
+				title="Deploy logs"
+				description="Service logs captured when this deploy finished — including the health-check failure output for a failed deploy."
+				fetchLog={() => (logsJobId ? getJobLog(logsJobId) : Promise.resolve(""))}
+			/>
 		</div>
 	);
 }

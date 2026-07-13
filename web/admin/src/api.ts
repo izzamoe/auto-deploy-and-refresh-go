@@ -140,3 +140,28 @@ export function parseEnvText(text: string): EnvVar[] {
 export function envVarsToText(vars: EnvVar[]): string {
   return vars.map((v) => `${v.name}=${v.value}`).join("\n");
 }
+
+// getJobLog returns the service logs captured when a deploy job completed
+// (e.g. the health-check failure logs saved for a failed deploy).
+export async function getJobLog(jobId: string): Promise<string> {
+  const res = await apiRequest(`/jobs/${jobId}/logs`);
+  return res.log || "";
+}
+
+// getAppLogs returns the current (live) systemd journal for an app's service.
+export async function getAppLogs(id: string): Promise<string> {
+  const res = await apiRequest(`/apps/${id}/logs`);
+  return res.log || "";
+}
+
+export async function getServiceStatus(id: string): Promise<string> {
+  const res = await apiRequest(`/apps/${id}/service/status`);
+  return res.status || "unknown";
+}
+
+export type ServiceAction = "start" | "stop" | "restart";
+
+export async function controlService(id: string, action: ServiceAction): Promise<{ status: string; message: string }> {
+  const res = await apiRequest(`/apps/${id}/service/${action}`, { method: "POST" });
+  return { status: res.status || "unknown", message: res.message || "" };
+}

@@ -88,8 +88,50 @@ func (h *ServiceUnitAdminHandler) ApplyServiceUnitHertz(ctx context.Context, c *
 	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "ok", Message: "Service unit created and enabled"})
 }
 
+// LiveLogsHertz returns the current systemd journal for the app's service, for
+// live inspection independent of any particular deploy job.
+func (h *ServiceUnitAdminHandler) LiveLogsHertz(ctx context.Context, c *app.RequestContext) {
+	appRecord, ok := h.getServiceUnitAppOr404(c, c.Param("id"))
+	if !ok {
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"log": deploy.CaptureServiceLogs(appRecord.ServiceName)})
+}
+
+// ServiceStatusHertz returns the systemd active-state of the app's service.
+func (h *ServiceUnitAdminHandler) ServiceStatusHertz(ctx context.Context, c *app.RequestContext) {
+	appRecord, ok := h.getServiceUnitAppOr404(c, c.Param("id"))
+	if !ok {
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"status": deploy.ServiceStatus(appRecord.ServiceName)})
+}
+
+// ControlServiceHertz runs a whitelisted systemctl action (start, stop,
+// restart) against the app's service.
+func (h *ServiceUnitAdminHandler) ControlServiceHertz(ctx context.Context, c *app.RequestContext) {
+	appRecord, ok := h.getServiceUnitAppOr404(c, c.Param("id"))
+	if !ok {
+		return
+	}
+	action := c.Param("action")
+	out, err := deploy.ControlService(appRecord.ServiceName, action)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, err.Error())
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{
+		"status":  deploy.ServiceStatus(appRecord.ServiceName),
+		"output":  out,
+		"message": "Service " + action + " requested",
+	})
+}
+
 func RegisterServiceUnitRoutesHertz(h *server.Hertz, handler *ServiceUnitAdminHandler, auth app.HandlerFunc) {
 	api := h.Group("/admin/api", auth)
 	api.GET("/apps/:id/service-unit/preview", handler.PreviewServiceUnitHertz)
 	api.POST("/apps/:id/service-unit/apply", handler.ApplyServiceUnitHertz)
+	api.GET("/apps/:id/logs", handler.LiveLogsHertz)
+	api.GET("/apps/:id/service/status", handler.ServiceStatusHertz)
+	api.POST("/apps/:id/service/:action", handler.ControlServiceHertz)
 }
