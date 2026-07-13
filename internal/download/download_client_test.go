@@ -109,9 +109,9 @@ func TestDownloadWithRetry200ReturnsImmediately(t *testing.T) {
 
 func TestDownloadWithRetry500RetriesAndSucceeds(t *testing.T) {
 	t.Parallel()
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
+		n := calls.Add(1)
 		if n < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -129,16 +129,16 @@ func TestDownloadWithRetry500RetriesAndSucceeds(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
-	if atomic.LoadInt32(&calls) != 3 {
-		t.Errorf("expected 3 calls, got %d", calls)
+	if calls.Load() != 3 {
+		t.Errorf("expected 3 calls, got %d", calls.Load())
 	}
 }
 
 func TestDownloadWithRetry429RetriesAndSucceeds(t *testing.T) {
 	t.Parallel()
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
+		n := calls.Add(1)
 		if n < 2 {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -160,9 +160,9 @@ func TestDownloadWithRetry429RetriesAndSucceeds(t *testing.T) {
 
 func TestDownloadWithRetry404FailsImmediately(t *testing.T) {
 	t.Parallel()
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
@@ -172,16 +172,16 @@ func TestDownloadWithRetry404FailsImmediately(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 404, got nil")
 	}
-	if atomic.LoadInt32(&calls) != 1 {
-		t.Errorf("expected exactly 1 call for 404, got %d", calls)
+	if calls.Load() != 1 {
+		t.Errorf("expected exactly 1 call for 404, got %d", calls.Load())
 	}
 }
 
 func TestDownloadWithRetry403FailsImmediately(t *testing.T) {
 	t.Parallel()
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer srv.Close()
@@ -191,16 +191,16 @@ func TestDownloadWithRetry403FailsImmediately(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 403, got nil")
 	}
-	if atomic.LoadInt32(&calls) != 1 {
-		t.Errorf("expected exactly 1 call for 403, got %d", calls)
+	if calls.Load() != 1 {
+		t.Errorf("expected exactly 1 call for 403, got %d", calls.Load())
 	}
 }
 
 func TestDownloadWithRetryAllAttemptsExhaustedReturnsError(t *testing.T) {
 	t.Parallel()
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -210,8 +210,8 @@ func TestDownloadWithRetryAllAttemptsExhaustedReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after exhausted retries, got nil")
 	}
-	if atomic.LoadInt32(&calls) != 3 {
-		t.Errorf("expected 3 calls, got %d", calls)
+	if calls.Load() != 3 {
+		t.Errorf("expected 3 calls, got %d", calls.Load())
 	}
 }
 
@@ -238,9 +238,9 @@ func TestDownloadWithRetryNetworkErrorRetries(t *testing.T) {
 
 func TestDownloadWithRetryBackoffDurationsAreCorrect(t *testing.T) {
 	t.Parallel()
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
+		n := calls.Add(1)
 		if n < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
