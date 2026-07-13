@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -474,18 +475,56 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 	c.JSON(consts.StatusAccepted, map[string]string{"status": "queued", "tag": body.Tag})
 }
 
+// historyPageDefaults bound the page size the history endpoint will serve.
+const (
+	historyDefaultPageSize = 20
+	historyMaxPageSize     = 100
+)
+
+// parseHistoryPaging reads the page/pageSize query params, applying defaults
+// and clamping to sane bounds. Returns 1-based page, pageSize, and the SQL
+// offset.
+func parseHistoryPaging(c *app.RequestContext) (page, pageSize, offset int) {
+	page = 1
+	if p, err := strconv.Atoi(c.Query("page")); err == nil && p > 1 {
+		page = p
+	}
+	pageSize = historyDefaultPageSize
+	if s, err := strconv.Atoi(c.Query("pageSize")); err == nil && s > 0 {
+		pageSize = s
+	}
+	if pageSize > historyMaxPageSize {
+		pageSize = historyMaxPageSize
+	}
+	offset = (page - 1) * pageSize
+	return page, pageSize, offset
+}
+
 func (h *AdminAPIHandler) ListHistoryHertz(ctx context.Context, c *app.RequestContext) {
+	page, pageSize, offset := parseHistoryPaging(c)
+
 	if appID := c.Query("appId"); appID != "" {
 		app, ok := h.getAppOr404(c, appID)
 		if !ok {
 			return
 		}
-		jobs, err := h.queue.ListHistory(app.ID, 50)
+		total, err := h.queue.CountHistory(app.ID)
 		if err != nil {
 			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list history")
 			return
 		}
-		c.JSON(consts.StatusOK, map[string]any{"app": appResponse(*app), "history": h.jobResponses(app, jobs)})
+		jobs, err := h.queue.ListHistoryPaged(app.ID, pageSize, offset)
+		if err != nil {
+			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list history")
+			return
+		}
+		c.JSON(consts.StatusOK, map[string]any{
+			"app":      appResponse(*app),
+			"history":  h.jobResponses(app, jobs),
+			"total":    total,
+			"page":     page,
+			"pageSize": pageSize,
+		})
 		return
 	}
 
@@ -494,17 +533,31 @@ func (h *AdminAPIHandler) ListHistoryHertz(ctx context.Context, c *app.RequestCo
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list apps")
 		return
 	}
-	var history []adminAPIJobResponse
+	appsByID := make(map[string]*store.App, len(apps))
 	for i := range apps {
-		jobs, err := h.queue.ListHistory(apps[i].ID, 50)
-		if err != nil {
-			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list history")
-			return
-		}
-		app := apps[i]
-		history = append(history, h.jobResponses(&app, jobs)...)
+		appsByID[apps[i].ID] = &apps[i]
 	}
-	c.JSON(consts.StatusOK, map[string]any{"history": history})
+
+	total, err := h.queue.CountAllHistory()
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list history")
+		return
+	}
+	jobs, err := h.queue.ListAllHistoryPaged(pageSize, offset)
+	if err != nil {
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to list history")
+		return
+	}
+	history := make([]adminAPIJobResponse, 0, len(jobs))
+	for _, job := range jobs {
+		history = append(history, jobResponse(appsByID[job.AppID], job, h.tracker))
+	}
+	c.JSON(consts.StatusOK, map[string]any{
+		"history":  history,
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
+	})
 }
 
 func (h *AdminAPIHandler) RetryHistoryJobHertz(ctx context.Context, c *app.RequestContext) {

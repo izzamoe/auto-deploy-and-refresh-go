@@ -25,6 +25,10 @@ interface RetryHistoryResponse {
 
 const terminalHistoryStatuses = new Set(["succeeded", "failed", "canceled", "unknown"]);
 
+// HISTORY_PAGE_SIZE must match the backend default page size so the "Page X of
+// Y" math lines up with what the API returns.
+const HISTORY_PAGE_SIZE = 20;
+
 function historyStatusVariant(status: string) {
 	if (status === "failed") return "destructive";
 	if (status === "succeeded") return "default";
@@ -34,6 +38,8 @@ function historyStatusVariant(status: string) {
 
 export function HistoryList({ setFlash }: { setFlash: (flash: { message: string, type: "success" | "error" }) => void }) {
 	const [history, setHistory] = useState<HistoryJob[]>([]);
+	const [total, setTotal] = useState(0);
+	const [page, setPage] = useState(1);
 	const [optimisticRetryIds, setOptimisticRetryIds] = useState<Set<string>>(() => new Set());
 	const [retriedSourceIds, setRetriedSourceIds] = useState<Set<string>>(() => new Set());
 	const { progress: liveProgress } = useAdminEvents();
@@ -50,11 +56,21 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 		return searchParams.get("appId");
 	}, [hash]);
 
+	// Reset to the first page whenever the app filter changes so we never land
+	// on a page that no longer exists for the newly selected app.
+	useEffect(() => {
+		setPage(1);
+	}, [appId]);
+
 	const loadHistory = useCallback(async () => {
 		try {
-			const url = appId ? `/history?appId=${appId}` : "/history";
-			const res = await apiRequest(url);
+			const params = new URLSearchParams();
+			if (appId) params.set("appId", appId);
+			params.set("page", String(page));
+			params.set("pageSize", String(HISTORY_PAGE_SIZE));
+			const res = await apiRequest(`/history?${params.toString()}`);
 			setHistory(res.history || []);
+			setTotal(typeof res.total === "number" ? res.total : (res.history || []).length);
 		} catch (err: unknown) {
 			if (err instanceof AdminAPIError) {
 				setFlash({ message: err.message, type: "error" });
@@ -62,11 +78,13 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 				setFlash({ message: String(err), type: "error" });
 			}
 		}
-	}, [appId, setFlash]);
+	}, [appId, page, setFlash]);
 
 	useEffect(() => {
 		loadHistory();
 	}, [loadHistory]);
+
+	const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
 
 	const retryJob = async (job: HistoryJob) => {
 		try {
@@ -197,6 +215,40 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 						})}
 						</TableBody>
 					</Table>
+
+					{total > 0 && (
+						<div
+							id="history-pagination"
+							data-testid="history-pagination"
+							className="flex flex-col items-center justify-between gap-3 pt-2 sm:flex-row"
+						>
+							<p className="text-sm text-muted-foreground">
+								Page {page} of {totalPages} · {total} total deployment{total === 1 ? "" : "s"}
+							</p>
+							<div className="flex gap-2">
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									data-testid="history-prev-page"
+									disabled={page <= 1}
+									onClick={() => setPage((p) => Math.max(1, p - 1))}
+								>
+									← Previous
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									data-testid="history-next-page"
+									disabled={page >= totalPages}
+									onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+								>
+									Next →
+								</Button>
+							</div>
+						</div>
+					)}
 				</CardContent>
 			</Card>
 		</div>

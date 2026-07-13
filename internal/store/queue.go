@@ -363,6 +363,75 @@ func (q *DeployQueue) ListHistory(appID string, limit int) ([]JobRecord, error) 
 	return items, rows.Err()
 }
 
+// ListHistoryPaged returns one page of history for appID, ordered newest
+// first, skipping offset rows and returning at most limit rows.
+func (q *DeployQueue) ListHistoryPaged(appID string, limit, offset int) ([]JobRecord, error) {
+	rows, err := q.db.Query(
+		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), download_bytes, download_duration_ms, download_speed_bps, created_at, updated_at
+		 FROM deploy_jobs WHERE app_id = ? ORDER BY seq DESC LIMIT ? OFFSET ?`,
+		appID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []JobRecord
+	for rows.Next() {
+		item, err := scanJobRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// CountHistory returns the total number of history rows for appID.
+func (q *DeployQueue) CountHistory(appID string) (int, error) {
+	var total int
+	err := q.db.QueryRow(`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ?`, appID).Scan(&total)
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// ListAllHistoryPaged returns one page of history across every app, ordered
+// newest first globally (by seq), skipping offset rows and returning at most
+// limit rows.
+func (q *DeployQueue) ListAllHistoryPaged(limit, offset int) ([]JobRecord, error) {
+	rows, err := q.db.Query(
+		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), download_bytes, download_duration_ms, download_speed_bps, created_at, updated_at
+		 FROM deploy_jobs ORDER BY seq DESC LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []JobRecord
+	for rows.Next() {
+		item, err := scanJobRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// CountAllHistory returns the total number of history rows across every app.
+func (q *DeployQueue) CountAllHistory() (int, error) {
+	var total int
+	err := q.db.QueryRow(`SELECT COUNT(*) FROM deploy_jobs`).Scan(&total)
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, error) {
 	if err := validateTag(tag); err != nil {
 		return "", err

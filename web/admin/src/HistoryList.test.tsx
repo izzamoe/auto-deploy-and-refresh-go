@@ -36,14 +36,14 @@ describe("HistoryList", () => {
 		render(<HistoryList setFlash={vi.fn()} />);
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
 		const fetchUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-		expect(fetchUrl).toBe("/admin/api/history?appId=app-1");
+		expect(fetchUrl).toBe("/admin/api/history?appId=app-1&page=1&pageSize=20");
 	});
 
 	it("BUG CONFIRMED: appId is stale after navigation", async () => {
 		window.history.replaceState({}, "", "#/history?appId=app-1");
 		const { rerender } = render(<HistoryList setFlash={vi.fn()} />);
 		await waitFor(() => {
-			expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("/admin/api/history?appId=app-1");
+			expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("/admin/api/history?appId=app-1&page=1&pageSize=20");
 		});
 
 		window.history.replaceState({}, "", "#/history?appId=app-2");
