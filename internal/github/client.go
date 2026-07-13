@@ -25,6 +25,21 @@ const requestTimeout = 10 * time.Second
 // package-level var so tests can point it at an httptest.Server.
 var apiBaseURL = "https://api.github.com"
 
+// StatusError reports a non-2xx HTTP status from the GitHub API. Callers can
+// inspect StatusCode with errors.As to tell apart auth/permission problems
+// (401 unauthorized, 403 forbidden, 404 not-found — GitHub returns 404 for a
+// private repo the token cannot see) from other failures, and surface an
+// actionable hint. The message never contains the token, so it is safe to show.
+type StatusError struct {
+	StatusCode int
+	// Op describes the attempted operation, e.g. "list releases for owner/repo".
+	Op string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("github: %s returned status %d", e.Op, e.StatusCode)
+}
+
 // Release is a reduced view of a GitHub release: only the fields callers need.
 type Release struct {
 	TagName string
@@ -105,7 +120,7 @@ func (c *Client) ListReleases(ctx context.Context, owner, repo string) ([]Releas
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("github: releases request for %s/%s returned status %d", owner, repo, resp.StatusCode)
+		return nil, &StatusError{StatusCode: resp.StatusCode, Op: fmt.Sprintf("list releases for %s/%s", owner, repo)}
 	}
 
 	var raw []releaseJSON

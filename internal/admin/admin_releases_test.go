@@ -110,6 +110,32 @@ func TestListAppReleasesHertzGitHubErrorReturns502WithoutLeakingDetails(t *testi
 	}
 }
 
+func TestListAppReleasesHertzSurfacesGitHubStatusHint(t *testing.T) {
+	t.Parallel()
+	appStore := newTestAppStore(t)
+	createdApp, err := appStore.Create("Test", "sec", "/bin", "svc", "owner/private-repo", "art")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// A private repo the token cannot see returns 404 from GitHub; the handler
+	// must surface that so the operator knows to widen the token's scope.
+	lister := &fakeReleaseLister{err: &github.StatusError{StatusCode: 404, Op: "list releases for owner/private-repo"}}
+	handler := NewReleasesHandler(appStore, lister)
+	engine := newTestReleasesEngine(t, handler)
+
+	w := ut.PerformRequest(engine, "GET", "/admin/api/apps/"+createdApp.ID+"/releases", nil)
+	resp := w.Result()
+
+	if resp.StatusCode() != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", resp.StatusCode())
+	}
+	body := string(resp.Body())
+	if !strings.Contains(body, "404") || !strings.Contains(body, "scope") {
+		t.Fatalf("expected body to surface the 404 status and a scope hint, got %s", body)
+	}
+}
+
 func TestListAppReleasesHertzNoMatchingReleasesReturnsEmptyArray(t *testing.T) {
 	t.Parallel()
 	appStore := newTestAppStore(t)
