@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on the DefaultServeMux
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -44,6 +46,17 @@ func main() {
 	}
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	// Optional profiling endpoint. Off unless PPROF_ADDR is set; bind to a
+	// loopback address (e.g. "localhost:6060") so it is never exposed publicly.
+	if pprofAddr := os.Getenv("PPROF_ADDR"); pprofAddr != "" {
+		go func() {
+			slog.Info("pprof listening", "addr", pprofAddr)
+			srv := &http.Server{Addr: pprofAddr, ReadHeaderTimeout: 5 * time.Second}
+			if err := srv.ListenAndServe(); err != nil {
+				slog.Error("pprof server error", "err", err)
+			}
+		}()
+	}
 	hertzLogger, err := admin.NewZapLogger()
 	if err != nil {
 		slog.Error("zap logger init failed", "err", err)

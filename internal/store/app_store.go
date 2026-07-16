@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/config"
@@ -57,10 +58,54 @@ type EnvVar struct {
 
 type AppStore struct {
 	db *sql.DB
+	// secretHashCache is an immutable snapshot of every enabled app keyed by
+	// webhook_secret_hash. It serves GetBySecretHash — the webhook hot path —
+	// straight from memory, avoiding a SQLite query (and its SQL re-parse +
+	// row allocations) on every request. nil means "not loaded"; the snapshot
+	// is rebuilt lazily on the next read and dropped (invalidated) by any write
+	// that could change which apps are enabled or their secret hashes.
+	secretHashCache atomic.Pointer[map[string]App]
 }
 
 func (s *AppStore) DB() *sql.DB {
 	return s.db
+}
+
+// loadSecretHashCache returns the cached hash→app snapshot, building it from
+// the database on a cache miss. The returned map must be treated as read-only.
+func (s *AppStore) loadSecretHashCache() (map[string]App, error) {
+	if m := s.secretHashCache.Load(); m != nil {
+		return *m, nil
+	}
+	rows, err := s.db.Query(
+		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+		 FROM apps WHERE enabled = 1`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("app_store: load secret hash cache: %w", err)
+	}
+	defer rows.Close()
+
+	m := make(map[string]App)
+	for rows.Next() {
+		app, err := scanApp(rows)
+		if err != nil {
+			return nil, err
+		}
+		m[app.WebhookSecretHash] = app
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("app_store: load secret hash cache: %w", err)
+	}
+	s.secretHashCache.Store(&m)
+	return m, nil
+}
+
+// invalidateSecretHashCache drops the cached snapshot so the next
+// GetBySecretHash rebuilds it. Call after any write that adds, removes,
+// re-enables/disables, or re-secrets an app.
+func (s *AppStore) invalidateSecretHashCache() {
+	s.secretHashCache.Store(nil)
 }
 
 func NewAppStore(db *sql.DB) (*AppStore, error) {
@@ -115,6 +160,7 @@ func (s *AppStore) Create(name, secret, binaryPath, serviceName, githubRepo, art
 		return nil, fmt.Errorf("app_store: insert: %w", err)
 	}
 
+	s.invalidateSecretHashCache()
 	return s.Get(id)
 }
 
@@ -155,18 +201,19 @@ func (s *AppStore) Get(id string) (*App, error) {
 	return &app, nil
 }
 
+// GetBySecretHash returns the enabled app whose webhook secret hashes to hash,
+// or (nil, nil) if none matches. It is served from an in-memory snapshot
+// (see secretHashCache); the database is touched only to (re)build the snapshot
+// after a write invalidates it.
 func (s *AppStore) GetBySecretHash(hash string) (*App, error) {
-	row := s.db.QueryRow(
-		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
-		 FROM apps WHERE webhook_secret_hash = ? AND enabled = 1`,
-		hash,
-	)
-	app, err := scanAppRow(row)
+	m, err := s.loadSecretHashCache()
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("app_store: get by secret hash: %w", err)
+		return nil, err
+	}
+	// Map indexing copies the value, so &app never aliases the shared snapshot.
+	app, ok := m[hash]
+	if !ok {
+		return nil, nil
 	}
 	return &app, nil
 }
@@ -207,6 +254,7 @@ func (s *AppStore) UpdateWithOptionalSecret(id, name, secret, binaryPath, servic
 	if n == 0 {
 		return fmt.Errorf("app_store: app %q not found", id)
 	}
+	s.invalidateSecretHashCache()
 	return nil
 }
 
@@ -231,6 +279,7 @@ func (s *AppStore) RotateSecret(id, newSecret string) error {
 	if n == 0 {
 		return fmt.Errorf("app_store: app %q not found", id)
 	}
+	s.invalidateSecretHashCache()
 	return nil
 }
 
@@ -255,6 +304,7 @@ func (s *AppStore) SetEnabled(id string, enabled bool) error {
 	if n == 0 {
 		return fmt.Errorf("app_store: app %q not found", id)
 	}
+	s.invalidateSecretHashCache()
 	return nil
 }
 
@@ -310,7 +360,11 @@ func (s *AppStore) Delete(id string) error {
 		return fmt.Errorf("app_store: app %q not found", id)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.invalidateSecretHashCache()
+	return nil
 }
 
 func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
