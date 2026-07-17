@@ -92,3 +92,40 @@ export function WebhookSnippet({ appName, secret, onDismiss }: { appName: string
 		</Card>
 	);
 }
+
+// Placeholder used in the reference snippets when no secret is available to
+// fill in — the stored secret is hashed and can never be shown again.
+const SECRET_PLACEHOLDER = "<your-webhook-secret>";
+
+// WebhookReference shows the same curl / GitHub Actions snippets as a
+// non-dismissable reference on the edit form. The stored secret is hashed and
+// cannot be displayed, so it falls back to a placeholder; if the operator types
+// a replacement secret in the form, that value is filled into the curl snippet
+// live so they can copy a ready-to-run command.
+export function WebhookReference({ appName, secret }: { appName: string; secret: string }) {
+	const origin = window.location.origin;
+	const effectiveSecret = secret.trim() === "" ? SECRET_PLACEHOLDER : secret;
+	const curlSnippet = buildCurlSnippet(origin, effectiveSecret);
+	const githubActionsSnippet = buildGithubActionsSnippet(origin);
+
+	return (
+		<Card className="border-border/70 bg-card/95 shadow-sm" data-testid="webhook-reference">
+			<CardHeader>
+				<CardTitle className="text-xl font-semibold">Webhook snippets for {appName}</CardTitle>
+				<CardDescription>
+					Trigger a deploy by POSTing a release tag to this endpoint. The saved secret is hashed and can't be shown — the
+					curl snippet uses a placeholder, or the new secret you type above if you're rotating it.
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="grid gap-5">
+				<CopyableSnippet label="Trigger a deploy with curl" code={curlSnippet} testId="webhook-ref-curl-snippet" />
+
+				<CopyableSnippet
+					label="GitHub Actions workflow (add secrets.DEPLOY_WEBHOOK_SECRET to your repo)"
+					code={githubActionsSnippet}
+					testId="webhook-ref-gha-snippet"
+				/>
+			</CardContent>
+		</Card>
+	);
+}

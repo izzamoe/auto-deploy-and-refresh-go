@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { WebhookSnippet } from "./WebhookSnippet";
+import { WebhookReference, WebhookSnippet } from "./WebhookSnippet";
 
 export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (hash: string, flashMessage?: string) => void; setFlash: (flash: { message: string, type: "success" | "error" }) => void }) {
 	const [formData, setFormData] = useState({
@@ -224,6 +224,10 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 					</CardFooter>
 				</form>
 				</Card>}
+
+			{id && !createdApp && (
+				<WebhookReference appName={formData.name} secret={formData.webhook_secret} />
+			)}
 		</div>
 	);
 }

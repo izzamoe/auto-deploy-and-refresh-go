@@ -47,4 +47,41 @@ describe("AppForm webhook snippet", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Done" }));
 		expect(navigate).toHaveBeenCalledWith("#/", "App created successfully");
 	});
+
+	it("shows webhook reference snippets on the edit form, using a placeholder until a new secret is typed", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+			if (String(url).endsWith("/env")) {
+				return Promise.resolve({ ok: true, json: async () => ({ envVars: [] }) });
+			}
+			return Promise.resolve({
+				ok: true,
+				json: async () => ({
+					app: {
+						id: "app-1",
+						name: "my-app",
+						serviceName: "my-app.service",
+						binaryPath: "/opt/my-app/bin",
+						githubRepo: "owner/repo",
+						artifactName: "my-app-linux-amd64",
+						enabled: true,
+					},
+				}),
+			});
+		}));
+
+		render(<AppForm id="app-1" navigate={vi.fn()} setFlash={vi.fn()} />);
+
+		// The reference card renders in edit mode without needing to submit.
+		await waitFor(() => expect(screen.getByTestId("webhook-reference")).toBeDefined());
+
+		const curl = screen.getByTestId("webhook-ref-curl-snippet");
+		expect(curl.textContent).toContain(`${window.location.origin}/webhook`);
+		// No secret is available for an existing app, so the snippet uses a placeholder.
+		expect(curl.textContent).toContain("<your-webhook-secret>");
+
+		// Typing a replacement secret fills it into the curl snippet live.
+		fireEvent.change(screen.getByLabelText("Webhook Secret"), { target: { value: "rotated-secret" } });
+		expect(screen.getByTestId("webhook-ref-curl-snippet").textContent).toContain("Authorization: Bearer rotated-secret");
+		expect(screen.getByTestId("webhook-ref-curl-snippet").textContent).not.toContain("<your-webhook-secret>");
+	});
 });
