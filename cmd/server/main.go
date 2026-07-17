@@ -134,7 +134,7 @@ func main() {
 	coord := coordinator.NewCoordinator(appStore, q, func(app *store.App, jobID, tag string) (store.DownloadSummary, error) {
 		return deploy.DeployArtifact(app, jobID, tag, tracker, dlClient, cancelService, githubClient)
 	}, tracker)
-	coord.SetLogCapturer(deploy.CaptureServiceLogs)
+	coord.SetLogCapturer(deploy.CaptureServiceLogsSince)
 	coord.Start(ctx)
 	telegramConfigStore, err := store.NewTelegramConfigStore(db)
 	if err != nil {

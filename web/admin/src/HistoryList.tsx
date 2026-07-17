@@ -267,7 +267,7 @@ export function HistoryList({ setFlash }: { setFlash: (flash: { message: string,
 				open={logsJobId !== null}
 				onOpenChange={(open) => { if (!open) setLogsJobId(null); }}
 				title="Deploy logs"
-				description="Service logs captured when this deploy finished — including the health-check failure output for a failed deploy."
+				description="Service journal for this deploy's run only — from when the deploy started through its restart and health check. For the service's full, live journal use View Logs on the app instead."
 				fetchLog={() => (logsJobId ? getJobLog(logsJobId) : Promise.resolve(""))}
 			/>
 		</div>

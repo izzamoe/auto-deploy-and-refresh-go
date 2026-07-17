@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestControlServiceRunsWhitelistedActions(t *testing.T) {
@@ -99,6 +100,38 @@ func TestCaptureServiceLogs(t *testing.T) {
 func TestCaptureServiceLogsEmptyServiceName(t *testing.T) {
 	if got := CaptureServiceLogs("  "); got != "" {
 		t.Errorf("CaptureServiceLogs(blank) = %q, want empty", got)
+	}
+}
+
+func TestCaptureServiceLogsSincePassesSinceFlag(t *testing.T) {
+	var gotArgs string
+	restore := SetRunJournalctlForTest(func(args ...string) ([]byte, error) {
+		gotArgs = strings.Join(args, " ")
+		return []byte("deploy-window-logs\n"), nil
+	})
+	defer restore()
+
+	since := time.Unix(1_700_000_000, 0)
+	got := CaptureServiceLogsSince("bot.service", since)
+	if got != "deploy-window-logs\n" {
+		t.Errorf("CaptureServiceLogsSince = %q", got)
+	}
+	if !strings.Contains(gotArgs, "-u bot.service") {
+		t.Errorf("journalctl args = %q, want -u bot.service", gotArgs)
+	}
+	if !strings.Contains(gotArgs, "--since @1700000000") {
+		t.Errorf("journalctl args = %q, want --since @1700000000", gotArgs)
+	}
+	// Scoping to a start time must NOT also impose a line cap, or a chatty
+	// deploy window would be silently truncated.
+	if strings.Contains(gotArgs, "-n ") {
+		t.Errorf("journalctl args = %q, want no -n limit", gotArgs)
+	}
+}
+
+func TestCaptureServiceLogsSinceEmptyServiceName(t *testing.T) {
+	if got := CaptureServiceLogsSince("  ", time.Unix(0, 0)); got != "" {
+		t.Errorf("CaptureServiceLogsSince(blank) = %q, want empty", got)
 	}
 }
 

@@ -100,7 +100,7 @@ type Coordinator struct {
 	runner      CoordinatorRunner
 	tracker     *progress.ProgressTracker
 	notifier    telegram.Notifier
-	logCapturer func(serviceName string) string
+	logCapturer func(serviceName string, since time.Time) string
 	wg          sync.WaitGroup
 
 	mu         sync.Mutex
@@ -130,12 +130,13 @@ func (c *Coordinator) SetNotifier(n telegram.Notifier) {
 	c.mu.Unlock()
 }
 
-// SetLogCapturer attaches a function that returns a service's recent logs
-// (e.g. deploy.CaptureServiceLogs). When set, the coordinator snapshots the
-// service log after every completed deploy and stores it on the job, so a
-// failed deploy's health-check logs can be reviewed later. Safe to call before
-// Start; a nil capturer disables the feature.
-func (c *Coordinator) SetLogCapturer(fn func(serviceName string) string) {
+// SetLogCapturer attaches a function that returns a service's journal since a
+// given time (e.g. deploy.CaptureServiceLogsSince). When set, the coordinator
+// snapshots the service log after every completed deploy — scoped to that
+// deploy's execution window — and stores it on the job, so a failed deploy's
+// health-check logs can be reviewed later. Safe to call before Start; a nil
+// capturer disables the feature.
+func (c *Coordinator) SetLogCapturer(fn func(serviceName string, since time.Time) string) {
 	c.mu.Lock()
 	c.logCapturer = fn
 	c.mu.Unlock()
@@ -231,6 +232,10 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		c.mu.Unlock()
 	}()
 
+	// Timestamp before the deploy runs so the job's stored log can be scoped to
+	// exactly this deploy's window (download, restart, health check) rather than
+	// an arbitrary tail of the service's journal.
+	deployStart := time.Now()
 	summary, err := c.runner(&app, jobID, tag)
 	success := err == nil
 
@@ -248,7 +253,7 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
 	}
 
-	c.captureJobLog(app.ServiceName, jobID)
+	c.captureJobLog(app.ServiceName, jobID, deployStart)
 
 	if success {
 		slog.Info("coordinator: deploy succeeded", "app", app.ID, "tag", tag)
@@ -259,17 +264,18 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 	}
 }
 
-// captureJobLog snapshots the service's recent logs (via the configured
-// capturer) and stores them on the job, so a completed — especially failed —
-// deploy's logs can be reviewed later. Best-effort: failures are logged only.
-func (c *Coordinator) captureJobLog(serviceName, jobID string) {
+// captureJobLog snapshots the service's logs for this deploy's window — from
+// since (when the deploy started) onward, via the configured capturer — and
+// stores them on the job, so a completed (especially failed) deploy's logs can
+// be reviewed later. Best-effort: failures are logged only.
+func (c *Coordinator) captureJobLog(serviceName, jobID string, since time.Time) {
 	c.mu.Lock()
 	capture := c.logCapturer
 	c.mu.Unlock()
 	if capture == nil {
 		return
 	}
-	logText := capture(serviceName)
+	logText := capture(serviceName, since)
 	if logText == "" {
 		return
 	}

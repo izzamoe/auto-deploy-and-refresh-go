@@ -77,6 +77,31 @@ func CaptureServiceLogsLines(serviceName string, lines int) string {
 	return string(out)
 }
 
+// CaptureServiceLogsSince returns serviceName's systemd journal limited to
+// entries emitted at or after since. Unlike CaptureServiceLogs (which returns
+// an arbitrary tail of recent output), this scopes the result to a single
+// deploy's execution window — the logs printed between when the deploy started
+// and when it finished (its restart plus health-check window) — so a job's
+// stored log shows exactly what the freshly-restarted service emitted before it
+// became healthy or died, rather than unrelated output from a long-running
+// process. The since bound is passed to journalctl as "@<unix-seconds>", which
+// systemd interprets as an absolute UTC timestamp (no timezone ambiguity). It
+// never returns an error, matching CaptureServiceLogs.
+func CaptureServiceLogsSince(serviceName string, since time.Time) string {
+	if strings.TrimSpace(serviceName) == "" {
+		return ""
+	}
+	args := []string{"-u", serviceName, "--no-pager", "--since", fmt.Sprintf("@%d", since.Unix())}
+	out, err := runJournalctl(args...)
+	if err != nil {
+		if len(out) > 0 {
+			return string(out)
+		}
+		return fmt.Sprintf("failed to read logs for %s: %v", serviceName, err)
+	}
+	return string(out)
+}
+
 // SetRunJournalctlForTest overrides the journalctl-invoking function and
 // returns a restore func, so other packages' tests can stub log capture
 // without invoking the real journalctl binary.
