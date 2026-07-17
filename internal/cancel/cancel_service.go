@@ -179,6 +179,9 @@ func (s *CancelService) RequestJobCancel(jobID string) (CancelJobResult, error) 
 	if err := tx.Commit(); err != nil {
 		return CancelJobResult{}, err
 	}
+	// Status transitions above may remove jobs from the active set that backs
+	// IsDuplicate; drop the queue's cached snapshot so it rebuilds.
+	s.q.InvalidateActiveJobsCache()
 	s.publishCancelResult(result)
 	return result, nil
 }
@@ -251,6 +254,7 @@ func (s *CancelService) RequestAppCancel(appID string) (CancelAppResult, error) 
 	if err := tx.Commit(); err != nil {
 		return CancelAppResult{}, err
 	}
+	s.q.InvalidateActiveJobsCache()
 	for _, item := range result.Requested {
 		s.publishCancelResult(item)
 	}
@@ -336,6 +340,7 @@ func (s *CancelService) markTerminal(jobID, status, message string) error {
 		`UPDATE deploy_jobs SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'cancel_requested'`,
 		status, message, jobID,
 	)
+	s.q.InvalidateActiveJobsCache()
 	return err
 }
 

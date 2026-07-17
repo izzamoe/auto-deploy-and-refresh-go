@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -68,6 +70,68 @@ type DownloadSummary struct {
 type DeployQueue struct {
 	db         *sql.DB
 	maxPending int
+	// activeCache is an immutable snapshot of every non-terminal deploy job,
+	// keyed by app ID then tag (two levels instead of a concatenated key so
+	// lookups are allocation-free). It serves IsDuplicate — hit once per
+	// webhook request — straight from memory, avoiding a SQLite COUNT query
+	// (and its SQL re-parse plus a scan of the app's whole job history) per
+	// call. nil means "not loaded"; the snapshot is rebuilt lazily on the next
+	// read and dropped by every write to deploy_jobs.
+	activeCache atomic.Pointer[map[string]map[string]struct{}]
+	// activeCacheMu serializes rebuilds against invalidations so a rebuild
+	// that raced a concurrent write can never publish a pre-write snapshot
+	// over that write's invalidation (double-checked locking; reads that hit
+	// the cache never touch the mutex).
+	activeCacheMu sync.Mutex
+}
+
+// loadActiveCache returns the cached active-jobs snapshot, building it from
+// the database on a cache miss. The returned map must be treated as read-only.
+func (q *DeployQueue) loadActiveCache() (map[string]map[string]struct{}, error) {
+	if m := q.activeCache.Load(); m != nil {
+		return *m, nil
+	}
+	q.activeCacheMu.Lock()
+	defer q.activeCacheMu.Unlock()
+	if m := q.activeCache.Load(); m != nil {
+		return *m, nil
+	}
+	rows, err := q.db.Query(
+		`SELECT app_id, tag FROM deploy_jobs WHERE status IN ('pending', 'in_progress', 'cancel_requested')`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("deploy_queue: load active cache: %w", err)
+	}
+	defer rows.Close()
+
+	m := make(map[string]map[string]struct{})
+	for rows.Next() {
+		var appID, tag string
+		if err := rows.Scan(&appID, &tag); err != nil {
+			return nil, fmt.Errorf("deploy_queue: load active cache: %w", err)
+		}
+		tags := m[appID]
+		if tags == nil {
+			tags = make(map[string]struct{})
+			m[appID] = tags
+		}
+		tags[tag] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("deploy_queue: load active cache: %w", err)
+	}
+	q.activeCache.Store(&m)
+	return m, nil
+}
+
+// InvalidateActiveJobsCache drops the cached snapshot so the next IsDuplicate
+// rebuilds it. Every write to deploy_jobs must call it — including writers
+// outside this type (the cancel service's status transitions and
+// AppStore.Delete's job cleanup).
+func (q *DeployQueue) InvalidateActiveJobsCache() {
+	q.activeCacheMu.Lock()
+	q.activeCache.Store(nil)
+	q.activeCacheMu.Unlock()
 }
 
 func generateJobID() (string, error) {
@@ -134,6 +198,41 @@ func (q *DeployQueue) Migrate() error {
 		return fmt.Errorf("deploy_queue: create index: %w", err)
 	}
 
+	// A partial UNIQUE index makes the database the final arbiter of "one active
+	// job per (app_id, tag)". IsDuplicate's check-then-insert has a race window
+	// (two concurrent webhooks can both pass the check, then both insert); this
+	// index turns the loser's INSERT into a UNIQUE violation that Enqueue maps
+	// back to ErrDuplicate. Terminal jobs (succeeded/failed/canceled) fall out
+	// of the WHERE clause, so redeploying a tag later stays allowed.
+	//
+	// Creating the index fails if the table already holds duplicate active rows
+	// (from before this guard existed), so demote the extras first: keep the
+	// earliest-enqueued job per (app_id, tag) and mark the rest failed. This
+	// runs at startup before RecoverStale, when no deploy is actually executing.
+	if _, err := q.db.Exec(
+		`UPDATE deploy_jobs SET status = 'failed',
+		        error_msg = 'superseded: duplicate active job removed during migration',
+		        updated_at = CURRENT_TIMESTAMP
+		 WHERE id IN (
+		     SELECT id FROM (
+		         SELECT id, ROW_NUMBER() OVER (
+		             PARTITION BY app_id, tag ORDER BY seq ASC
+		         ) AS rn
+		         FROM deploy_jobs
+		         WHERE status IN ('pending', 'in_progress', 'cancel_requested')
+		     ) WHERE rn > 1
+		 )`,
+	); err != nil {
+		return fmt.Errorf("deploy_queue: dedup active jobs: %w", err)
+	}
+	if _, err := q.db.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_jobs_active_unique
+		 ON deploy_jobs(app_id, tag)
+		 WHERE status IN ('pending', 'in_progress', 'cancel_requested')`,
+	); err != nil {
+		return fmt.Errorf("deploy_queue: create active-unique index: %w", err)
+	}
+
 	if legacyExists && !newExists {
 		rows, err := q.db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)
 		if err != nil {
@@ -168,6 +267,7 @@ func (q *DeployQueue) Migrate() error {
 		}
 	}
 
+	q.InvalidateActiveJobsCache()
 	return nil
 }
 
@@ -221,6 +321,12 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'webhook')`,
 		jobID, appID, tag,
 	)
+	q.InvalidateActiveJobsCache()
+	// The partial UNIQUE index is the backstop for the check-then-insert race:
+	// a concurrent Enqueue that also passed IsDuplicate loses here.
+	if isUniqueViolation(err) {
+		return ErrDuplicate
+	}
 	return err
 }
 
@@ -253,6 +359,10 @@ func (q *DeployQueue) EnqueueManual(appID, tag string) error {
 		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'manual_deploy')`,
 		jobID, appID, tag,
 	)
+	q.InvalidateActiveJobsCache()
+	if isUniqueViolation(err) {
+		return ErrDuplicate
+	}
 	return err
 }
 
@@ -285,6 +395,7 @@ func (q *DeployQueue) DequeueNext(appID string) (id, tag string, err error) {
 	if err := tx.Commit(); err != nil {
 		return "", "", err
 	}
+	q.InvalidateActiveJobsCache()
 	return id, tag, nil
 }
 
@@ -311,6 +422,7 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 		`UPDATE deploy_jobs SET status = ?, error_msg = ?, download_bytes = ?, download_duration_ms = ?, download_speed_bps = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('in_progress', 'cancel_requested')`,
 		status, nullMsg, downloadBytes, downloadDurationMs, downloadSpeedBPS, id,
 	)
+	q.InvalidateActiveJobsCache()
 	return err
 }
 
@@ -325,6 +437,7 @@ func (q *DeployQueue) SaveJobLog(id, log string) error {
 	if err != nil {
 		return fmt.Errorf("deploy_queue: save job log: %w", err)
 	}
+	q.InvalidateActiveJobsCache()
 	return nil
 }
 
@@ -347,19 +460,17 @@ func (q *DeployQueue) RecoverStale() error {
 	_, err := q.db.Exec(
 		`UPDATE deploy_jobs SET status = 'failed', error_msg = 'recovered: process crashed', updated_at = CURRENT_TIMESTAMP WHERE status IN ('in_progress', 'cancel_requested')`,
 	)
+	q.InvalidateActiveJobsCache()
 	return err
 }
 
 func (q *DeployQueue) IsDuplicate(appID, tag string) (bool, error) {
-	var count int
-	err := q.db.QueryRow(
-		`SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND tag = ? AND status IN ('pending', 'in_progress', 'cancel_requested')`,
-		appID, tag,
-	).Scan(&count)
+	m, err := q.loadActiveCache()
 	if err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	_, ok := m[appID][tag]
+	return ok, nil
 }
 
 func (q *DeployQueue) PendingCount(appID string) (int, error) {
@@ -492,6 +603,10 @@ func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, 
 		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, retry_of_job_id) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'manual_retry', ?)`,
 		jobID, appID, tag, originalJobID,
 	)
+	q.InvalidateActiveJobsCache()
+	if isUniqueViolation(err) {
+		return "", ErrDuplicate
+	}
 	if err != nil {
 		return "", fmt.Errorf("create retry job: insert: %w", err)
 	}

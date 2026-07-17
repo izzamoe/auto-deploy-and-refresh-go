@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -65,6 +66,27 @@ type AppStore struct {
 	// is rebuilt lazily on the next read and dropped (invalidated) by any write
 	// that could change which apps are enabled or their secret hashes.
 	secretHashCache atomic.Pointer[map[string]App]
+	// secretHashCacheMu serializes rebuilds against invalidations so a rebuild
+	// that raced a concurrent write can never publish a pre-write snapshot over
+	// that write's invalidation (double-checked locking; reads that hit the
+	// cache never touch the mutex).
+	secretHashCacheMu sync.Mutex
+	// onJobsDeleted, when set, is called after Delete removes an app's
+	// deploy_jobs rows so the DeployQueue can drop its active-jobs cache.
+	// Wired in main via SetJobsDeletedHook; nil in tests that don't need it.
+	onJobsDeleted func()
+	// testHookAfterQuery, when set, is invoked inside loadSecretHashCache after
+	// the DB query but before the snapshot is published. Test-only seam to
+	// deterministically drive the rebuild-vs-invalidate interleaving; nil (and
+	// therefore free) in production.
+	testHookAfterQuery func()
+}
+
+// SetJobsDeletedHook registers a callback invoked after Delete commits a
+// removal of deploy_jobs rows (Delete bypasses DeployQueue, so the queue's
+// IsDuplicate cache must be invalidated through this hook).
+func (s *AppStore) SetJobsDeletedHook(hook func()) {
+	s.onJobsDeleted = hook
 }
 
 func (s *AppStore) DB() *sql.DB {
@@ -74,6 +96,11 @@ func (s *AppStore) DB() *sql.DB {
 // loadSecretHashCache returns the cached hash→app snapshot, building it from
 // the database on a cache miss. The returned map must be treated as read-only.
 func (s *AppStore) loadSecretHashCache() (map[string]App, error) {
+	if m := s.secretHashCache.Load(); m != nil {
+		return *m, nil
+	}
+	s.secretHashCacheMu.Lock()
+	defer s.secretHashCacheMu.Unlock()
 	if m := s.secretHashCache.Load(); m != nil {
 		return *m, nil
 	}
@@ -97,6 +124,9 @@ func (s *AppStore) loadSecretHashCache() (map[string]App, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("app_store: load secret hash cache: %w", err)
 	}
+	if s.testHookAfterQuery != nil {
+		s.testHookAfterQuery()
+	}
 	s.secretHashCache.Store(&m)
 	return m, nil
 }
@@ -105,7 +135,9 @@ func (s *AppStore) loadSecretHashCache() (map[string]App, error) {
 // GetBySecretHash rebuilds it. Call after any write that adds, removes,
 // re-enables/disables, or re-secrets an app.
 func (s *AppStore) invalidateSecretHashCache() {
+	s.secretHashCacheMu.Lock()
 	s.secretHashCache.Store(nil)
+	s.secretHashCacheMu.Unlock()
 }
 
 func NewAppStore(db *sql.DB) (*AppStore, error) {
@@ -364,6 +396,9 @@ func (s *AppStore) Delete(id string) error {
 		return err
 	}
 	s.invalidateSecretHashCache()
+	if s.onJobsDeleted != nil {
+		s.onJobsDeleted()
+	}
 	return nil
 }
 

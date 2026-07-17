@@ -97,6 +97,9 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
+	// AppStore.Delete removes deploy_jobs rows directly; keep the queue's
+	// IsDuplicate cache coherent with that out-of-band write.
+	appStore.SetJobsDeletedHook(q.InvalidateActiveJobsCache)
 	adminUsers, err := store.NewAdminUserStore(db)
 	if err != nil {
 		slog.Error("admin user store init failed", "err", err)
