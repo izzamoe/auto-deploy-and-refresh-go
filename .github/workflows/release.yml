@@ -121,6 +121,30 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Extract tag annotation as release body
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # The release body is the annotated tag's own message (the text passed
+          # to `git tag -a -m`). Without this, action-gh-release ignores the
+          # annotation and publishes only the auto-generated changelog, so the
+          # description written at tag time is lost.
+          message="$(git for-each-ref "refs/tags/${tag}" --format='%(contents)')"
+          if [ -z "${message//[[:space:]]/}" ]; then
+            echo "::warning::Tag ${tag} has no annotation; using generated notes only."
+            : > release-body.md
+          else
+            printf '%s\n' "${message}" > release-body.md
+            echo "Release body taken from ${tag} annotation ($(wc -l < release-body.md) lines)."
+          fi
+
       - name: Download release archives
         uses: actions/download-artifact@v4
         with:
@@ -134,4 +158,7 @@ jobs:
             dist/release/${{ needs.build-release.outputs.asset_amd64 }}
             dist/release/${{ needs.build-release.outputs.asset_arm64 }}
           fail_on_unmatched_files: true
+          # body_path supplies the tag annotation; generate_release_notes then
+          # appends the commit/PR changelog beneath it.
+          body_path: release-body.md
           generate_release_notes: true
