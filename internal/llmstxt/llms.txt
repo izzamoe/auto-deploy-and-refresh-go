@@ -1,0 +1,61 @@
+# auto-deploy
+
+> Deployment service for Linux/systemd hosts. If you are an AI agent working in an application repository that deploys here, this file tells you how to build a CI/CD pipeline this server will accept: publish a GitHub Release whose asset is a raw Linux ELF binary named exactly as configured, then POST the tag to /webhook.
+
+Version: {{VERSION}}
+Repository: https://github.com/izzamoe/auto-deploy-and-refresh-go
+Full context: /llms-full.txt
+
+Read the sections in order. The artifact contract is where pipelines usually break,
+and three of the values you need are configured per application in this server's
+admin UI — ask the repository owner for them rather than guessing.
+
+## This host
+
+Every application this server deploys runs on this same machine, so every artifact
+must target the platform below. These values are read from the running server process
+itself: it is an ELF binary the kernel here agreed to execute, so a binary built the
+same way will run too.
+
+| Property | Value |
+| --- | --- |
+| GOOS | `{{GOOS}}` |
+| GOARCH | `{{GOARCH}}` |
+| `uname -m` / `file` reports | `{{ARCH_UNAME}}` |
+| Rust target triple | `{{RUST_TARGET}}` |
+
+Build command for a Go project — the `-o` name must be the app's configured artifact
+name, which is the one value still to ask the owner for:
+
+```bash
+GOOS={{GOOS}} GOARCH={{GOARCH}} CGO_ENABLED=0 \
+  go build -trimpath -ldflags "-s -w" -o <ARTIFACT_NAME> ./cmd/app
+```
+
+Do not publish a multi-arch matrix. One application maps to exactly one artifact name,
+so a second architecture would have to overwrite the same asset.
+
+## Sections
+
+- [Read this first](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/docs/llms/01-overview.md): You are most likely an AI agent working in an application repository whose owner deploys through this auto-deploy instance. Your job is to produce a CI/CD pipeline this server will accept — this document states exactly what it requires.
+- [Artifact contract — the part that breaks pipelines](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/docs/llms/02-artifact-contract.md): The release asset must be a raw, uncompressed Linux ELF executable, published under a filename that matches the app's configured artifact name exactly, and no larger than 100 MiB.
+- [The pipeline to generate](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/docs/llms/03-cicd-recipe.md): Build for Linux, publish the release with the asset named exactly as configured, then call the webhook — in that order. Treat HTTP 200 (`duplicate`) as success alongside 202.
+- [Webhook reference](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/docs/llms/04-webhook-contract.md): `POST /webhook` with `Authorization: Bearer <app-token>` and `{"tag": "v1.2.3"}`. 202 means queued, 200 means the same tag is already in flight, and neither means the deploy succeeded.
+- [Failure symptoms and their causes](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/docs/llms/05-troubleshooting.md): Most failures are the artifact contract, not the pipeline. Map the symptom to the cause here before changing the workflow.
+- [Server configuration (operator reference)](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/docs/llms/06-server-configuration.md): Not needed to write a pipeline. This is for whoever runs the auto-deploy instance itself: process-level settings come from environment variables, per-application settings live in SQLite and are edited through the admin UI.
+
+## Endpoints reachable from your pipeline
+
+| Method | Path | Auth |
+| --- | --- | --- |
+| GET | `/llms-full.txt` | public |
+| GET | `/llms.txt` | public |
+| POST | `/webhook` | bearer token |
+
+Everything under `/admin` requires an admin session cookie and is not usable from CI.
+The complete route table is in /llms-full.txt.
+
+## Optional
+
+- [README](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/README.md): install, upgrade, and release-contract details
+- [Release contract](https://github.com/izzamoe/auto-deploy-and-refresh-go/blob/master/release-contract.sh): machine-readable asset names and install paths

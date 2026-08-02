@@ -25,6 +25,7 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/deploy"
 	"github.com/izzamoe/auto-deploy/internal/download"
 	"github.com/izzamoe/auto-deploy/internal/github"
+	"github.com/izzamoe/auto-deploy/internal/llmstxt"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
@@ -201,6 +202,7 @@ func main() {
 	auth := admin.HertzSessionAuthMiddleware(jwtHandler, adminUsers)
 	admin.RegisterLoginRoutesHertz(h, loginHandler)
 	h.POST("/webhook", multiAppWebhookHandler(admissionSvc))
+	llmstxt.RegisterRoutesHertz(h)
 	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, auth)
 	admin.RegisterAccountRoutesHertz(h, accountHandler, auth)
 	admin.RegisterTelegramRoutesHertz(h, telegramHandler, auth)

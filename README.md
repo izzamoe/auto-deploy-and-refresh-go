@@ -32,6 +32,52 @@ Manage your applications via the built-in Admin UI.
   - Manually retry failed or successful deployments.
   - Live deployment progress via WebSocket.
 
+## Machine-Readable Context (`llms.txt`)
+
+Every running instance publishes its own context for AI agents, following the
+[llms.txt](https://llmstxt.org/) convention used by sites like
+`developers.cloudflare.com/llms.txt`.
+
+The intended reader is an agent working in **a deployed application's repository**, not in
+this one: it fetches `https://your-instance/llms.txt` and learns what a pipeline must
+produce for this server to accept it — the artifact contract, the webhook call, the
+ordering rule, and the failure modes. That removes the need to explain auto-deploy to a
+coding assistant by hand every time.
+
+- `GET /llms.txt` — index: the contract, a **This host** block, the section list, and the
+  endpoints reachable from CI. Admin routes are deliberately excluded so the one endpoint
+  a pipeline needs is not buried.
+- `GET /llms-full.txt` — every curated document inlined, plus the complete route table
+  for operators.
+
+The *This host* block reports the instance's own `GOOS`/`GOARCH` (plus the `uname -m`
+spelling and the Rust target triple), resolved at startup from `runtime.GOARCH`. Since
+every managed application is deployed to that same machine, an agent can read the target
+architecture instead of asking for it — the build command in the served document already
+has it filled in. It is not hardware probing: the server process is itself an ELF binary
+the host kernel agreed to run.
+
+Both are public (no session cookie) — an agent cannot fetch a document it must first
+authenticate for. They describe the API contract and the host platform only; no
+per-application data (artifact name, repo, tokens, deploy history) is included, so an
+agent still has to be told those three values by the app's owner.
+
+The files are generated, not hand-written:
+
+| Input | Becomes |
+| --- | --- |
+| `docs/llms/*.md` | the prose sections, ordered by filename prefix |
+| the Go sources (`go/ast` scan of Hertz route registrations) | the endpoint table |
+
+```bash
+make llms        # regenerate internal/llmstxt/llms.txt and llms-full.txt, then commit
+make llms-check  # CI gate: fails if the committed files are stale
+```
+
+`make llms-check` runs in both `ci.yml` and `release.yml`, so a new route or an edited
+document cannot ship without the published context being refreshed. The build stamps the
+version via `-ldflags`, so the served file reports the exact release it came from.
+
 ## Prerequisites
 
 - Linux with systemd
