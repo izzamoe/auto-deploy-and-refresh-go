@@ -110,6 +110,90 @@ func TestRenderServiceUnitIncludesEnvVars(t *testing.T) {
 	}
 }
 
+func TestRenderServiceUnitIncludesArgs(t *testing.T) {
+	t.Parallel()
+
+	app := store.App{
+		Name:        "bot",
+		BinaryPath:  "/opt/bot/bot",
+		ServiceName: "bot.service",
+		Args:        []string{"--port", "8080", "--message", "hello world", ""},
+	}
+
+	got := RenderServiceUnit(app)
+	want := generatedUnitMarker + "\n" +
+		"[Unit]\n" +
+		"Description=bot (managed by auto-deploy)\n" +
+		"After=network.target\n\n" +
+		"[Service]\n" +
+		`ExecStart=/opt/bot/bot "--port" "8080" "--message" "hello world" ""` + "\n" +
+		"WorkingDirectory=/opt/bot\n" +
+		"Restart=on-failure\n" +
+		"RestartSec=5\n\n" +
+		"[Install]\n" +
+		"WantedBy=multi-user.target\n"
+
+	if got != want {
+		t.Fatalf("RenderServiceUnit() with args =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRenderServiceUnitEscapesArgExpansions(t *testing.T) {
+	t.Parallel()
+
+	app := store.App{
+		Name:        "bot",
+		BinaryPath:  "/opt/bot/bot",
+		ServiceName: "bot.service",
+		// "$" and "%" are expanded by systemd (variable reference and unit
+		// specifier); a literal quote and backslash must survive its unquoting.
+		Args: []string{"--token=p$ssw0rd", "--ratio=100%", `--json={"a":1}`, `C:\tmp`},
+	}
+
+	got := RenderServiceUnit(app)
+	wantExec := `ExecStart=/opt/bot/bot "--token=p$$ssw0rd" "--ratio=100%%" "--json={\"a\":1}" "C:\\tmp"` + "\n"
+	if !strings.Contains(got, wantExec) {
+		t.Fatalf("RenderServiceUnit() =\n%q\nwant it to contain\n%q", got, wantExec)
+	}
+}
+
+func TestRenderServiceUnitSanitisesArg(t *testing.T) {
+	t.Parallel()
+
+	app := store.App{
+		Name:        "bot",
+		BinaryPath:  "/opt/bot/bot",
+		ServiceName: "bot.service",
+		Args:        []string{"x\nExecStartPre=/bin/malicious"},
+	}
+
+	got := RenderServiceUnit(app)
+
+	// The newline is stripped, so the injected directive cannot appear at the
+	// start of a line and the ExecStart directive stays a single line.
+	if strings.Contains(got, "\nExecStartPre=") {
+		t.Fatalf("arg newline injection not sanitised:\n%q", got)
+	}
+	if !strings.Contains(got, `ExecStart=/opt/bot/bot "xExecStartPre=/bin/malicious"`+"\n") {
+		t.Fatalf("expected the sanitised arg to stay inside one quoted token:\n%q", got)
+	}
+}
+
+func TestRenderServiceUnitWithoutArgsIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	base := store.App{Name: "bot", BinaryPath: "/opt/bot/bot", ServiceName: "bot.service"}
+	withEmpty := base
+	withEmpty.Args = []string{}
+
+	if got, want := RenderServiceUnit(withEmpty), RenderServiceUnit(base); got != want {
+		t.Fatalf("empty args changed the unit:\n%q\nwant\n%q", got, want)
+	}
+	if strings.Contains(RenderServiceUnit(base), `ExecStart=/opt/bot/bot `) {
+		t.Fatalf("expected no trailing space on ExecStart without args:\n%q", RenderServiceUnit(base))
+	}
+}
+
 func TestRenderServiceUnitSanitisesEnvValue(t *testing.T) {
 	t.Parallel()
 

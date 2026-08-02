@@ -28,6 +28,10 @@ Manage your applications via the built-in Admin UI.
 - **Authentication**: Login form issues a signed JWT stored as an httpOnly cookie (24h TTL). Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in your env file. When serving the admin UI over HTTPS (e.g. behind a TLS reverse proxy), set `COOKIE_SECURE=true` so the session cookie carries the `Secure` flag; leave it unset for plain-HTTP access.
 - **Features**:
   - Add, edit, enable, or disable applications.
+  - Configure how each service is started: per-app **environment variables** and per-app
+    **command-line arguments** (flags), both injected into the generated systemd unit —
+    the arguments are appended to `ExecStart` after the binary path. Apply the service
+    unit and restart the service for either to take effect.
   - View deployment history and status for each app.
   - Manually retry failed or successful deployments.
   - Live deployment progress via WebSocket.

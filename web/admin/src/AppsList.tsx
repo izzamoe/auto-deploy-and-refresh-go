@@ -4,6 +4,7 @@ import { useAdminEvents } from "./AdminEventProvider";
 import { AdminAPIError, apiRequest, controlService, getAppLogs, getServiceStatus, listAppReleases, type ServiceAction } from "./api";
 import { LogsDialog } from "./LogsDialog";
 import { ProgressBadge } from "./ProgressBadge";
+import { ServiceUnitButton } from "./ServiceUnitButton";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -57,9 +58,6 @@ export function AppsList({ setFlash }: AppsListProps) {
 	// Tracks apps where the release dropdown should fall back to a plain text
 	// input: the fetch failed, or GitHub returned zero matching releases.
 	const [releasesFallback, setReleasesFallback] = useState<Record<string, boolean>>({});
-	const [serviceUnitDialog, setServiceUnitDialog] = useState<{ appId: string; unit: string } | null>(null);
-	const [serviceUnitLoadingId, setServiceUnitLoadingId] = useState<string | null>(null);
-	const [serviceUnitApplying, setServiceUnitApplying] = useState(false);
 	const [statusMap, setStatusMap] = useState<Record<string, string>>({});
 	const [controlBusyId, setControlBusyId] = useState<string | null>(null);
 	const [logsAppId, setLogsAppId] = useState<string | null>(null);
@@ -199,32 +197,6 @@ export function AppsList({ setFlash }: AppsListProps) {
 		}
 	};
 
-	const previewServiceUnit = async (id: string) => {
-		setServiceUnitLoadingId(id);
-		try {
-			const res = await apiRequest(`/apps/${id}/service-unit/preview`);
-			setServiceUnitDialog({ appId: id, unit: res.unit });
-		} catch (err: unknown) {
-			if (err instanceof AdminAPIError) setFlash({ message: err.message, type: "error" });
-		} finally {
-			setServiceUnitLoadingId(null);
-		}
-	};
-
-	const applyServiceUnit = async () => {
-		if (!serviceUnitDialog) return;
-		setServiceUnitApplying(true);
-		try {
-			const res = await apiRequest(`/apps/${serviceUnitDialog.appId}/service-unit/apply`, { method: "POST" });
-			setFlash({ message: res.message || "Service unit created and enabled", type: "success" });
-			setServiceUnitDialog(null);
-		} catch (err: unknown) {
-			if (err instanceof AdminAPIError) setFlash({ message: err.message, type: "error" });
-		} finally {
-			setServiceUnitApplying(false);
-		}
-	};
-
 	return (
 		<div className="space-y-6">
 			<Card className="apps-header overflow-hidden border-border/70 bg-card/95 shadow-sm">
@@ -294,15 +266,7 @@ export function AppsList({ setFlash }: AppsListProps) {
 										<Button type="button" variant="secondary" size="sm" onClick={() => enableApp(app.id)}>Enable</Button>
 									)}
 
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										onClick={() => previewServiceUnit(app.id)}
-										disabled={serviceUnitLoadingId === app.id}
-									>
-										{serviceUnitLoadingId === app.id ? "Loading..." : "Generate service unit"}
-									</Button>
+									<ServiceUnitButton appId={app.id} setFlash={setFlash} />
 
 									<Dialog>
 										<DialogTrigger asChild>
@@ -410,41 +374,6 @@ export function AppsList({ setFlash }: AppsListProps) {
 				})}
 				</CardContent>
 			</Card>
-
-			<Dialog
-				open={serviceUnitDialog !== null}
-				onOpenChange={(open) => {
-					if (!open) setServiceUnitDialog(null);
-				}}
-			>
-				<DialogContent className="max-w-2xl">
-					<DialogHeader>
-						<DialogTitle>Generate systemd service unit</DialogTitle>
-						<DialogDescription>
-							Applying this writes a unit file to /etc/systemd/system as root and runs
-							"systemctl daemon-reload" and "systemctl enable". Review the generated content below
-							before confirming.
-						</DialogDescription>
-					</DialogHeader>
-					<pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-4 text-xs">
-						{serviceUnitDialog?.unit}
-					</pre>
-					<DialogFooter>
-						<Button type="button" variant="outline" onClick={() => setServiceUnitDialog(null)}>
-							Cancel
-						</Button>
-						<Button
-							type="button"
-							variant="destructive"
-							onClick={applyServiceUnit}
-							disabled={serviceUnitApplying}
-							aria-label="Confirm and apply service unit"
-						>
-							{serviceUnitApplying ? "Applying..." : "Confirm and Apply"}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
 
 			<LogsDialog
 				open={logsAppId !== null}

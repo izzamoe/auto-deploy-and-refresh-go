@@ -18,21 +18,27 @@ import (
 type ServiceUnitAdminHandler struct {
 	store *store.AppStore
 	env   *store.AppEnvStore
+	args  *store.AppArgsStore
 }
 
-func NewServiceUnitAdminHandler(store *store.AppStore, env *store.AppEnvStore) *ServiceUnitAdminHandler {
-	return &ServiceUnitAdminHandler{store: store, env: env}
+func NewServiceUnitAdminHandler(store *store.AppStore, env *store.AppEnvStore, args *store.AppArgsStore) *ServiceUnitAdminHandler {
+	return &ServiceUnitAdminHandler{store: store, env: env, args: args}
 }
 
-// loadEnvInto populates appRecord.EnvVars from the env store so the rendered
-// unit includes the app's Environment= lines. A load failure is non-fatal:
-// the unit is still rendered without env vars rather than failing the request.
-func (h *ServiceUnitAdminHandler) loadEnvInto(appRecord *store.App) {
-	if h.env == nil {
-		return
+// loadRuntimeInto populates appRecord.EnvVars and appRecord.Args from their
+// stores so the rendered unit includes the app's Environment= lines and its
+// ExecStart flags. A load failure is non-fatal: the unit is still rendered
+// without them rather than failing the request.
+func (h *ServiceUnitAdminHandler) loadRuntimeInto(appRecord *store.App) {
+	if h.env != nil {
+		if vars, err := h.env.Get(appRecord.ID); err == nil {
+			appRecord.EnvVars = vars
+		}
 	}
-	if vars, err := h.env.Get(appRecord.ID); err == nil {
-		appRecord.EnvVars = vars
+	if h.args != nil {
+		if args, err := h.args.Get(appRecord.ID); err == nil {
+			appRecord.Args = args
+		}
 	}
 }
 
@@ -55,7 +61,7 @@ func (h *ServiceUnitAdminHandler) PreviewServiceUnitHertz(ctx context.Context, c
 	if !ok {
 		return
 	}
-	h.loadEnvInto(appRecord)
+	h.loadRuntimeInto(appRecord)
 
 	unit, err := deploy.PreviewServiceUnit(*appRecord)
 	if err != nil {
@@ -74,7 +80,7 @@ func (h *ServiceUnitAdminHandler) ApplyServiceUnitHertz(ctx context.Context, c *
 	if !ok {
 		return
 	}
-	h.loadEnvInto(appRecord)
+	h.loadRuntimeInto(appRecord)
 
 	if err := deploy.ApplyServiceUnit(*appRecord); err != nil {
 		if deploy.IsRefuseOverwriteError(err) {

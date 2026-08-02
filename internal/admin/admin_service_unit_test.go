@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/izzamoe/auto-deploy/internal/deploy"
@@ -35,6 +36,13 @@ func stubServiceUnitEnv(t *testing.T) (dir string, calls *[][]string) {
 }
 
 func newTestServiceUnitAdminHertz(t *testing.T) (*server.Hertz, *store.AppStore, *JWTHandler) {
+	h, appStore, _, jwt := newTestServiceUnitAdminHertzWithArgs(t)
+	return h, appStore, jwt
+}
+
+// newTestServiceUnitAdminHertzWithArgs is the full variant that also hands back
+// the args store, so a test can seed ExecStart flags before rendering a unit.
+func newTestServiceUnitAdminHertzWithArgs(t *testing.T) (*server.Hertz, *store.AppStore, *store.AppArgsStore, *JWTHandler) {
 	t.Helper()
 	jwt := testJWTHandler(t)
 	db := newTestDB(t)
@@ -46,10 +54,65 @@ func newTestServiceUnitAdminHertz(t *testing.T) (*server.Hertz, *store.AppStore,
 	if err != nil {
 		t.Fatalf("NewAppEnvStore: %v", err)
 	}
-	handler := NewServiceUnitAdminHandler(appStore, envStore)
+	argsStore, err := store.NewAppArgsStore(db)
+	if err != nil {
+		t.Fatalf("NewAppArgsStore: %v", err)
+	}
+	handler := NewServiceUnitAdminHandler(appStore, envStore, argsStore)
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
 	RegisterServiceUnitRoutesHertz(h, handler, HertzSessionAuthMiddleware(jwt, testAuthenticator()))
-	return h, appStore, jwt
+	return h, appStore, argsStore, jwt
+}
+
+// TestPreviewServiceUnitHertzIncludesStoredArgs proves the stored command-line
+// arguments actually reach the rendered unit — the wiring between
+// AppArgsStore, loadRuntimeInto and RenderServiceUnit.
+func TestPreviewServiceUnitHertzIncludesStoredArgs(t *testing.T) {
+	// Not t.Parallel(): mutates shared package-level deploy vars via stubServiceUnitEnv.
+	stubServiceUnitEnv(t)
+	h, appStore, argsStore, jwt := newTestServiceUnitAdminHertzWithArgs(t)
+	a := createTestServiceUnitApp(t, appStore, "myapp.service")
+	if err := argsStore.Set(a.ID, []string{"--port", "8080", "--message", "hello world"}); err != nil {
+		t.Fatalf("Set args: %v", err)
+	}
+
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/apps/"+a.ID+"/service-unit/preview", ""))
+	if rr.Response.StatusCode() != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
+	}
+	body := decodeAdminAPIResponseHertz[struct {
+		Unit string `json:"unit"`
+	}](t, rr)
+
+	wantExec := `ExecStart=/opt/myapp/myapp "--port" "8080" "--message" "hello world"` + "\n"
+	if !strings.Contains(body.Unit, wantExec) {
+		t.Fatalf("rendered unit missing args:\n%s\nwant it to contain\n%q", body.Unit, wantExec)
+	}
+}
+
+// TestApplyServiceUnitHertzWritesArgs proves the applied (on-disk) unit file
+// carries the arguments too, not just the preview.
+func TestApplyServiceUnitHertzWritesArgs(t *testing.T) {
+	// Not t.Parallel(): mutates shared package-level deploy vars via stubServiceUnitEnv.
+	dir, _ := stubServiceUnitEnv(t)
+	h, appStore, argsStore, jwt := newTestServiceUnitAdminHertzWithArgs(t)
+	a := createTestServiceUnitApp(t, appStore, "myapp.service")
+	if err := argsStore.Set(a.ID, []string{"--config=/etc/myapp.yaml"}); err != nil {
+		t.Fatalf("Set args: %v", err)
+	}
+
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+a.ID+"/service-unit/apply", ""))
+	if rr.Response.StatusCode() != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
+	}
+
+	written, err := os.ReadFile(filepath.Join(dir, "myapp.service"))
+	if err != nil {
+		t.Fatalf("read written unit: %v", err)
+	}
+	if !strings.Contains(string(written), `ExecStart=/opt/myapp/myapp "--config=/etc/myapp.yaml"`+"\n") {
+		t.Fatalf("written unit missing args:\n%s", written)
+	}
 }
 
 func createTestServiceUnitApp(t *testing.T, appStore *store.AppStore, serviceName string) *store.App {

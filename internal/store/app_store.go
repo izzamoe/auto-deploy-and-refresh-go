@@ -49,6 +49,11 @@ type App struct {
 	// separately (AppEnvStore) and populated on demand by callers that render
 	// the service unit. Empty unless explicitly loaded.
 	EnvVars []EnvVar
+	// Args holds the command-line arguments appended to ExecStart after the
+	// binary path in the generated systemd unit. Like EnvVars it is NOT
+	// persisted by AppStore — it lives in AppArgsStore and is populated on
+	// demand by callers that render the service unit. Empty unless loaded.
+	Args []string
 }
 
 // EnvVar is a single environment variable for an app's service.

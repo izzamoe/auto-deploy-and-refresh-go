@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AdminAPIError, apiRequest, envVarsToText, getAppEnv, parseEnvText, saveAppEnv } from "./api";
+import { AdminAPIError, apiRequest, argsToText, envVarsToText, getAppArgs, getAppEnv, parseArgsText, parseEnvText, saveAppArgs, saveAppEnv } from "./api";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { ServiceUnitButton } from "./ServiceUnitButton";
 import { WebhookReference, WebhookSnippet } from "./WebhookSnippet";
 
 export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (hash: string, flashMessage?: string) => void; setFlash: (flash: { message: string, type: "success" | "error" }) => void }) {
@@ -22,6 +23,7 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 	const [errors, setErrors] = useState<string[]>([]);
 	const [createdApp, setCreatedApp] = useState<{ name: string; secret: string } | null>(null);
 	const [envText, setEnvText] = useState("");
+	const [argsText, setArgsText] = useState("");
 
 	useEffect(() => {
 		if (id) {
@@ -46,6 +48,9 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 			getAppEnv(id)
 				.then((vars) => setEnvText(envVarsToText(vars)))
 				.catch(() => { /* non-fatal: leave the env editor empty */ });
+			getAppArgs(id)
+				.then((a) => setArgsText(argsToText(a)))
+				.catch(() => { /* non-fatal: leave the args editor empty */ });
 		}
 	}, [id, navigate, setFlash]);
 
@@ -72,12 +77,14 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 			};
 			
 			const envVars = parseEnvText(envText);
+			const args = parseArgsText(argsText);
 			if (id) {
 				await apiRequest(`/apps/${id}`, {
 					method: "PUT",
 					body: JSON.stringify(body)
 				});
 				await saveAppEnv(id, envVars);
+				await saveAppArgs(id, args);
 				navigate("#/", "App updated successfully");
 			} else {
 				const res = await apiRequest(`/apps`, {
@@ -86,6 +93,9 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 				});
 				if (envVars.length > 0 && res.app?.id) {
 					await saveAppEnv(res.app.id, envVars);
+				}
+				if (args.length > 0 && res.app?.id) {
+					await saveAppArgs(res.app.id, args);
 				}
 				setCreatedApp({ name: formData.name, secret: formData.webhook_secret });
 			}
@@ -192,8 +202,27 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 							/>
 							<p className="text-sm text-muted-foreground">
 								One <code>NAME=VALUE</code> per line (e.g. the bot reads <code>BOT_TOKEN</code> from its
-								environment). Injected into the systemd unit — run <strong>Generate/Apply service unit</strong> and
-								restart the service for changes to take effect.
+								environment). Injected into the systemd unit — save, then use <strong>Generate service
+								unit</strong> below and restart the service for changes to take effect.
+							</p>
+						</div>
+
+						<div className="grid gap-2">
+							<Label htmlFor="service_args">Command-line Arguments</Label>
+							<textarea
+								id="service_args"
+								name="service_args"
+								value={argsText}
+								onChange={(e) => setArgsText(e.target.value)}
+								rows={3}
+								spellCheck={false}
+								placeholder={"--port 8080\n--config /etc/myapp.yaml"}
+								className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+							/>
+							<p className="text-sm text-muted-foreground">
+								Appended to <code>ExecStart</code> after the binary path; quote values containing spaces (values
+								are passed literally, with no shell expansion). Like env vars, save then use <strong>Generate
+								service unit</strong> below and restart the service for changes to take effect.
 							</p>
 						</div>
 
@@ -224,6 +253,23 @@ export function AppForm({ id, navigate, setFlash }: { id?: string; navigate: (ha
 					</CardFooter>
 				</form>
 				</Card>}
+
+			{id && !createdApp && (
+				<Card className="border-border/70 bg-card/80 shadow-sm">
+					<CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+						<div className="space-y-1">
+							<CardTitle className="text-xl">Service unit</CardTitle>
+							<CardDescription>
+								Regenerate <code>{formData.service_name || "the systemd unit"}</code> from the app's{" "}
+								<strong>saved</strong> settings, including its environment variables and command-line
+								arguments. Save your changes first, then apply — you will see the generated unit before
+								anything is written.
+							</CardDescription>
+						</div>
+						<ServiceUnitButton appId={id} setFlash={setFlash} />
+					</CardHeader>
+				</Card>
+			)}
 
 			{id && !createdApp && (
 				<WebhookReference appName={formData.name} secret={formData.webhook_secret} />

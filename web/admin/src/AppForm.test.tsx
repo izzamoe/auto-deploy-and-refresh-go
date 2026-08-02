@@ -53,6 +53,9 @@ describe("AppForm webhook snippet", () => {
 			if (String(url).endsWith("/env")) {
 				return Promise.resolve({ ok: true, json: async () => ({ envVars: [] }) });
 			}
+			if (String(url).endsWith("/args")) {
+				return Promise.resolve({ ok: true, json: async () => ({ args: [] }) });
+			}
 			return Promise.resolve({
 				ok: true,
 				json: async () => ({
@@ -83,5 +86,104 @@ describe("AppForm webhook snippet", () => {
 		fireEvent.change(screen.getByLabelText("Webhook Secret"), { target: { value: "rotated-secret" } });
 		expect(screen.getByTestId("webhook-ref-curl-snippet").textContent).toContain("Authorization: Bearer rotated-secret");
 		expect(screen.getByTestId("webhook-ref-curl-snippet").textContent).not.toContain("<your-webhook-secret>");
+	});
+
+	it("loads command-line arguments from GET /args and PUTs the parsed args on submit", async () => {
+		const calls: { url: string; method?: string; body?: string }[] = [];
+		vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string, options?: RequestInit) => {
+			calls.push({ url: String(url), method: options?.method, body: options?.body as string | undefined });
+			if (String(url).endsWith("/env")) {
+				return Promise.resolve({ ok: true, json: async () => ({ envVars: [] }) });
+			}
+			if (String(url).endsWith("/args")) {
+				return Promise.resolve({ ok: true, json: async () => ({ args: ["--port", "8080"] }) });
+			}
+			return Promise.resolve({
+				ok: true,
+				json: async () => ({
+					app: {
+						id: "app-1",
+						name: "my-app",
+						serviceName: "my-app.service",
+						binaryPath: "/opt/my-app/bin",
+						githubRepo: "owner/repo",
+						artifactName: "my-app-linux-amd64",
+						enabled: true,
+					},
+				}),
+			});
+		}));
+
+		render(<AppForm id="app-1" navigate={vi.fn()} setFlash={vi.fn()} />);
+
+		const textarea = await screen.findByLabelText("Command-line Arguments") as HTMLTextAreaElement;
+		await waitFor(() => expect(textarea.value).toBe("--port\n8080"));
+
+		fireEvent.change(textarea, { target: { value: "--port 9090 --msg \"hello world\"" } });
+		fireEvent.click(screen.getByRole("button", { name: "Update App" }));
+
+		await waitFor(() => {
+			const putArgs = calls.find((c) => c.url.endsWith("/args") && c.method === "PUT");
+			expect(putArgs).toBeDefined();
+			expect(JSON.parse(putArgs!.body!)).toEqual({ args: ["--port", "9090", "--msg", "hello world"] });
+		});
+	});
+
+	it("previews and applies the service unit from the edit form", async () => {
+		const calls: { url: string; method?: string }[] = [];
+		const setFlash = vi.fn();
+		const unitText = 'ExecStart=/opt/my-app/bin "--port" "8080"';
+		vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string, options?: RequestInit) => {
+			calls.push({ url: String(url), method: options?.method });
+			if (String(url).endsWith("/env")) {
+				return Promise.resolve({ ok: true, json: async () => ({ envVars: [] }) });
+			}
+			if (String(url).endsWith("/args")) {
+				return Promise.resolve({ ok: true, json: async () => ({ args: ["--port", "8080"] }) });
+			}
+			if (String(url).endsWith("/service-unit/preview")) {
+				return Promise.resolve({ ok: true, json: async () => ({ unit: unitText }) });
+			}
+			if (String(url).endsWith("/service-unit/apply")) {
+				return Promise.resolve({ ok: true, json: async () => ({ status: "ok", message: "Service unit created and enabled" }) });
+			}
+			return Promise.resolve({
+				ok: true,
+				json: async () => ({
+					app: {
+						id: "app-1",
+						name: "my-app",
+						serviceName: "my-app.service",
+						binaryPath: "/opt/my-app/bin",
+						githubRepo: "owner/repo",
+						artifactName: "my-app-linux-amd64",
+						enabled: true,
+					},
+				}),
+			});
+		}));
+
+		render(<AppForm id="app-1" navigate={vi.fn()} setFlash={setFlash} />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Generate service unit" }));
+
+		// Nothing is written until the operator sees the unit and confirms.
+		await waitFor(() => expect(screen.getByText(unitText)).toBeDefined());
+		expect(calls.some((c) => c.url.endsWith("/service-unit/apply"))).toBe(false);
+
+		fireEvent.click(screen.getByLabelText("Confirm and apply service unit"));
+
+		await waitFor(() => {
+			const apply = calls.find((c) => c.url.endsWith("/service-unit/apply"));
+			expect(apply).toBeDefined();
+			expect(apply!.method).toBe("POST");
+			expect(apply!.url).toContain("/apps/app-1/");
+		});
+		await waitFor(() => expect(setFlash).toHaveBeenCalledWith({ message: "Service unit created and enabled", type: "success" }));
+	});
+
+	it("does not offer the service unit action when creating a new app", () => {
+		render(<AppForm navigate={vi.fn()} setFlash={vi.fn()} />);
+		expect(screen.queryByRole("button", { name: "Generate service unit" })).toBeNull();
 	});
 });

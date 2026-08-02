@@ -176,7 +176,14 @@ func main() {
 		os.Exit(1)
 	}
 	appEnvHandler := admin.NewAppEnvHandler(appStore, appEnvStore)
-	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore, appEnvStore)
+	appArgsStore, err := store.NewAppArgsStore(db)
+	if err != nil {
+		slog.Error("app args store init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	appArgsHandler := admin.NewAppArgsHandler(appStore, appArgsStore)
+	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore, appEnvStore, appArgsStore)
 	systemLogsHandler := admin.NewSystemLogsHandler(serviceCfg.SelfServiceName)
 	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler, adminUsers)
 	if err != nil {
@@ -208,6 +215,7 @@ func main() {
 	admin.RegisterTelegramRoutesHertz(h, telegramHandler, auth)
 	admin.RegisterGitHubRoutesHertz(h, githubConfigHandler, auth)
 	admin.RegisterAppEnvRoutesHertz(h, appEnvHandler, auth)
+	admin.RegisterAppArgsRoutesHertz(h, appArgsHandler, auth)
 	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, auth)
 	admin.RegisterReleasesRoutesHertz(h, releasesHandler, auth)
 	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, auth)

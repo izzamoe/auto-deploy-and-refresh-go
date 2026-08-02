@@ -26,7 +26,12 @@ Once any application exists they are ignored — manage applications at `/admin/
 
 Held in SQLite, not in the environment, and edited on the app's page in the admin UI:
 target binary path, systemd unit name, GitHub repository, artifact name, enabled flag, the
-token hash, and per-app environment variables injected into the deployed unit.
+token hash, per-app environment variables injected into the deployed unit, and per-app
+command-line arguments appended to that unit's `ExecStart` line after the binary path.
+
+Environment variables and arguments are written into the unit file, so they only reach the
+service once the operator regenerates and applies the service unit and restarts it — a
+deploy on its own does not pick up a change to either.
 
 These are the values a pipeline author must be told; see the table in *Read this first*.
 

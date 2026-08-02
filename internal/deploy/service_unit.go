@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/izzamoe/auto-deploy/internal/store"
@@ -80,19 +81,41 @@ func cleanSystemdValue(s string) string {
 	return strings.TrimSpace(cleaned)
 }
 
+// systemdArgEscaper doubles the two characters systemd expands inside a
+// command line: "%" introduces a unit specifier (%h, %n, ...) and "$"
+// introduces a variable reference, which silently becomes an empty string when
+// the variable is unset. Arguments must reach the binary exactly as the
+// operator typed them, so both are escaped to their literal forms ("%%", "$$")
+// rather than expanded.
+var systemdArgEscaper = strings.NewReplacer("%", "%%", "$", "$$")
+
+// renderExecArgs formats args as the tail of an ExecStart= line: each argument
+// is sanitised, escaped, and double-quoted so that whitespace never splits one
+// argument into two. strconv.Quote's C-style escaping of "\" and '"' is exactly
+// what systemd's own unquoting step reverses.
+func renderExecArgs(args []string) string {
+	var b strings.Builder
+	for _, raw := range args {
+		b.WriteString(" ")
+		b.WriteString(strconv.Quote(systemdArgEscaper.Replace(cleanSystemdValue(raw))))
+	}
+	return b.String()
+}
+
 // RenderServiceUnit builds the unit file content for app as plain text. It is
 // a pure function: no filesystem or network access, which keeps it trivial
 // to unit test against an exact expected string.
 //
-// app.Name and app.BinaryPath are sanitised with cleanSystemdValue before
-// interpolation to prevent newline injection of arbitrary systemd directives.
+// app.Name, app.BinaryPath and app.Args are sanitised with cleanSystemdValue
+// before interpolation to prevent newline injection of arbitrary systemd
+// directives.
 func RenderServiceUnit(app store.App) string {
 	workingDir := filepath.Dir(app.BinaryPath)
 	var b strings.Builder
 	b.WriteString(generatedUnitMarker)
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "[Unit]\nDescription=%s (managed by auto-deploy)\nAfter=network.target\n\n", cleanSystemdValue(app.Name))
-	fmt.Fprintf(&b, "[Service]\nExecStart=%s\nWorkingDirectory=%s\nRestart=on-failure\nRestartSec=5\n", cleanSystemdValue(app.BinaryPath), workingDir)
+	fmt.Fprintf(&b, "[Service]\nExecStart=%s%s\nWorkingDirectory=%s\nRestart=on-failure\nRestartSec=5\n", cleanSystemdValue(app.BinaryPath), renderExecArgs(app.Args), workingDir)
 	for _, env := range app.EnvVars {
 		name := cleanSystemdValue(env.Name)
 		if name == "" {
