@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: ['master']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Fast-failing gate: the published /llms.txt is generated from docs/llms/*.md
+  # and from the route table extracted out of the Go sources. If either changed
+  # without `make llms` being run, the served context is lying about the API and
+  # this job fails before the slower test job burns time.
+  llms-txt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify llms.txt is in sync with routes and docs
+        run: make llms-check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: make test

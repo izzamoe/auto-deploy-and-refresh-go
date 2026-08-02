@@ -57,13 +57,23 @@ jobs:
             echo "Manual dispatch runs validation and packaging only; publish job remains disabled by default."
           fi
 
+      - name: Verify llms.txt is in sync with routes and docs
+        run: make llms-check
+
       - name: Run tests
         run: make test
 
+      # VERSION is stamped into the binary via -ldflags, so the /llms.txt served
+      # by the released build reports the tag it was cut from. On workflow_dispatch
+      # GITHUB_REF_NAME is a branch, so fall back to `git describe`.
       - name: Build release archives
         run: |
           make clean
-          make release
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            make release VERSION="${GITHUB_REF_NAME}"
+          else
+            make release
+          fi
 
       - name: Validate packaged release assets
         env:
