@@ -19,7 +19,73 @@ type migration struct {
 }
 
 // migrations is the ordered registry applied by Migrate.
-var migrations = []migration{}
+var migrations = []migration{
+	{version: 1, name: "additive hardening schema: sessions, api tokens, app/job columns", up: migrateV1Additive},
+}
+
+// columnAdd is one ALTER TABLE ... ADD COLUMN of data-model §2.
+type columnAdd struct {
+	table, column, definition string
+}
+
+// v1Columns lists data-model §2 verbatim. Every NOT NULL column has a DEFAULT, so
+// rows written by the previous binary stay valid and the previous binary can keep
+// running on the migrated database (it never names these columns).
+var v1Columns = []columnAdd{
+	{"admin_users", "token_version", "token_version INTEGER NOT NULL DEFAULT 0"},
+	{"apps", "run_as_user", "run_as_user TEXT NOT NULL DEFAULT ''"},
+	{"apps", "hardening", "hardening INTEGER NOT NULL DEFAULT 0"},
+	{"apps", "health_url", "health_url TEXT NOT NULL DEFAULT ''"},
+	{"apps", "require_digest", "require_digest INTEGER NOT NULL DEFAULT 0"},
+	{"apps", "is_self", "is_self INTEGER NOT NULL DEFAULT 0"},
+	{"deploy_jobs", "rolled_back", "rolled_back INTEGER NOT NULL DEFAULT 0"},
+	{"deploy_jobs", "artifact_sha256", "artifact_sha256 TEXT NOT NULL DEFAULT ''"},
+	{"deploy_jobs", "artifact_verified", "artifact_verified INTEGER NOT NULL DEFAULT 0"},
+	{"deploy_jobs", "finished_at", "finished_at DATETIME"},
+	{"deploy_jobs", "phase_at_end", "phase_at_end TEXT NOT NULL DEFAULT ''"},
+}
+
+// v1Statements are the new tables (data-model §1.2, §1.3) and indexes. All are
+// IF NOT EXISTS so the step is safe on a partially migrated database.
+var v1Statements = []string{
+	`CREATE TABLE IF NOT EXISTS admin_sessions (
+		id                  TEXT PRIMARY KEY,
+		user_id             TEXT NOT NULL,
+		created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_seen_at        DATETIME NOT NULL,
+		expires_at          DATETIME NOT NULL,
+		absolute_expires_at DATETIME NOT NULL,
+		revoked_at          DATETIME,
+		ip                  TEXT NOT NULL DEFAULT '',
+		user_agent          TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_admin_sessions_user_id ON admin_sessions(user_id)`,
+	`CREATE TABLE IF NOT EXISTS api_tokens (
+		id           TEXT PRIMARY KEY,
+		user_id      TEXT NOT NULL,
+		name         TEXT NOT NULL,
+		token_hash   TEXT NOT NULL UNIQUE,
+		prefix       TEXT NOT NULL,
+		created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_used_at DATETIME,
+		revoked_at   DATETIME
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_deploy_jobs_created_at ON deploy_jobs(created_at)`,
+}
+
+func migrateV1Additive(tx *sql.Tx) error {
+	for _, c := range v1Columns {
+		if err := addColumnIfMissing(tx, c.table, c.column, c.definition); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range v1Statements {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("%w (statement: %.60s)", err, stmt)
+		}
+	}
+	return nil
+}
 
 // Migrate applies every pending migration. It must run after the stores that own
 // the base tables (apps, admin_users, deploy_jobs) have created them, because
