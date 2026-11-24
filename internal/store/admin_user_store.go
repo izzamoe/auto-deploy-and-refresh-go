@@ -18,8 +18,11 @@ type AdminUser struct {
 	Username           string
 	PasswordHash       string
 	MustChangePassword bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// TokenVersion is bumped on password/username change and "revoke all"; a
+	// session token carrying an older version is rejected (FR-005).
+	TokenVersion int
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type AdminUserStore struct {
@@ -69,6 +72,37 @@ func (s *AdminUserStore) EnsureSeed(username, password string) (bool, error) {
 		return false, fmt.Errorf("admin_user_store: seed: %w", err)
 	}
 	return true, nil
+}
+
+// CreateUser inserts an account with a bcrypt-hashed password.
+func (s *AdminUserStore) CreateUser(username, password string, mustChange bool) (*AdminUser, error) {
+	hash, err := hashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	id, err := generateID()
+	if err != nil {
+		return nil, err
+	}
+	flag := 0
+	if mustChange {
+		flag = 1
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO admin_users (id, username, password_hash, must_change_password) VALUES (?, ?, ?, ?)`,
+		id, username, hash, flag,
+	); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrDuplicateApp
+		}
+		return nil, fmt.Errorf("admin_user_store: create: %w", err)
+	}
+	return s.GetByUsername(username)
+}
+
+// GetByID returns the user with the stable ID (skeleton; implemented in T027).
+func (s *AdminUserStore) GetByID(id string) (*AdminUser, error) {
+	return nil, errors.New("admin_user_store: GetByID not implemented")
 }
 
 func (s *AdminUserStore) GetByUsername(username string) (*AdminUser, error) {
