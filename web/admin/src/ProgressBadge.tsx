@@ -31,7 +31,7 @@ const terminalStatuses = new Set([
 	"idle",
 ]);
 
-function isFiniteNonNegative(value: number | undefined) {
+function isFiniteNonNegative(value: number | undefined): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
