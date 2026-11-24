@@ -1,10 +1,21 @@
 package auth
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/protocol"
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
 
@@ -12,10 +23,18 @@ import (
 const (
 	DefaultIdle     = 12 * time.Hour
 	DefaultAbsolute = 7 * 24 * time.Hour
+
+	// touchInterval throttles last_seen_at writes (data-model §1.2).
+	touchInterval = time.Minute
+	maxUserAgent  = 256
+
+	cookieNameSecure = "__Host-admin_session"
+	cookieNamePlain  = "admin_session"
 )
 
 var (
-	// ErrSessionExpired: token malformed, badly signed, past exp/aexp, or no row.
+	// ErrSessionExpired: token malformed, badly signed, past exp/aexp, no row, or the
+	// backing store failed (fail closed).
 	ErrSessionExpired = errors.New("session expired")
 	// ErrSessionRevoked: row revoked, user gone, or token_version changed.
 	ErrSessionRevoked = errors.New("session revoked")
@@ -48,35 +67,298 @@ type Verified struct {
 	Renewed *Issued
 }
 
-// Manager issues and verifies session cookies.
-type Manager struct{}
-
-// NewManager builds a Manager.
-func NewManager(cfg SessionConfig, users UserSource, sessions SessionSource) (*Manager, error) {
-	return &Manager{}, nil
+// claims is the JWT payload (D5). sub is the stable user ID, never the username.
+type claims struct {
+	Sub  string `json:"sub"`
+	Sid  string `json:"sid"`
+	Ver  int    `json:"ver"`
+	Iat  int64  `json:"iat"`
+	Exp  int64  `json:"exp"`
+	Aexp int64  `json:"aexp"`
 }
 
-// CookieName is __Host-admin_session when Secure, admin_session otherwise.
-func (m *Manager) CookieName() string { return "" }
+// jwtHeader is the only header accepted: a fixed alg prevents algorithm confusion.
+var jwtHeader = base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+
+// Manager issues and verifies session cookies.
+type Manager struct {
+	key      []byte
+	idle     time.Duration
+	absolute time.Duration
+	secure   bool
+	now      func() time.Time
+	users    UserSource
+	sessions SessionSource
+
+	touchMu sync.Mutex
+	touched map[string]time.Time
+}
+
+// NewManager builds a Manager. Idle/Absolute default to Q-2 values.
+func NewManager(cfg SessionConfig, users UserSource, sessions SessionSource) (*Manager, error) {
+	if len(cfg.Key) < keyLen {
+		return nil, fmt.Errorf("auth: session key must be at least %d bytes, got %d", keyLen, len(cfg.Key))
+	}
+	if users == nil || sessions == nil {
+		return nil, errors.New("auth: user and session sources are required")
+	}
+	m := &Manager{
+		key:      append([]byte(nil), cfg.Key...),
+		idle:     cfg.Idle,
+		absolute: cfg.Absolute,
+		secure:   cfg.Secure,
+		now:      cfg.Now,
+		users:    users,
+		sessions: sessions,
+		touched:  map[string]time.Time{},
+	}
+	if m.idle <= 0 {
+		m.idle = DefaultIdle
+	}
+	if m.absolute <= 0 {
+		m.absolute = DefaultAbsolute
+	}
+	if m.now == nil {
+		m.now = time.Now
+	}
+	return m, nil
+}
+
+// CookieName is __Host-admin_session when Secure, admin_session otherwise (FR-010).
+func (m *Manager) CookieName() string {
+	if m.secure {
+		return cookieNameSecure
+	}
+	return cookieNamePlain
+}
 
 // Issue creates a session row and signs its cookie value.
 func (m *Manager) Issue(user *store.AdminUser, ip, userAgent string) (*Issued, error) {
-	return nil, errNotImplemented
+	id, err := randomHex(16)
+	if err != nil {
+		return nil, err
+	}
+	now := m.now().UTC()
+	if len(userAgent) > maxUserAgent {
+		userAgent = userAgent[:maxUserAgent]
+	}
+	row := &store.AdminSession{
+		ID:                id,
+		UserID:            user.ID,
+		CreatedAt:         now,
+		LastSeenAt:        now,
+		ExpiresAt:         now.Add(m.idle),
+		AbsoluteExpiresAt: now.Add(m.absolute),
+		IP:                ip,
+		UserAgent:         userAgent,
+	}
+	if err := m.sessions.Create(row); err != nil {
+		return nil, fmt.Errorf("auth: create session: %w", err)
+	}
+	return m.sign(user, row, now, row.ExpiresAt)
 }
 
-// Reissue signs a new cookie value for an existing session (new token_version).
+// Reissue signs a new cookie value for an existing session with the user's
+// current token_version (used after password/username change and "revoke all":
+// the current session survives, every other one is rejected).
 func (m *Manager) Reissue(sessionID string, user *store.AdminUser) (*Issued, error) {
-	return nil, errNotImplemented
+	row, err := m.sessions.Get(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("auth: reissue: %w", err)
+	}
+	now := m.now().UTC()
+	if row.RevokedAt != nil || row.UserID != user.ID || !now.Before(row.AbsoluteExpiresAt) {
+		return nil, ErrSessionRevoked
+	}
+	exp := minTime(now.Add(m.idle), row.AbsoluteExpiresAt)
+	if err := m.sessions.Renew(sessionID, exp, now); err != nil {
+		return nil, fmt.Errorf("auth: reissue: %w", err)
+	}
+	return m.sign(user, row, now, exp)
 }
 
-// Verify checks a cookie value against the key, the session row and the user.
-func (m *Manager) Verify(token string) (*Verified, error) { return nil, errNotImplemented }
+// Verify checks a cookie value against the key, the session row and the user
+// (data-model §5): signature -> exp/aexp -> row exists and is not revoked -> user
+// exists (fail closed) -> token_version matches.
+func (m *Manager) Verify(token string) (*Verified, error) {
+	c, err := m.parse(token)
+	if err != nil {
+		return nil, ErrSessionExpired
+	}
+	now := m.now().UTC()
+	if !now.Before(time.Unix(c.Exp, 0)) || !now.Before(time.Unix(c.Aexp, 0)) {
+		return nil, ErrSessionExpired
+	}
 
-// Revoke marks the session row revoked.
-func (m *Manager) Revoke(sessionID string) error { return errNotImplemented }
+	row, err := m.sessions.Get(c.Sid)
+	if err != nil {
+		if errors.Is(err, store.ErrAdminSessionNotFound) {
+			return nil, ErrSessionExpired
+		}
+		slog.Error("auth: session lookup failed; denying request", "err", err)
+		return nil, fmt.Errorf("%w: backend error", ErrSessionExpired)
+	}
+	if row.RevokedAt != nil || row.UserID != c.Sub {
+		return nil, ErrSessionRevoked
+	}
+	if !now.Before(row.ExpiresAt) || !now.Before(row.AbsoluteExpiresAt) {
+		return nil, ErrSessionExpired
+	}
 
-// SetCookie writes the session cookie.
-func (m *Manager) SetCookie(c *app.RequestContext, iss *Issued) {}
+	user, err := m.users.GetByID(c.Sub)
+	if err != nil {
+		if errors.Is(err, store.ErrAdminUserNotFound) {
+			return nil, ErrSessionRevoked
+		}
+		slog.Error("auth: user lookup failed; denying request", "err", err)
+		return nil, fmt.Errorf("%w: backend error", ErrSessionExpired)
+	}
+	if user.TokenVersion != c.Ver {
+		return nil, ErrSessionRevoked
+	}
+
+	v := &Verified{User: user, SessionID: row.ID, ExpiresAt: row.ExpiresAt, AbsoluteExpiresAt: row.AbsoluteExpiresAt}
+
+	// Sliding renewal: less than half of the idle window left -> push it forward.
+	if row.ExpiresAt.Sub(now) < m.idle/2 {
+		exp := minTime(now.Add(m.idle), row.AbsoluteExpiresAt)
+		if exp.After(row.ExpiresAt) {
+			if err := m.sessions.Renew(row.ID, exp, now); err != nil {
+				// Not fatal: the current cookie is still valid; try again next request.
+				slog.Warn("auth: session renewal failed", "err", err)
+				return v, nil
+			}
+			iss, err := m.sign(user, row, now, exp)
+			if err != nil {
+				return nil, err
+			}
+			m.markTouched(row.ID, now)
+			v.ExpiresAt, v.Renewed = exp, iss
+			return v, nil
+		}
+	}
+	m.touch(row, now)
+	return v, nil
+}
+
+// Revoke marks the session row revoked (logout, FR-007).
+func (m *Manager) Revoke(sessionID string) error {
+	if err := m.sessions.Revoke(sessionID, m.now().UTC()); err != nil {
+		return fmt.Errorf("auth: revoke session: %w", err)
+	}
+	m.touchMu.Lock()
+	delete(m.touched, sessionID)
+	m.touchMu.Unlock()
+	return nil
+}
+
+// SetCookie writes the session cookie (HttpOnly, SameSite=Strict, Path=/, Secure by default).
+func (m *Manager) SetCookie(c *app.RequestContext, iss *Issued) {
+	maxAge := int(iss.ExpiresAt.Sub(m.now()).Seconds())
+	if maxAge < 1 {
+		maxAge = 1
+	}
+	c.SetCookie(m.CookieName(), iss.Token, maxAge, "/", "", protocol.CookieSameSiteStrictMode, m.secure, true)
+}
 
 // ClearCookie expires the session cookie.
-func (m *Manager) ClearCookie(c *app.RequestContext) {}
+func (m *Manager) ClearCookie(c *app.RequestContext) {
+	c.SetCookie(m.CookieName(), "", -1, "/", "", protocol.CookieSameSiteStrictMode, m.secure, true)
+}
+
+// touch records last_seen_at at most once per touchInterval per session.
+func (m *Manager) touch(row *store.AdminSession, now time.Time) {
+	m.touchMu.Lock()
+	last, ok := m.touched[row.ID]
+	if ok && now.Sub(last) < touchInterval {
+		m.touchMu.Unlock()
+		return
+	}
+	m.touched[row.ID] = now
+	if len(m.touched) > 1024 { // bound memory: drop entries that no longer throttle anything
+		for id, at := range m.touched {
+			if now.Sub(at) >= touchInterval {
+				delete(m.touched, id)
+			}
+		}
+	}
+	m.touchMu.Unlock()
+	if !ok && now.Sub(row.LastSeenAt) < touchInterval {
+		return // first sight in this process, but the row was refreshed recently
+	}
+	if err := m.sessions.Renew(row.ID, row.ExpiresAt, now); err != nil {
+		slog.Warn("auth: last_seen update failed", "err", err)
+	}
+}
+
+func (m *Manager) markTouched(id string, now time.Time) {
+	m.touchMu.Lock()
+	m.touched[id] = now
+	m.touchMu.Unlock()
+}
+
+func (m *Manager) sign(user *store.AdminUser, row *store.AdminSession, now, exp time.Time) (*Issued, error) {
+	payload, err := json.Marshal(claims{
+		Sub:  user.ID,
+		Sid:  row.ID,
+		Ver:  user.TokenVersion,
+		Iat:  now.Unix(),
+		Exp:  exp.Unix(),
+		Aexp: row.AbsoluteExpiresAt.Unix(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auth: encode claims: %w", err)
+	}
+	unsigned := jwtHeader + "." + base64.RawURLEncoding.EncodeToString(payload)
+	return &Issued{
+		Token:             unsigned + "." + m.mac(unsigned),
+		SessionID:         row.ID,
+		ExpiresAt:         exp,
+		AbsoluteExpiresAt: row.AbsoluteExpiresAt,
+	}, nil
+}
+
+func (m *Manager) mac(unsigned string) string {
+	h := hmac.New(sha256.New, m.key)
+	h.Write([]byte(unsigned))
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+}
+
+// parse verifies header and signature and decodes the claims. It never trusts the
+// token's own alg.
+func (m *Manager) parse(token string) (*claims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[0] != jwtHeader {
+		return nil, errors.New("malformed token")
+	}
+	if !hmac.Equal([]byte(parts[2]), []byte(m.mac(parts[0]+"."+parts[1]))) {
+		return nil, errors.New("bad signature")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var c claims
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, err
+	}
+	if c.Sub == "" || c.Sid == "" {
+		return nil, errors.New("missing claims")
+	}
+	return &c, nil
+}
+
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("auth: random: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}

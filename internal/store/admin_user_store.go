@@ -1,9 +1,11 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -41,7 +43,24 @@ func NewAdminUserStore(db *sql.DB) (*AdminUserStore, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("admin_user_store: create table: %w", err)
 	}
+	// token_version is added by migration v1 too (same definition); adding it here
+	// keeps the store usable before Migrate has run. Idempotent.
+	if err := ensureTokenVersionColumn(db); err != nil {
+		return nil, fmt.Errorf("admin_user_store: %w", err)
+	}
 	return &AdminUserStore{db: db}, nil
+}
+
+func ensureTokenVersionColumn(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := addColumnIfMissing(tx, "admin_users", "token_version", "token_version INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // EnsureSeed inserts a single default admin account when the table is empty.
@@ -100,16 +119,21 @@ func (s *AdminUserStore) CreateUser(username, password string, mustChange bool) 
 	return s.GetByUsername(username)
 }
 
-// GetByID returns the user with the stable ID (skeleton; implemented in T027).
+// GetByID returns the user with the stable ID; ErrAdminUserNotFound when absent.
 func (s *AdminUserStore) GetByID(id string) (*AdminUser, error) {
-	return nil, errors.New("admin_user_store: GetByID not implemented")
+	row := s.db.QueryRow(`SELECT `+adminUserColumns+` FROM admin_users WHERE id = ?`, id)
+	user, err := scanAdminUser(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAdminUserNotFound
+		}
+		return nil, fmt.Errorf("admin_user_store: get by id: %w", err)
+	}
+	return user, nil
 }
 
 func (s *AdminUserStore) GetByUsername(username string) (*AdminUser, error) {
-	row := s.db.QueryRow(
-		`SELECT id, username, password_hash, must_change_password, created_at, updated_at FROM admin_users WHERE username = ?`,
-		username,
-	)
+	row := s.db.QueryRow(`SELECT `+adminUserColumns+` FROM admin_users WHERE username = ?`, username)
 	user, err := scanAdminUser(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -127,6 +151,9 @@ func (s *AdminUserStore) VerifyPassword(username, password string) (*AdminUser, 
 	user, err := s.GetByUsername(username)
 	if err != nil {
 		if errors.Is(err, ErrAdminUserNotFound) {
+			// B29: spend the same bcrypt time as for a real user so response timing
+			// does not reveal which usernames exist.
+			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(password))
 			return nil, false, nil
 		}
 		return nil, false, err
@@ -137,28 +164,34 @@ func (s *AdminUserStore) VerifyPassword(username, password string) (*AdminUser, 
 	return user, true, nil
 }
 
-// UpdatePassword sets a new bcrypt hash and clears the must_change_password flag.
+// UpdatePassword sets a new bcrypt hash, clears must_change_password and bumps
+// token_version so every session issued before the change is rejected (B4, FR-005).
 func (s *AdminUserStore) UpdatePassword(id, newPassword string) error {
 	hash, err := hashPassword(newPassword)
 	if err != nil {
 		return err
 	}
 	return s.execUpdate(
-		`UPDATE admin_users SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE admin_users SET password_hash = ?, must_change_password = 0, token_version = token_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		hash, id,
 	)
 }
 
-// UpdateUsername renames the account.
+// UpdateUsername renames the account and bumps token_version (B3, FR-005).
 func (s *AdminUserStore) UpdateUsername(id, newUsername string) error {
 	err := s.execUpdate(
-		`UPDATE admin_users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE admin_users SET username = ?, token_version = token_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		newUsername, id,
 	)
 	if err != nil && isUniqueViolation(err) {
 		return ErrDuplicateApp
 	}
 	return err
+}
+
+// BumpTokenVersion revokes every outstanding session of the user ("log out all").
+func (s *AdminUserStore) BumpTokenVersion(id string) error {
+	return s.execUpdate(`UPDATE admin_users SET token_version = token_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 }
 
 func (s *AdminUserStore) execUpdate(query string, args ...any) error {
@@ -184,10 +217,32 @@ func hashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+const adminUserColumns = `id, username, password_hash, must_change_password, token_version, created_at, updated_at`
+
+var (
+	dummyHashOnce  sync.Once
+	dummyHashBytes []byte
+)
+
+// dummyPasswordHash is a bcrypt hash (default cost) of a random secret, computed
+// once per process, compared against when the username does not exist.
+func dummyPasswordHash() []byte {
+	dummyHashOnce.Do(func() {
+		secret := make([]byte, 24)
+		_, _ = rand.Read(secret)
+		h, err := bcrypt.GenerateFromPassword(secret, bcrypt.DefaultCost)
+		if err != nil {
+			panic("admin_user_store: dummy hash: " + err.Error())
+		}
+		dummyHashBytes = h
+	})
+	return dummyHashBytes
+}
+
 func scanAdminUser(row *sql.Row) (*AdminUser, error) {
 	var user AdminUser
 	var mustChange int
-	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &mustChange, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &mustChange, &user.TokenVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
 		return nil, err
 	}
 	user.MustChangePassword = mustChange == 1

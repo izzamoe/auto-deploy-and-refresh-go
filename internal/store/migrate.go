@@ -45,10 +45,8 @@ var v1Columns = []columnAdd{
 	{"deploy_jobs", "phase_at_end", "phase_at_end TEXT NOT NULL DEFAULT ''"},
 }
 
-// v1Statements are the new tables (data-model §1.2, §1.3) and indexes. All are
-// IF NOT EXISTS so the step is safe on a partially migrated database.
-var v1Statements = []string{
-	`CREATE TABLE IF NOT EXISTS admin_sessions (
+const (
+	adminSessionsDDL = `CREATE TABLE IF NOT EXISTS admin_sessions (
 		id                  TEXT PRIMARY KEY,
 		user_id             TEXT NOT NULL,
 		created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -58,9 +56,9 @@ var v1Statements = []string{
 		revoked_at          DATETIME,
 		ip                  TEXT NOT NULL DEFAULT '',
 		user_agent          TEXT NOT NULL DEFAULT ''
-	)`,
-	`CREATE INDEX IF NOT EXISTS idx_admin_sessions_user_id ON admin_sessions(user_id)`,
-	`CREATE TABLE IF NOT EXISTS api_tokens (
+	)`
+	adminSessionsIndexDDL = `CREATE INDEX IF NOT EXISTS idx_admin_sessions_user_id ON admin_sessions(user_id)`
+	apiTokensDDL          = `CREATE TABLE IF NOT EXISTS api_tokens (
 		id           TEXT PRIMARY KEY,
 		user_id      TEXT NOT NULL,
 		name         TEXT NOT NULL,
@@ -69,7 +67,17 @@ var v1Statements = []string{
 		created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		last_used_at DATETIME,
 		revoked_at   DATETIME
-	)`,
+	)`
+)
+
+// v1Statements are the new tables (data-model §1.2, §1.3) and indexes. All are
+// IF NOT EXISTS so the step is safe on a partially migrated database. The session
+// and token stores run the same DDL from their constructors, so a store works even
+// before Migrate has run.
+var v1Statements = []string{
+	adminSessionsDDL,
+	adminSessionsIndexDDL,
+	apiTokensDDL,
 	`CREATE INDEX IF NOT EXISTS idx_deploy_jobs_created_at ON deploy_jobs(created_at)`,
 }
 
