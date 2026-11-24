@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type ServiceConfig struct {
@@ -25,6 +27,10 @@ type ServiceConfig struct {
 	// SessionKeyPath is where the persistent session signing key lives (Q-1).
 	// Default: session.key next to the queue database. Override via SESSION_KEY_PATH.
 	SessionKeyPath string
+	// TrustedProxyCIDRs lists the proxy address ranges whose CF-Connecting-IP /
+	// X-Forwarded-For / X-Forwarded-Proto headers are believed (Q-5). Default empty:
+	// forwarding headers are ignored and the socket address is the client IP.
+	TrustedProxyCIDRs []*net.IPNet
 }
 
 type LegacyBootstrapConfig struct {
@@ -56,18 +62,55 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		password = "hehe"
 	}
 
+	trusted, err := ParseCIDRList(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return nil, err
+	}
+
 	return &ServiceConfig{
-		ListenAddr:      envOrDefault("LISTEN_ADDR", ":9000"),
-		QueueDBPath:     queueDBPath,
-		QueueMax:        queueMax,
-		DownloadDNS:     envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
-		AdminUsername:   username,
-		AdminPassword:   password,
-		CookieSecure:    os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
-		GitHubToken:     envOrDefault("GITHUB_TOKEN", ""),
-		SelfServiceName: envOrDefault("SELF_SERVICE_NAME", "auto-deploy.service"),
-		SessionKeyPath:  envOrDefault("SESSION_KEY_PATH", filepath.Join(filepath.Dir(queueDBPath), "session.key")),
+		ListenAddr:        envOrDefault("LISTEN_ADDR", ":9000"),
+		QueueDBPath:       queueDBPath,
+		QueueMax:          queueMax,
+		DownloadDNS:       envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
+		AdminUsername:     username,
+		AdminPassword:     password,
+		CookieSecure:      os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
+		GitHubToken:       envOrDefault("GITHUB_TOKEN", ""),
+		SelfServiceName:   envOrDefault("SELF_SERVICE_NAME", "auto-deploy.service"),
+		SessionKeyPath:    envOrDefault("SESSION_KEY_PATH", filepath.Join(filepath.Dir(queueDBPath), "session.key")),
+		TrustedProxyCIDRs: trusted,
 	}, nil
+}
+
+// ParseCIDRList parses a comma-separated list of CIDRs or bare IPs (the value of
+// TRUSTED_PROXY_CIDRS). An empty string is an empty list; a bad entry is an error
+// that names the variable.
+func ParseCIDRList(list string) ([]*net.IPNet, error) {
+	var out []*net.IPNet
+	for _, entry := range strings.Split(list, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if !strings.Contains(entry, "/") {
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS: invalid entry %q (want a CIDR such as 10.0.0.0/8 or an IP address)", entry)
+			}
+			bits := 128
+			if ip.To4() != nil {
+				bits = 32
+			}
+			out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		_, n, err := net.ParseCIDR(entry)
+		if err != nil {
+			return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS: invalid entry %q (want a CIDR such as 10.0.0.0/8 or an IP address)", entry)
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 func LoadLegacyBootstrapConfig() *LegacyBootstrapConfig {

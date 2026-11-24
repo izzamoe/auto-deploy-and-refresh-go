@@ -1,7 +1,9 @@
 package config
 
 import (
+	"net"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +57,35 @@ func TestLoadServiceConfig_SessionKeyPath(t *testing.T) {
 	}
 	if cfg.SessionKeyPath != "/etc/auto-deploy/key" {
 		t.Errorf("SESSION_KEY_PATH override = %q", cfg.SessionKeyPath)
+	}
+}
+
+func TestLoadServiceConfig_TrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	cfg, err := LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Errorf("default must be empty (Q-5), got %v", cfg.TrustedProxyCIDRs)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", " 10.0.0.0/8 , 192.0.2.7,fd00::/8 ,, ")
+	cfg, err = LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 3 {
+		t.Fatalf("parsed %d entries, want 3: %v", len(cfg.TrustedProxyCIDRs), cfg.TrustedProxyCIDRs)
+	}
+	if !cfg.TrustedProxyCIDRs[1].Contains(net.ParseIP("192.0.2.7")) || cfg.TrustedProxyCIDRs[1].Contains(net.ParseIP("192.0.2.8")) {
+		t.Error("a bare IP must become a single-address network")
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8,not-a-cidr")
+	_, err = LoadServiceConfig()
+	if err == nil || !strings.Contains(err.Error(), "TRUSTED_PROXY_CIDRS") {
+		t.Errorf("bad entry must fail start naming the variable, got %v", err)
 	}
 }
 
