@@ -1,0 +1,10 @@
+{
+  "name": "auto-deploy-openapi-types",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Isolated generator for web/admin/src/lib/api/schema.gen.ts. openapi-typescript 7.x needs the classic TypeScript JS API (peer typescript ^5), which TypeScript 7 does not ship, so it lives in its own package with typescript 5.9.3 and does not affect the root typescript 7.0.2.",
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}
