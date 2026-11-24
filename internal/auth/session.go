@@ -124,6 +124,9 @@ func NewManager(cfg SessionConfig, users UserSource, sessions SessionSource) (*M
 	return m, nil
 }
 
+// Users returns the user source the Manager verifies sessions against.
+func (m *Manager) Users() UserSource { return m.users }
+
 // CookieName is __Host-admin_session when Secure, admin_session otherwise (FR-010).
 func (m *Manager) CookieName() string {
 	if m.secure {
