@@ -19,6 +19,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/izzamoe/auto-deploy/internal/admin"
 	"github.com/izzamoe/auto-deploy/internal/admission"
+	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/config"
 	"github.com/izzamoe/auto-deploy/internal/coordinator"
@@ -164,7 +165,28 @@ func main() {
 	templates := adminHandler.Templates()
 	progressAdminHandler := admin.NewProgressAdminHandler(tracker, appStore, q, templates)
 	adminAPIHandler := admin.NewAdminAPIHandler(appStore, q, tracker, cancelService)
-	accountHandler := admin.NewAccountHandler(adminUsers, jwtHandler, serviceCfg)
+	// T031 compile adjustment: the account handler now needs the v1 session manager.
+	// The full wiring (middleware, session/token routes, removal of the old login
+	// path) is T033.
+	sessionKey, _, err := auth.LoadOrCreateKey(serviceCfg.SessionKeyPath)
+	if err != nil {
+		slog.Error("session key init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	adminSessions, err := store.NewAdminSessionStore(db)
+	if err != nil {
+		slog.Error("admin session store init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	sessionMgr, err := auth.NewManager(auth.SessionConfig{Key: sessionKey, Secure: serviceCfg.CookieSecure}, adminUsers, adminSessions)
+	if err != nil {
+		slog.Error("session manager init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	accountHandler := admin.NewAccountHandler(adminUsers, sessionMgr, filepath.Join(filepath.Dir(serviceCfg.QueueDBPath), "initial-admin-password"))
 	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
 	githubConfigStore, err := store.NewGitHubConfigStore(db)
 	if err != nil {

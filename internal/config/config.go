@@ -16,7 +16,7 @@ type ServiceConfig struct {
 	DownloadDNS   string
 	AdminUsername string
 	AdminPassword string
-	// CookieSecure sets the Secure flag on the admin JWT cookie. Set to true when behind a TLS-terminating reverse proxy (e.g. nginx). Do NOT set if accessed over plain HTTP.
+	// CookieSecure sets the Secure flag (and the __Host- name prefix) on the admin session cookie. Default true (FR-010); plain-HTTP installations must set COOKIE_SECURE=false explicitly.
 	CookieSecure bool
 	// GitHubToken authenticates GitHub Releases API calls. Optional; empty means unauthenticated requests (subject to GitHub's lower rate limit).
 	GitHubToken string
@@ -67,6 +67,11 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		return nil, err
 	}
 
+	cookieSecure, err := parseBoolEnv("COOKIE_SECURE", true)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ServiceConfig{
 		ListenAddr:        envOrDefault("LISTEN_ADDR", ":9000"),
 		QueueDBPath:       queueDBPath,
@@ -74,7 +79,7 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		DownloadDNS:       envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
 		AdminUsername:     username,
 		AdminPassword:     password,
-		CookieSecure:      os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
+		CookieSecure:      cookieSecure,
 		GitHubToken:       envOrDefault("GITHUB_TOKEN", ""),
 		SelfServiceName:   envOrDefault("SELF_SERVICE_NAME", "auto-deploy.service"),
 		SessionKeyPath:    envOrDefault("SESSION_KEY_PATH", filepath.Join(filepath.Dir(queueDBPath), "session.key")),
@@ -141,6 +146,22 @@ func parseQueueConfig(maxStr, dbPath string) (int, string, error) {
 		return 0, "", fmt.Errorf("DEPLOY_QUEUE_MAX must be a positive integer, got %q", maxStr)
 	}
 	return n, dbPath, nil
+}
+
+// parseBoolEnv reads a boolean variable: unset or empty -> def; true/1/yes/on and
+// false/0/no/off are accepted; anything else is a start error naming the variable
+// (a typo must never silently weaken a security default).
+func parseBoolEnv(key string, def bool) (bool, error) {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "":
+		return def, nil
+	case "true", "1", "yes", "on":
+		return true, nil
+	case "false", "0", "no", "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s must be true or false, got %q", key, os.Getenv(key))
 }
 
 func envOrDefault(key, fallback string) string {

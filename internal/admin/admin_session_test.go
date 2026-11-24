@@ -130,8 +130,9 @@ func TestCookieSecureByDefault(t *testing.T) {
 	if !strings.HasPrefix(sc, "__Host-admin_session=") {
 		t.Errorf("Set-Cookie must use the __Host- prefix when Secure: %q", sc)
 	}
+	// Attribute names are case-insensitive (RFC 6265 §5.2); Hertz writes them lower-case.
 	for _, attr := range []string{"Secure", "HttpOnly", "SameSite=Strict", "Path=/"} {
-		if !strings.Contains(sc, attr) {
+		if !strings.Contains(strings.ToLower(sc), strings.ToLower(attr)) {
 			t.Errorf("Set-Cookie lacks %q: %q", attr, sc)
 		}
 	}

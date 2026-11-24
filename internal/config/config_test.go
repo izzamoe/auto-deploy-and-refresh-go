@@ -60,6 +60,30 @@ func TestLoadServiceConfig_SessionKeyPath(t *testing.T) {
 	}
 }
 
+func TestLoadServiceConfig_CookieSecureDefaultsToTrue(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want bool
+	}{
+		{"", true}, {"true", true}, {"1", true}, {"TRUE", true},
+		{"false", false}, {"0", false}, {" False ", false},
+	} {
+		t.Setenv("COOKIE_SECURE", tc.env)
+		cfg, err := LoadServiceConfig()
+		if err != nil {
+			t.Fatalf("COOKIE_SECURE=%q: %v", tc.env, err)
+		}
+		if cfg.CookieSecure != tc.want {
+			t.Errorf("COOKIE_SECURE=%q: CookieSecure = %v, want %v (FR-010, Q-21)", tc.env, cfg.CookieSecure, tc.want)
+		}
+	}
+	// A typo must not silently turn a security default off (or on).
+	t.Setenv("COOKIE_SECURE", "flase")
+	if _, err := LoadServiceConfig(); err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
+		t.Errorf("invalid COOKIE_SECURE must fail start naming the variable, got %v", err)
+	}
+}
+
 func TestLoadServiceConfig_TrustedProxyCIDRs(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	cfg, err := LoadServiceConfig()

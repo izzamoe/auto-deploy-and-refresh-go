@@ -59,6 +59,31 @@ func CheckCSRF(c *app.RequestContext, trustedProto bool) CSRFVerdict {
 	return CSRFOK
 }
 
+// CheckLoginCSRF validates the unauthenticated login POST. There is no session to
+// protect yet, but a cross-site page must not be able to log a victim browser into
+// an attacker-controlled account, so: X-Admin-Request: true is required, a browser
+// that sent Sec-Fetch-Site/Origin must show a same-origin request, and the body must
+// be JSON. A client that sends neither Sec-Fetch-Site nor Origin (curl, scripts) is
+// not a browser and is allowed.
+func CheckLoginCSRF(c *app.RequestContext, trustedProto bool) CSRFVerdict {
+	if string(c.GetHeader("X-Admin-Request")) != "true" {
+		return CSRFRejected
+	}
+	switch site := strings.ToLower(string(c.GetHeader("Sec-Fetch-Site"))); site {
+	case "same-origin":
+	case "":
+		if len(c.GetHeader("Origin")) > 0 && !originMatches(c, trustedProto) {
+			return CSRFRejected
+		}
+	default:
+		return CSRFRejected
+	}
+	if len(c.Request.Body()) > 0 && !isJSONContentType(string(c.GetHeader("Content-Type"))) {
+		return CSRFUnsupportedMedia
+	}
+	return CSRFOK
+}
+
 func originMatches(c *app.RequestContext, trustedProto bool) bool {
 	origin := string(c.GetHeader("Origin"))
 	if origin == "" || origin == "null" {
