@@ -37,6 +37,27 @@ func TestLoadServiceConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadServiceConfig_SessionKeyPath(t *testing.T) {
+	t.Setenv("DEPLOY_QUEUE_DB_PATH", "/var/lib/auto-deploy/queue.db")
+	t.Setenv("SESSION_KEY_PATH", "")
+	cfg, err := LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SessionKeyPath != "/var/lib/auto-deploy/session.key" {
+		t.Errorf("default session key path = %q, want session.key next to the DB (Q-1)", cfg.SessionKeyPath)
+	}
+
+	t.Setenv("SESSION_KEY_PATH", "/etc/auto-deploy/key")
+	cfg, err = LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SessionKeyPath != "/etc/auto-deploy/key" {
+		t.Errorf("SESSION_KEY_PATH override = %q", cfg.SessionKeyPath)
+	}
+}
+
 func TestLoadServiceConfigWithDownloadDNSOverride(t *testing.T) {
 	t.Setenv("DOWNLOAD_DNS", "9.9.9.9")
 	t.Setenv("ADMIN_PASSWORD", "hunter2")

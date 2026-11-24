@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -21,6 +22,9 @@ type ServiceConfig struct {
 	// admin "Application Logs" view to read this service's own journal for
 	// diagnosis. Override via SELF_SERVICE_NAME when the unit is named differently.
 	SelfServiceName string
+	// SessionKeyPath is where the persistent session signing key lives (Q-1).
+	// Default: session.key next to the queue database. Override via SESSION_KEY_PATH.
+	SessionKeyPath string
 }
 
 type LegacyBootstrapConfig struct {
@@ -62,6 +66,7 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		CookieSecure:    os.Getenv("COOKIE_SECURE") == "true" || os.Getenv("COOKIE_SECURE") == "1",
 		GitHubToken:     envOrDefault("GITHUB_TOKEN", ""),
 		SelfServiceName: envOrDefault("SELF_SERVICE_NAME", "auto-deploy.service"),
+		SessionKeyPath:  envOrDefault("SESSION_KEY_PATH", filepath.Join(filepath.Dir(queueDBPath), "session.key")),
 	}, nil
 }
 
