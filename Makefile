@@ -1,4 +1,9 @@
-.PHONY: build build-arm64 build-linux-amd64 build-linux-arm64 package-release release release-validate-local vet clean test admin-ui lint llms llms-check
+.PHONY: build build-arm64 build-linux-amd64 build-linux-arm64 package-release release release-validate-local vet clean test admin-ui lint llms llms-check \
+	fe-install fe-typecheck fe-test api-types-install api-types api-types-check vuln e2e ci
+
+GOVULNCHECK_VERSION := v1.10.0
+API_SPEC := api/admin-api.v1.openapi.yaml
+API_TYPES := web/admin/src/lib/api/schema.gen.ts
 
 BUILD_DIR := dist
 STAGING_DIR := $(BUILD_DIR)/staging
@@ -12,7 +17,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/izzamoe/auto-deploy/internal/llmstxt.Version=$(VERSION)
 
 admin-ui:
-	npm install
+	npm ci
 	npm run admin:build
 
 build: admin-ui
@@ -67,5 +72,51 @@ clean:
 	mkdir -p web/admin/dist
 	touch web/admin/dist/.keep
 
-test: admin-ui
-	go test ./...
+# Go tests. Deliberately independent of admin-ui: tests must not rewrite the
+# tracked internal/admin/web/admin/dist (the built UI is not embedded-by-test).
+test:
+	go test -race -count=1 ./...
+
+# Known-vulnerability gate (Go). Exit 0 only when govulncheck reports nothing.
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+# --- Frontend gates (current stack: Vite until the Next.js migration) ---
+fe-install:
+	npm ci
+
+fe-typecheck:
+	npx tsc --noEmit -p web/admin/tsconfig.json
+
+# vite.config.ts is the Vitest config until the Next.js migration replaces it.
+fe-test:
+	npx vitest run web/admin --config web/admin/vite.config.ts
+
+# --- OpenAPI contract -> TypeScript types ---
+# openapi-typescript 7.x needs the classic TypeScript JS API (peer typescript ^5),
+# which TypeScript 7 does not ship, so the generator is isolated in
+# tools/openapi-types (own typescript 5.9.3). Paths below are relative to the repo root.
+api-types-install:
+	npm --prefix tools/openapi-types ci
+
+api-types: api-types-install
+	npm --prefix tools/openapi-types exec -- openapi-typescript $(API_SPEC) -o $(API_TYPES)
+
+# Drift gate: regenerate into a scratch directory and diff against the committed file.
+api-types-check: api-types-install
+	@tmp=$$(mktemp -d) && \
+	npm --prefix tools/openapi-types exec -- openapi-typescript $(API_SPEC) -o "$$tmp/schema.gen.ts" >/dev/null && \
+	if ! diff -u $(API_TYPES) "$$tmp/schema.gen.ts"; then \
+		rm -rf "$$tmp"; \
+		echo "$(API_TYPES) is stale — run 'make api-types' and commit the result." >&2; \
+		exit 1; \
+	fi; \
+	rm -rf "$$tmp"; \
+	echo "$(API_TYPES) is up to date."
+
+# Browser smoke tests (Playwright).
+e2e:
+	npx playwright test
+
+# Full local gate, same order as CI.
+ci: llms-check vet test vuln fe-install fe-typecheck fe-test api-types-check build e2e
