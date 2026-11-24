@@ -11,8 +11,6 @@ func TestLoadServiceConfigDefaults(t *testing.T) {
 	os.Unsetenv("LISTEN_ADDR")
 	os.Unsetenv("DEPLOY_QUEUE_DB_PATH")
 	os.Unsetenv("DEPLOY_QUEUE_MAX")
-	os.Unsetenv("ADMIN_USERNAME")
-	t.Setenv("ADMIN_PASSWORD", "secret")
 
 	cfg, err := LoadServiceConfig()
 	if err != nil {
@@ -30,12 +28,6 @@ func TestLoadServiceConfigDefaults(t *testing.T) {
 	}
 	if cfg.DownloadDNS != "1.1.1.1" {
 		t.Fatalf("expected default download DNS, got %q", cfg.DownloadDNS)
-	}
-	if cfg.AdminUsername != "admin" {
-		t.Fatalf("expected default admin username, got %q", cfg.AdminUsername)
-	}
-	if cfg.AdminPassword != "secret" {
-		t.Fatalf("expected admin password to be loaded, got %q", cfg.AdminPassword)
 	}
 }
 
@@ -57,6 +49,17 @@ func TestLoadServiceConfig_SessionKeyPath(t *testing.T) {
 	}
 	if cfg.SessionKeyPath != "/etc/auto-deploy/key" {
 		t.Errorf("SESSION_KEY_PATH override = %q", cfg.SessionKeyPath)
+	}
+}
+
+// B28 (FR-053): ADMIN_USERNAME was dead configuration (nothing read it after the
+// account moved into the database) yet an empty value aborted start. The name keeps
+// the task's wording; the CORRECT behaviour asserted here is that start no longer
+// fails. TERBUKTI = this test fails on HEAD with "ADMIN_USERNAME is required".
+func TestLoadServiceConfig_EmptyAdminUsernameFails(t *testing.T) {
+	t.Setenv("ADMIN_USERNAME", "")
+	if _, err := LoadServiceConfig(); err != nil {
+		t.Fatalf("B28: an empty (dead) ADMIN_USERNAME must not fail start, got: %v", err)
 	}
 }
 
@@ -114,53 +117,34 @@ func TestLoadServiceConfig_TrustedProxyCIDRs(t *testing.T) {
 }
 
 func TestLoadServiceConfigWithDownloadDNSOverride(t *testing.T) {
-	t.Setenv("DOWNLOAD_DNS", "9.9.9.9")
-	t.Setenv("ADMIN_PASSWORD", "hunter2")
+	t.Setenv("DOWNLOAD_DNS", "8.8.8.8")
 
 	cfg, err := LoadServiceConfig()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.DownloadDNS != "9.9.9.9" {
-		t.Fatalf("expected download DNS override, got %q", cfg.DownloadDNS)
+	if cfg.DownloadDNS != "8.8.8.8" {
+		t.Fatalf("expected DNS override, got %q", cfg.DownloadDNS)
 	}
 }
 
-func TestLoadServiceConfigWithAdminAuth(t *testing.T) {
-	t.Setenv("ADMIN_USERNAME", "root")
-	t.Setenv("ADMIN_PASSWORD", "hunter2")
-
-	cfg, err := LoadServiceConfig()
+// FR-053 / NFR-004: the account lives in the database and its first password is
+// random, so the old account variables carry no meaning. Whatever they hold (set,
+// empty, blank) must neither fail start nor change the configuration.
+func TestLoadServiceConfigIgnoresRetiredAccountVariables(t *testing.T) {
+	base, err := LoadServiceConfig()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if cfg.AdminUsername != "root" {
-		t.Fatalf("expected admin username root, got %q", cfg.AdminUsername)
-	}
-	if cfg.AdminPassword != "hunter2" {
-		t.Fatalf("expected admin password hunter2, got %q", cfg.AdminPassword)
-	}
-}
-
-func TestLoadServiceConfigRejectsMissingAdminUsername(t *testing.T) {
-	t.Setenv("ADMIN_USERNAME", "")
-	t.Setenv("ADMIN_PASSWORD", "secret")
-
-	_, err := LoadServiceConfig()
-	if err == nil {
-		t.Fatal("expected error for empty ADMIN_USERNAME")
-	}
-}
-
-func TestLoadServiceConfigUsesDefaultAdminPassword(t *testing.T) {
-	t.Setenv("ADMIN_PASSWORD", "")
-
-	cfg, err := LoadServiceConfig()
-	if err != nil {
-		t.Fatalf("LoadServiceConfig: %v", err)
-	}
-	if cfg.AdminPassword != "hehe" {
-		t.Fatalf("expected default admin password, got %q", cfg.AdminPassword)
+	for _, v := range []string{"", "root", "  "} {
+		t.Setenv("ADMIN_USERNAME", v)
+		cfg, err := LoadServiceConfig()
+		if err != nil {
+			t.Fatalf("retired variable set to %q must not fail start: %v", v, err)
+		}
+		if cfg.ListenAddr != base.ListenAddr || cfg.CookieSecure != base.CookieSecure || cfg.SessionKeyPath != base.SessionKeyPath {
+			t.Errorf("retired variable changed the configuration: %+v vs %+v", cfg, base)
+		}
 	}
 }
 

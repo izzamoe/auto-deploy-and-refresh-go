@@ -10,12 +10,10 @@ import (
 )
 
 type ServiceConfig struct {
-	ListenAddr    string
-	QueueDBPath   string
-	QueueMax      int
-	DownloadDNS   string
-	AdminUsername string
-	AdminPassword string
+	ListenAddr  string
+	QueueDBPath string
+	QueueMax    int
+	DownloadDNS string
 	// CookieSecure sets the Secure flag (and the __Host- name prefix) on the admin session cookie. Default true (FR-010); plain-HTTP installations must set COOKIE_SECURE=false explicitly.
 	CookieSecure bool
 	// GitHubToken authenticates GitHub Releases API calls. Optional; empty means unauthenticated requests (subject to GitHub's lower rate limit).
@@ -50,18 +48,6 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		return nil, err
 	}
 
-	username, ok := os.LookupEnv("ADMIN_USERNAME")
-	if !ok {
-		username = "admin"
-	} else if username == "" {
-		return nil, fmt.Errorf("ADMIN_USERNAME is required")
-	}
-
-	password, ok := os.LookupEnv("ADMIN_PASSWORD")
-	if !ok || password == "" {
-		password = "hehe"
-	}
-
 	trusted, err := ParseCIDRList(os.Getenv("TRUSTED_PROXY_CIDRS"))
 	if err != nil {
 		return nil, err
@@ -77,8 +63,6 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		QueueDBPath:       queueDBPath,
 		QueueMax:          queueMax,
 		DownloadDNS:       envOrDefault("DOWNLOAD_DNS", "1.1.1.1"),
-		AdminUsername:     username,
-		AdminPassword:     password,
 		CookieSecure:      cookieSecure,
 		GitHubToken:       envOrDefault("GITHUB_TOKEN", ""),
 		SelfServiceName:   envOrDefault("SELF_SERVICE_NAME", "auto-deploy.service"),

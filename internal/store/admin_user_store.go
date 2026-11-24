@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -63,34 +65,97 @@ func ensureTokenVersionColumn(db *sql.DB) error {
 	return tx.Commit()
 }
 
-// EnsureSeed inserts a single default admin account when the table is empty.
-// The seeded account is flagged must_change_password so the operator is forced
-// to replace the well-known default before it can be used elsewhere.
-// It returns true when a seed was inserted.
-func (s *AdminUserStore) EnsureSeed(username, password string) (bool, error) {
+const (
+	// InitialAdminUsername is the name of the account created on a fresh install.
+	InitialAdminUsername = "admin"
+	// InitialAdminPasswordFile is the file, next to the database, that holds the
+	// one-time random password of that account (mode 0600).
+	InitialAdminPasswordFile = "initial-admin-password"
+
+	initialPasswordLen      = 24
+	initialPasswordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+)
+
+// EnsureInitialAdmin creates the first admin account when the table is empty
+// (Q-3, FR-009). The password is random (24 alphanumeric characters, about 143
+// bits) and is written to <dir>/initial-admin-password with mode 0600; it is never
+// logged, only the path is. The account is flagged must_change_password, and the
+// file is deleted once the password has been changed.
+//
+// An install that already has any account is left untouched (created=false, no
+// file). The file is written BEFORE the row is inserted and removed again if the
+// insert fails, so a password that cannot log in is never left behind and an
+// account whose password was never recorded is never created.
+func (s *AdminUserStore) EnsureInitialAdmin(dir string) (created bool, passwordPath string, err error) {
 	var count int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM admin_users`).Scan(&count); err != nil {
-		return false, fmt.Errorf("admin_user_store: count: %w", err)
+		return false, "", fmt.Errorf("admin_user_store: count: %w", err)
 	}
 	if count > 0 {
-		return false, nil
+		return false, "", nil
 	}
 
-	hash, err := hashPassword(password)
+	password, err := randomPassword(initialPasswordLen)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
-	id, err := generateID()
+	passwordPath = filepath.Join(dir, InitialAdminPasswordFile)
+	if err := writeSecretFile(passwordPath, []byte(password+"\n")); err != nil {
+		return false, "", fmt.Errorf("admin_user_store: write initial password file: %w", err)
+	}
+	if _, err := s.CreateUser(InitialAdminUsername, password, true); err != nil {
+		_ = os.Remove(passwordPath)
+		return false, "", fmt.Errorf("admin_user_store: create initial admin: %w", err)
+	}
+	return true, passwordPath, nil
+}
+
+// randomPassword returns n characters drawn uniformly from the alphabet using
+// rejection sampling, so no character is more likely than another.
+func randomPassword(n int) (string, error) {
+	const limit = 256 - 256%len(initialPasswordAlphabet) // largest multiple of the alphabet size
+	out := make([]byte, 0, n)
+	buf := make([]byte, n*2)
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			return "", fmt.Errorf("admin_user_store: random password: %w", err)
+		}
+		for _, b := range buf {
+			if int(b) >= limit {
+				continue
+			}
+			out = append(out, initialPasswordAlphabet[int(b)%len(initialPasswordAlphabet)])
+			if len(out) == n {
+				break
+			}
+		}
+	}
+	return string(out), nil
+}
+
+// writeSecretFile writes data to path with mode 0600, replacing any previous file,
+// and flushes it to disk.
+func writeSecretFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if _, err := s.db.Exec(
-		`INSERT INTO admin_users (id, username, password_hash, must_change_password) VALUES (?, ?, ?, 1)`,
-		id, username, hash,
-	); err != nil {
-		return false, fmt.Errorf("admin_user_store: seed: %w", err)
+	if err := f.Chmod(0o600); err != nil { // a pre-existing file may have looser bits
+		f.Close()
+		return err
 	}
-	return true, nil
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // CreateUser inserts an account with a bcrypt-hashed password.

@@ -115,13 +115,17 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
-	if seeded, err := adminUsers.EnsureSeed("admin", "11"); err != nil {
-		slog.Error("admin user seed failed", "err", err)
+	// First start: create the admin account with a random one-time password in an
+	// owner-only file next to the database (Q-3). Only the path is logged.
+	if created, passwordPath, err := adminUsers.EnsureInitialAdmin(filepath.Dir(serviceCfg.QueueDBPath)); err != nil {
+		slog.Error("initial admin account setup failed", "err", err)
 		db.Close()
 		os.Exit(1)
-	} else if seeded {
-		slog.Warn("seeded default admin account admin/11 — change the password immediately via the admin UI")
+	} else if created {
+		slog.Warn("created the initial admin account: read its one-time password from the file, sign in, and change it (the file is deleted after the change)",
+			"username", store.InitialAdminUsername, "password_file", passwordPath)
 	}
+	warnRetiredEnv()
 	if err := q.RecoverStale(); err != nil {
 		slog.Warn("stale recovery", "err", err)
 	}

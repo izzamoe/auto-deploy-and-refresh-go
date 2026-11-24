@@ -429,8 +429,8 @@ func TestMigrate_OldStoresWorkOnMigratedDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := users.EnsureSeed("admin", "11"); err != nil {
-		t.Fatalf("EnsureSeed: %v", err)
+	if _, err := users.CreateUser("admin", "a-test-password", true); err != nil {
+		t.Fatalf("CreateUser: %v", err)
 	}
 	app, err := apps.Create("a", "secret", "/opt/a/a", "a.service", "o/r", "a")
 	if err != nil {
