@@ -107,6 +107,13 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
+	// Versioned, expand-only schema migrations. They ALTER apps/admin_users/
+	// deploy_jobs, so they run after the stores (and q.Migrate) created those tables.
+	if err := store.Migrate(db); err != nil {
+		slog.Error("schema migrate failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
 	if seeded, err := adminUsers.EnsureSeed("admin", "11"); err != nil {
 		slog.Error("admin user seed failed", "err", err)
 		db.Close()
