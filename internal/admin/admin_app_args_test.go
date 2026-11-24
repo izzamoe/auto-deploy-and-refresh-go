@@ -10,7 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 )
 
-func newTestAppArgsHertz(t *testing.T) (*server.Hertz, *store.AppStore, *JWTHandler) {
+func newTestAppArgsHertz(t *testing.T) (*server.Hertz, *store.AppStore, *testAuth) {
 	t.Helper()
 	jwt := testJWTHandler(t)
 	db := newTestDB(t)
@@ -23,7 +23,7 @@ func newTestAppArgsHertz(t *testing.T) (*server.Hertz, *store.AppStore, *JWTHand
 		t.Fatalf("NewAppArgsStore: %v", err)
 	}
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
-	RegisterAppArgsRoutesHertz(h, NewAppArgsHandler(appStore, argsStore), HertzSessionAuthMiddleware(jwt, testAuthenticator()))
+	RegisterAppArgsRoutesHertz(h, NewAppArgsHandler(appStore, argsStore), jwt.middleware())
 	return h, appStore, jwt
 }
 

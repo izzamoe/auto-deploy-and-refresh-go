@@ -81,11 +81,11 @@ func newTestTelegramConfigHandler(t *testing.T) (*TelegramConfigHandler, *store.
 	return handler, cfgStore, notifier
 }
 
-func newTestTelegramServer(t *testing.T, handler *TelegramConfigHandler) (*server.Hertz, *JWTHandler) {
+func newTestTelegramServer(t *testing.T, handler *TelegramConfigHandler) (*server.Hertz, *testAuth) {
 	t.Helper()
 	jwt := testJWTHandler(t)
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
-	RegisterTelegramRoutesHertz(h, handler, HertzSessionAuthMiddleware(jwt, testAuthenticator()))
+	RegisterTelegramRoutesHertz(h, handler, jwt.middleware())
 	return h, jwt
 }
 

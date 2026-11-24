@@ -111,7 +111,7 @@ func (m *middleware) serveSession(ctx context.Context, c *app.RequestContext, v 
 			c.Abort()
 			return
 		case CSRFUnsupportedMedia:
-			httpx.WriteError(c, 415, httpx.CodeUnsupportedMediaType, "Request body must be application/json")
+			httpx.WriteError(c, 415, httpx.CodeUnsupportedMediaType, "Content-Type must be application/json")
 			c.Abort()
 			return
 		}

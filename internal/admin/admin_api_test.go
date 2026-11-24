@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/httpx"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
@@ -50,7 +51,7 @@ func dequeueJob(t *testing.T, q *store.DeployQueue, appID, tag string) string {
 	return id
 }
 
-func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.DeployQueue, *JWTHandler) {
+func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.DeployQueue, *testAuth) {
 	t.Helper()
 	jwt := testJWTHandler(t)
 	db := newTestDB(t)
@@ -67,11 +68,11 @@ func newTestAdminAPIHertz(t *testing.T) (*server.Hertz, *store.AppStore, *store.
 	}
 	handler := NewAdminAPIHandler(appStore, queue, progress.NewProgressTracker(), cancel.NewCancelService(queue))
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
-	RegisterAdminAPIRoutesHertz(h, handler, HertzSessionAuthMiddleware(jwt, testAuthenticator()))
+	RegisterAdminAPIRoutesHertz(h, handler, jwt.middleware())
 	return h, appStore, queue, jwt
 }
 
-func adminAPIRequestHertz(jwt *JWTHandler, method, path, body string) *app.RequestContext {
+func adminAPIRequestHertz(jwt *testAuth, method, path, body string) *app.RequestContext {
 	c := app.NewContext(0)
 	c.Request.SetRequestURI(path)
 	c.Request.SetMethod(method)
@@ -80,7 +81,8 @@ func adminAPIRequestHertz(jwt *JWTHandler, method, path, body string) *app.Reque
 		c.Request.Header.Set("Content-Type", "application/json")
 	}
 	token, _ := jwt.issueJWT("admin")
-	c.Request.Header.Set("Cookie", jwtCookieName+"="+token)
+	c.Request.Header.Set("Cookie", testSessionCookieName+"="+token)
+	setBrowserHeaders(c)
 	return c
 }
 
@@ -115,14 +117,14 @@ func TestAdminAPIUnauthorizedReturnsJSON(t *testing.T) {
 	if c.Response.StatusCode() != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", c.Response.StatusCode())
 	}
-	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != `Basic realm="auto-deploy admin"` {
-		t.Fatalf("expected WWW-Authenticate header, got %q", got)
+	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != "" {
+		t.Fatalf("K1: a 401 for a request without Authorization must not carry WWW-Authenticate, got %q", got)
 	}
 	if contentType := string(c.Response.Header.Peek("Content-Type")); !strings.HasPrefix(contentType, "application/json") {
 		t.Fatalf("expected JSON Content-Type, got %q", contentType)
 	}
-	body := decodeAdminAPIResponseHertz[adminAPIErrorResponse](t, c)
-	if body.Status != "error" || body.Error != "unauthorized" {
+	body := decodeAdminAPIResponseHertz[httpx.APIError](t, c)
+	if body.Status != "error" || body.Code != httpx.CodeSessionExpired || body.Error == "" {
 		t.Fatalf("unexpected auth error body: %+v", body)
 	}
 }
@@ -142,7 +144,8 @@ func TestDeleteAppHertzWorksWithoutContentType(t *testing.T) {
 	c.Request.SetRequestURI("/admin/api/apps/" + created.App.ID)
 	c.Request.SetMethod(http.MethodDelete)
 	token, _ := jwt.issueJWT("admin")
-	c.Request.Header.Set("Cookie", jwtCookieName+"="+token)
+	c.Request.Header.Set("Cookie", testSessionCookieName+"="+token)
+	setBrowserHeaders(c)
 	h.ServeHTTP(context.Background(), c)
 
 	if c.Response.StatusCode() != http.StatusOK {
@@ -496,7 +499,8 @@ func TestAdminAPIErrorBodiesAreJSON(t *testing.T) {
 	missingContentType.Request.SetMethod("POST")
 	missingContentType.Request.SetBodyString(`{"name":"x"}`)
 	token, _ := jwt.issueJWT("admin")
-	missingContentType.Request.Header.Set("Cookie", jwtCookieName+"="+token)
+	missingContentType.Request.Header.Set("Cookie", testSessionCookieName+"="+token)
+	setBrowserHeaders(missingContentType)
 	missingContentType = serveAdminAPIHertz(t, h, missingContentType)
 	if missingContentType.Response.StatusCode() != http.StatusUnsupportedMediaType {
 		t.Fatalf("expected 415 for missing JSON Content-Type, got %d body=%s", missingContentType.Response.StatusCode(), string(missingContentType.Response.Body()))

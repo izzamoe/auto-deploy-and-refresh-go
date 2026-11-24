@@ -65,11 +65,6 @@ func main() {
 		os.Exit(1)
 	}
 	hlog.SetLogger(hertzLogger)
-	jwtHandler, err := admin.NewJWTHandler()
-	if err != nil {
-		slog.Error("jwt handler init failed", "err", err)
-		os.Exit(1)
-	}
 	serviceCfg, err := config.LoadServiceConfig()
 	if err != nil {
 		slog.Error(err.Error())
@@ -169,18 +164,27 @@ func main() {
 	templates := adminHandler.Templates()
 	progressAdminHandler := admin.NewProgressAdminHandler(tracker, appStore, q, templates)
 	adminAPIHandler := admin.NewAdminAPIHandler(appStore, q, tracker, cancelService)
-	// T031 compile adjustment: the account handler now needs the v1 session manager.
-	// The full wiring (middleware, session/token routes, removal of the old login
-	// path) is T033.
-	sessionKey, _, err := auth.LoadOrCreateKey(serviceCfg.SessionKeyPath)
+	// Sessions (FR-003..FR-006): persistent signing key, server-side session rows,
+	// token_version revocation. Tokens: hashed API tokens for automation (FR-014).
+	sessionKey, regenerated, err := auth.LoadOrCreateKey(serviceCfg.SessionKeyPath)
 	if err != nil {
 		slog.Error("session key init failed", "err", err)
 		db.Close()
 		os.Exit(1)
 	}
+	if regenerated {
+		slog.Warn("session key was missing or corrupt and has been regenerated; every existing session is invalid", "path", serviceCfg.SessionKeyPath)
+	}
 	adminSessions, err := store.NewAdminSessionStore(db)
 	if err != nil {
 		slog.Error("admin session store init failed", "err", err)
+		db.Close()
+		os.Exit(1)
+	}
+	go cleanSessions(ctx, adminSessions)
+	apiTokens, err := store.NewAPITokenStore(db)
+	if err != nil {
+		slog.Error("api token store init failed", "err", err)
 		db.Close()
 		os.Exit(1)
 	}
@@ -190,7 +194,24 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
-	accountHandler := admin.NewAccountHandler(adminUsers, sessionMgr, filepath.Join(filepath.Dir(serviceCfg.QueueDBPath), "initial-admin-password"))
+	if !serviceCfg.CookieSecure {
+		slog.Warn("COOKIE_SECURE=false: the session cookie is sent over plain HTTP; use this only for local development")
+	}
+	clientIPs := auth.NewClientIPResolver(serviceCfg.TrustedProxyCIDRs)
+	authMW := auth.Middleware(auth.MiddlewareConfig{
+		Sessions:     sessionMgr,
+		Tokens:       apiTokens,
+		TokenLimiter: auth.NewWindow(auth.TokenFailureMax, auth.TokenFailureWindow, nil),
+		ClientIP:     clientIPs,
+	})
+	sessionHandler := admin.NewSessionHandler(admin.SessionHandlerConfig{
+		Sessions: sessionMgr,
+		Users:    adminUsers,
+		Limiter:  auth.NewLoginLimiter(nil),
+		ClientIP: clientIPs,
+	})
+	tokensHandler := admin.NewTokensHandler(apiTokens)
+	accountHandler := admin.NewAccountHandler(adminUsers, sessionMgr, filepath.Join(filepath.Dir(serviceCfg.QueueDBPath), store.InitialAdminPasswordFile))
 	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
 	githubConfigStore, err := store.NewGitHubConfigStore(db)
 	if err != nil {
@@ -218,12 +239,6 @@ func main() {
 	appArgsHandler := admin.NewAppArgsHandler(appStore, appArgsStore)
 	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore, appEnvStore, appArgsStore)
 	systemLogsHandler := admin.NewSystemLogsHandler(serviceCfg.SelfServiceName)
-	loginHandler, err := admin.NewLoginHandler(serviceCfg, jwtHandler, adminUsers)
-	if err != nil {
-		slog.Error("login handler init failed", "err", err)
-		db.Close()
-		os.Exit(1)
-	}
 	h := server.New(
 		server.WithHostPorts(serviceCfg.ListenAddr),
 		server.WithReadTimeout(45*time.Second),
@@ -239,22 +254,25 @@ func main() {
 		server.WithNetwork("tcp"),
 	)
 	admin.SetupMiddleware(h)
-	auth := admin.HertzSessionAuthMiddleware(jwtHandler, adminUsers)
-	admin.RegisterLoginRoutesHertz(h, loginHandler)
+	// publicPage lets the static admin shell load without a session (Q-17: it holds no
+	// data; every data endpoint and the event socket sit behind authMW).
+	publicPage := func(ctx context.Context, c *app.RequestContext) { c.Next(ctx) }
+	admin.RegisterSessionRoutesHertz(h, sessionHandler, authMW)
+	admin.RegisterTokenRoutesHertz(h, tokensHandler, authMW)
 	h.POST("/webhook", multiAppWebhookHandler(admissionSvc))
 	llmstxt.RegisterRoutesHertz(h)
-	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, auth)
-	admin.RegisterAccountRoutesHertz(h, accountHandler, auth)
-	admin.RegisterTelegramRoutesHertz(h, telegramHandler, auth)
-	admin.RegisterGitHubRoutesHertz(h, githubConfigHandler, auth)
-	admin.RegisterAppEnvRoutesHertz(h, appEnvHandler, auth)
-	admin.RegisterAppArgsRoutesHertz(h, appArgsHandler, auth)
-	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, auth)
-	admin.RegisterReleasesRoutesHertz(h, releasesHandler, auth)
-	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, auth)
-	admin.RegisterSystemRoutesHertz(h, systemLogsHandler, auth)
-	admin.RegisterAdminProgressRoutesHertz(h, progressAdminHandler, auth)
-	admin.RegisterAdminSPARoutesHertz(h, auth)
+	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, authMW)
+	admin.RegisterAccountRoutesHertz(h, accountHandler, authMW)
+	admin.RegisterTelegramRoutesHertz(h, telegramHandler, authMW)
+	admin.RegisterGitHubRoutesHertz(h, githubConfigHandler, authMW)
+	admin.RegisterAppEnvRoutesHertz(h, appEnvHandler, authMW)
+	admin.RegisterAppArgsRoutesHertz(h, appArgsHandler, authMW)
+	admin.RegisterAdminAPIRoutesHertz(h, adminAPIHandler, authMW)
+	admin.RegisterReleasesRoutesHertz(h, releasesHandler, authMW)
+	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, authMW)
+	admin.RegisterSystemRoutesHertz(h, systemLogsHandler, authMW)
+	admin.RegisterAdminProgressRoutesHertz(h, progressAdminHandler, authMW)
+	admin.RegisterAdminSPARoutesHertz(h, publicPage)
 	go func() {
 		slog.Info("starting", "addr", serviceCfg.ListenAddr)
 		if err := h.Run(); err != nil {
@@ -312,6 +330,32 @@ func multiAppWebhookHandler(admissionSvc *admission.AdmissionService) app.Handle
 			}
 		default:
 			c.JSON(consts.StatusInternalServerError, response{Status: "error", Error: "unexpected outcome"})
+		}
+	}
+}
+
+// sessionRetention is how long expired or revoked session rows are kept.
+const sessionRetention = 7 * 24 * time.Hour
+
+// cleanSessions deletes stale session rows at start and then every hour.
+func cleanSessions(ctx context.Context, sessions *store.AdminSessionStore) {
+	run := func() {
+		n, err := sessions.DeleteStale(time.Now().Add(-sessionRetention))
+		if err != nil {
+			slog.Warn("session cleanup failed", "err", err)
+		} else if n > 0 {
+			slog.Info("deleted stale admin sessions", "count", n)
+		}
+	}
+	run()
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
 		}
 	}
 }

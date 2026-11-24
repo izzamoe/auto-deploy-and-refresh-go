@@ -22,21 +22,26 @@ func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
 	if c.Response.StatusCode() != http.StatusUnauthorized {
 		t.Errorf("Expected 401 Unauthorized, got %d", c.Response.StatusCode())
 	}
-	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != `Basic realm="auto-deploy admin"` {
-		t.Errorf("Expected WWW-Authenticate header %q, got %q", `Basic realm="auto-deploy admin"`, got)
+	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != "" {
+		t.Errorf("K1: a request without Authorization must not get a WWW-Authenticate challenge, got %q", got)
 	}
 }
 
-func TestHertzAdminAuthRejectsWrongPassword(t *testing.T) {
+// A script client that talks Basic still gets the standard challenge, but the admin
+// password is never a valid Basic credential (only API tokens are, FR-014).
+func TestHertzAdminAuthRejectsAdminPasswordViaBasic(t *testing.T) {
 	t.Parallel()
 	middleware := testHertzSessionAuth(t)
 	c := newHertzTestContext(http.MethodGet, "/admin/api/apps", nil, nil)
-	c.Request.SetBasicAuth("admin", "wrong")
+	c.Request.SetBasicAuth("admin", "secret")
 
 	middleware(context.Background(), c)
 
 	if c.Response.StatusCode() != http.StatusUnauthorized {
-		t.Errorf("Expected 401 Unauthorized for wrong password, got %d", c.Response.StatusCode())
+		t.Errorf("Expected 401 Unauthorized for the admin password via Basic, got %d", c.Response.StatusCode())
+	}
+	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != `Basic realm="auto-deploy api"` {
+		t.Errorf("Expected the Basic challenge for a Basic client, got %q", got)
 	}
 }
 

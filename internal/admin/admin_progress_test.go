@@ -71,8 +71,8 @@ func TestProgressWebSocketRequiresAuth(t *testing.T) {
 		t.Fatal("expected unauthorized response")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected unauthorized websocket handshake to fail via redirect or missing redirected login route, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected the unauthorized websocket handshake to be refused with 401, got %d", resp.StatusCode)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestProgressWebSocketRejectsWrongPassword(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	header := http.Header{}
-	header.Set("Cookie", jwtCookieName+"=wrong")
+	header.Set("Cookie", testSessionCookieName+"=wrong")
 
 	_, resp, err := websocket.Dial(ctx, url+"/admin/progress/ws", &websocket.DialOptions{HTTPHeader: header})
 	if err == nil {
@@ -97,8 +97,8 @@ func TestProgressWebSocketRejectsWrongPassword(t *testing.T) {
 		t.Fatal("expected unauthorized response")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected unauthorized websocket handshake to fail via redirect or missing redirected login route, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected the unauthorized websocket handshake to be refused with 401, got %d", resp.StatusCode)
 	}
 }
 
@@ -319,11 +319,11 @@ func TestRegisterAdminProgressRoutesHertz_RequiresAuth(t *testing.T) {
 	engine := makeProgressHertzEngine(t, tracker)
 
 	w := ut.PerformRequest(engine.Engine, "GET", "/admin/progress/ws", nil)
-	if w.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
-	if got := w.Header().Get("Location"); got != "/admin/login" {
-		t.Fatalf("expected login redirect, got %q", got)
+	if got := w.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("must not challenge, got %q", got)
 	}
 }
 
@@ -332,9 +332,9 @@ func TestRegisterAdminProgressRoutesHertz_RejectsWrongPassword(t *testing.T) {
 	tracker := progress.NewProgressTracker()
 	engine := makeProgressHertzEngine(t, tracker)
 
-	w := ut.PerformRequest(engine.Engine, "GET", "/admin/progress/ws", nil, ut.Header{Key: "Cookie", Value: jwtCookieName + "=wrong"})
-	if w.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d", w.Code)
+	w := ut.PerformRequest(engine.Engine, "GET", "/admin/progress/ws", nil, ut.Header{Key: "Cookie", Value: testSessionCookieName + "=wrong"})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
 

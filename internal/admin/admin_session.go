@@ -61,7 +61,7 @@ func (h *SessionHandler) CreateHertz(ctx context.Context, c *app.RequestContext)
 		httpx.WriteError(c, 403, httpx.CodeCSRFRejected, "Cross-site request rejected")
 		return
 	case auth.CSRFUnsupportedMedia:
-		httpx.WriteError(c, 415, httpx.CodeUnsupportedMediaType, "Request body must be application/json")
+		httpx.WriteError(c, 415, httpx.CodeUnsupportedMediaType, "Content-Type must be application/json")
 		return
 	}
 

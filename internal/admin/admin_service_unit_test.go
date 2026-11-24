@@ -35,14 +35,14 @@ func stubServiceUnitEnv(t *testing.T) (dir string, calls *[][]string) {
 	return dir, &recorded
 }
 
-func newTestServiceUnitAdminHertz(t *testing.T) (*server.Hertz, *store.AppStore, *JWTHandler) {
+func newTestServiceUnitAdminHertz(t *testing.T) (*server.Hertz, *store.AppStore, *testAuth) {
 	h, appStore, _, jwt := newTestServiceUnitAdminHertzWithArgs(t)
 	return h, appStore, jwt
 }
 
 // newTestServiceUnitAdminHertzWithArgs is the full variant that also hands back
 // the args store, so a test can seed ExecStart flags before rendering a unit.
-func newTestServiceUnitAdminHertzWithArgs(t *testing.T) (*server.Hertz, *store.AppStore, *store.AppArgsStore, *JWTHandler) {
+func newTestServiceUnitAdminHertzWithArgs(t *testing.T) (*server.Hertz, *store.AppStore, *store.AppArgsStore, *testAuth) {
 	t.Helper()
 	jwt := testJWTHandler(t)
 	db := newTestDB(t)
@@ -60,7 +60,7 @@ func newTestServiceUnitAdminHertzWithArgs(t *testing.T) (*server.Hertz, *store.A
 	}
 	handler := NewServiceUnitAdminHandler(appStore, envStore, argsStore)
 	h := server.New(server.WithHostPorts("127.0.0.1:0"))
-	RegisterServiceUnitRoutesHertz(h, handler, HertzSessionAuthMiddleware(jwt, testAuthenticator()))
+	RegisterServiceUnitRoutesHertz(h, handler, jwt.middleware())
 	return h, appStore, argsStore, jwt
 }
 

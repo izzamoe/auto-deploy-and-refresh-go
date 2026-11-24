@@ -106,19 +106,9 @@ type adminUserAuthenticator interface {
 	GetByUsername(username string) (*store.AdminUser, error)
 }
 
-// ctxKeyAdminUser holds the authenticated admin username in the request context.
-const ctxKeyAdminUser = "adminUsername"
-
-// currentAdminUsername returns the username set by HertzSessionAuthMiddleware.
-func currentAdminUsername(c *app.RequestContext) string {
-	if v, ok := c.Get(ctxKeyAdminUser); ok {
-		if username, ok := v.(string); ok {
-			return username
-		}
-	}
-	return ""
-}
-
+// LoginHandler is the pre-v1 server-rendered login form. It is NOT mounted any more
+// (login is POST /admin/api/v1/session); the code stays only until the SSR cleanup
+// task deletes this file.
 type LoginHandler struct {
 	cfg   *config.ServiceConfig
 	jwt   *JWTHandler
@@ -188,62 +178,6 @@ func (h *LoginHandler) HandleLoginHertz(ctx context.Context, c *app.RequestConte
 func (h *LoginHandler) HandleLogoutHertz(ctx context.Context, c *app.RequestContext) {
 	c.SetCookie(jwtCookieName, "", -1, "/", "", protocol.CookieSameSiteLaxMode, h.cfg.CookieSecure, true)
 	c.Redirect(consts.StatusFound, []byte("/admin/login"))
-}
-
-func HertzSessionAuthMiddleware(jwt *JWTHandler, users adminUserAuthenticator) app.HandlerFunc {
-	return func(ctx context.Context, c *app.RequestContext) {
-		path := string(c.Request.URI().Path())
-		isAPIOrEvents := strings.HasPrefix(path, "/admin/api") || strings.HasPrefix(path, "/admin/events")
-
-		username, ok := authenticateAdminRequest(c, jwt, users, isAPIOrEvents)
-		if !ok {
-			if isAPIOrEvents {
-				hertzRequireAuth(c)
-			} else {
-				c.Redirect(consts.StatusFound, []byte("/admin/login"))
-			}
-			c.Abort()
-			return
-		}
-
-		// Force-password-change gate: until the seeded default is replaced, the
-		// data/action API is blocked except the account endpoints. The SPA HTML
-		// shell is never gated (it decides to show the change-password screen).
-		if isAPIOrEvents && !strings.HasPrefix(path, "/admin/api/account") {
-			if user, err := users.GetByUsername(username); err == nil && user.MustChangePassword {
-				writeAdminAPIErrorHertz(c, consts.StatusForbidden, "Password change required")
-				c.Abort()
-				return
-			}
-		}
-
-		c.Set(ctxKeyAdminUser, username)
-		c.Next(ctx)
-	}
-}
-
-// authenticateAdminRequest resolves the caller's admin username from Basic auth
-// (API paths) or the session cookie. A Basic header that is present but invalid
-// fails without falling back to the cookie.
-func authenticateAdminRequest(c *app.RequestContext, jwt *JWTHandler, users adminUserAuthenticator, isAPIOrEvents bool) (string, bool) {
-	if isAPIOrEvents {
-		authHeader := string(c.GetHeader("Authorization"))
-		if strings.HasPrefix(authHeader, "Basic ") {
-			username, password, hasAuth := c.Request.BasicAuth()
-			if hasAuth {
-				if user, ok, err := users.VerifyPassword(username, password); err == nil && ok {
-					return user.Username, true
-				}
-			}
-			return "", false
-		}
-	}
-
-	token := string(c.Cookie(jwtCookieName))
-	if sub, ok := jwt.validateJWT(token); ok {
-		return sub, true
-	}
-	return "", false
 }
 
 func RegisterLoginRoutesHertz(h *server.Hertz, handler *LoginHandler) {

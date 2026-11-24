@@ -152,15 +152,25 @@ func TestAdminSPARoutesHertzRequireAuth(t *testing.T) {
 	t.Parallel()
 	engine := newTestAdminSPAHertzEngine(t)
 
+	// When the v1 auth middleware is applied, an unauthenticated browser gets the JSON
+	// error contract: no redirect to the retired SSR login and no Basic challenge.
+	// (cmd/server mounts the static shell publicly, Q-17; this composition test keeps
+	// the handlers safe to put behind auth.)
 	for _, path := range []string{"/admin", "/admin/assets/missing.js"} {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			w := ut.PerformRequest(engine.Engine, http.MethodGet, path, nil)
-			if w.Code != http.StatusFound {
+			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("expected 401, got %d body=%s", w.Code, w.Body.String())
 			}
-			if got := w.Header().Get("Location"); got != "/admin/login" {
-				t.Fatalf("expected login redirect, got %q", got)
+			if got := w.Header().Get("Location"); got != "" {
+				t.Fatalf("must not redirect, got Location %q", got)
+			}
+			if got := w.Header().Get("WWW-Authenticate"); got != "" {
+				t.Fatalf("must not challenge, got %q", got)
+			}
+			if !strings.Contains(w.Body.String(), `"code":"session_expired"`) {
+				t.Fatalf("expected the JSON error contract, got %s", w.Body.String())
 			}
 		})
 	}
