@@ -250,6 +250,10 @@ func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.Prog
 // repositories). A nil resolver reproduces DeployWithControl's public-URL path.
 func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
 	tracker.Start(app.ID, jobID, tag)
+	// B10: whatever path returns (cancel checkpoints included), the tracker entry
+	// ends terminal. A deploy canceled mid-way is "failed" for the tracker (its
+	// phases have no "canceled"); the job status itself is "canceled".
+	defer tracker.FailIfActive(app.ID, jobID)
 
 	tmpPath := app.BinaryPath + ".tmp"
 
