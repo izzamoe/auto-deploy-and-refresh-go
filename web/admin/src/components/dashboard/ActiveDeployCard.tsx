@@ -5,6 +5,7 @@ import { Rocket } from "lucide-react";
 import { useId } from "react";
 import { useI18n } from "@/i18n";
 import { useProgressList } from "@/lib/events/provider";
+import { CARD_TITLE } from "@/components/common/cardStyles";
 
 /** Accent (green gradient) card: running + queued deploys and the live progress of one. */
 export function ActiveDeployCard({ running, queued }: { running: number; queued: number }) {
@@ -21,10 +22,10 @@ export function ActiveDeployCard({ running, queued }: { running: number; queued:
       className="flex flex-col gap-2 rounded-card bg-gradient-to-br from-gradient-from to-gradient-to p-5 text-gradient-foreground shadow-card"
     >
       <div className="flex items-center justify-between gap-2">
-        <h2 id={id} className="text-sm font-medium">
+        <h2 id={id} className={CARD_TITLE}>
           {t("dashboard.active")}
         </h2>
-        <span aria-hidden="true" className="inline-flex size-9 items-center justify-center rounded-full bg-white/20">
+        <span aria-hidden="true" className="inline-flex size-9 items-center justify-center rounded-full bg-card text-primary-text">
           <Rocket className="size-4" />
         </span>
       </div>

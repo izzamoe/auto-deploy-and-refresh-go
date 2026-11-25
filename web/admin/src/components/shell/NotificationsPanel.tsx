@@ -54,7 +54,7 @@ export function NotificationsPanel() {
         >
           <Bell className="size-5" aria-hidden="true" />
           {count > 0 && (
-            <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 flex min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[11px] font-semibold text-destructive-foreground">
+            <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 flex min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-semibold text-destructive-foreground">
               {count > 9 ? "9+" : count}
             </span>
           )}

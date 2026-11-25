@@ -25,8 +25,8 @@ export function Gauge({ value, label, className }: GaugeProps) {
   const v = value === null ? 0 : Math.min(1, Math.max(0, value));
   return (
     <svg role="img" aria-label={label} viewBox="0 0 200 110" className={className}>
-      <path d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`} fill="none" strokeWidth={STROKE} strokeLinecap="round" className="stroke-muted" />
-      {v > 0 && <path d={arc(v)} fill="none" strokeWidth={STROKE} strokeLinecap="round" className="stroke-primary" data-testid="gauge-arc" />}
+      <path d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`} fill="none" strokeWidth={STROKE} strokeLinecap="round" className="stroke-track" />
+      {v > 0 && <path d={arc(v)} fill="none" strokeWidth={STROKE} strokeLinecap="round" className="stroke-primary-text" data-testid="gauge-arc" />}
     </svg>
   );
 }

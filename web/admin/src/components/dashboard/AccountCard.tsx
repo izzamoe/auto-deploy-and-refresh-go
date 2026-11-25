@@ -6,6 +6,7 @@ import { useId } from "react";
 import { useSession } from "@/components/shell/SessionGate";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
+import { CARD_TITLE } from "@/components/common/cardStyles";
 
 /** Initials avatar (own SVG-free monogram, no photo), username and session expiry. */
 export function AccountCard() {
@@ -15,7 +16,7 @@ export function AccountCard() {
   const initials = session.username.trim().slice(0, 2).toUpperCase() || "?";
   return (
     <section aria-labelledby={id} data-testid="account-card" className="rounded-card bg-card p-5 shadow-card">
-      <h2 id={id} className="text-sm font-medium text-muted-foreground">
+      <h2 id={id} className={CARD_TITLE}>
         {t("dashboard.account.title")}
       </h2>
       <div className="mt-3 flex items-center gap-3">

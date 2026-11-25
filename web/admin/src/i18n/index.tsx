@@ -52,8 +52,22 @@ export function detectLocale(stored: string | null | undefined, languages: reado
   return /^(id|in)(-|$)/i.test(first) ? "id" : "en";
 }
 
+// Plural forms: a message with a `<key>.one` sibling is plural. The CLDR category (Intl.PluralRules)
+// of the first numeric param among PLURAL_PARAMS picks `<key>.<category>`; the plain key is the
+// "other" form and the fallback. Indonesian has only "other", so its `.one` text is never chosen.
+const PLURAL_PARAMS = ["n", "count", "active", "total"] as const;
+
+function pluralKey(locale: Locale, key: MessageKey, params: Params | undefined): MessageKey {
+  if (!params) return key;
+  const name = PLURAL_PARAMS.find((p) => typeof params[p] === "number");
+  if (!name) return key;
+  const candidate = `${key}.${new Intl.PluralRules(INTL_TAG[locale]).select(params[name] as number)}` as MessageKey;
+  return DICTIONARIES[locale]?.[candidate] !== undefined ? candidate : key;
+}
+
 export function translate(locale: Locale, key: MessageKey, params?: Params): string {
-  const template = DICTIONARIES[locale]?.[key] ?? DICTIONARIES.id?.[key] ?? key;
+  const picked = pluralKey(locale, key, params);
+  const template = DICTIONARIES[locale]?.[picked] ?? DICTIONARIES.id?.[key] ?? key;
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (whole, name: string) => (name in params ? String(params[name]) : whole));
 }

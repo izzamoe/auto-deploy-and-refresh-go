@@ -61,6 +61,7 @@ export const idApps = {
   "logs.app.desc": "Journal systemd (journalctl) untuk service app ini.",
   "logs.show": "Tampilkan",
   "logs.lines": "{n} baris",
+  "logs.lines.one": "{n} baris",
   "logs.all": "Semua",
   "logs.newestFirst": "terbaru di atas",
   "logs.loading": "Memuat log…",

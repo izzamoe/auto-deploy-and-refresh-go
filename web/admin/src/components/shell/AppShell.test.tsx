@@ -95,7 +95,7 @@ describe("Header", () => {
     installFetch(okRoutes());
     mountShell();
     expect(await screen.findByTestId("greeting")).toHaveTextContent("Halo, budi");
-    await waitFor(() => expect(screen.getByTestId("subtitle")).toHaveTextContent("3 app aktif · 2 deploy berjalan"));
+    await waitFor(() => expect(screen.getByTestId("subtitle")).toHaveTextContent("3 app aktif · 2 berjalan"));
   });
 
   it("a failing /stats does not break the shell", async () => {
@@ -127,6 +127,58 @@ describe("Header", () => {
   });
 });
 
+describe("icon-only controls (visual review item 8)", () => {
+  it("show their text label as a tooltip on hover and on keyboard focus, and Escape closes it", async () => {
+    installFetch(okRoutes());
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    expect(screen.queryByTestId("rail-tip")).toBeNull();
+
+    const link = screen.getByRole("link", { name: "Riwayat" });
+    expect(link).not.toHaveAttribute("title"); // no second, native tooltip
+    fireEvent.mouseEnter(link.parentElement as HTMLElement);
+    expect(screen.getByTestId("rail-tip")).toHaveTextContent("Riwayat");
+    expect(screen.getByTestId("rail-tip")).toHaveAttribute("aria-hidden", "true"); // the control's own name is announced
+    fireEvent.mouseLeave(link.parentElement as HTMLElement);
+    expect(screen.queryByTestId("rail-tip")).toBeNull();
+
+    fireEvent.focus(link);
+    expect(screen.getByTestId("rail-tip")).toHaveTextContent("Riwayat");
+    fireEvent.keyDown(link, { key: "Escape" });
+    expect(screen.queryByTestId("rail-tip")).toBeNull();
+
+    fireEvent.focus(screen.getByRole("button", { name: "Keluar" }));
+    expect(screen.getByTestId("rail-tip")).toHaveTextContent("Keluar");
+    fireEvent.blur(screen.getByRole("button", { name: "Keluar" }));
+    expect(screen.queryByTestId("rail-tip")).toBeNull();
+  });
+
+  it("the language buttons' accessible names START with their visible text (WCAG 2.5.3 label in name)", async () => {
+    installFetch(okRoutes());
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    expect(screen.getByRole("button", { name: "ID Bahasa Indonesia" })).toHaveTextContent(/^ID/);
+    expect(screen.getByRole("button", { name: "EN English" })).toHaveTextContent(/^EN/);
+  });
+
+  it("the theme toggle names the theme it switches to in its tooltip", async () => {
+    installFetch(okRoutes());
+    mountShell();
+    const toggle = await screen.findByRole("button", { name: "Ganti tema" });
+    fireEvent.focus(toggle);
+    expect(screen.getByTestId("rail-tip")).toHaveTextContent("Gelap");
+  });
+
+  it("the connection dot has a text label (visible on wide screens, always readable by assistive technology)", async () => {
+    installFetch(okRoutes());
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Terputus");
+    expect(status).toHaveAttribute("title", "Terputus");
+  });
+});
+
 describe("theme and language", () => {
   it("the theme toggle switches the dark class on <html>", async () => {
     installFetch(okRoutes());
@@ -144,15 +196,15 @@ describe("theme and language", () => {
     await screen.findByTestId("admin-shell");
     expect(screen.getByRole("link", { name: "Riwayat" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    fireEvent.click(screen.getByRole("button", { name: /English/ }));
     expect(screen.getByRole("link", { name: "History" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeInTheDocument();
     expect(await screen.findByText("Hello, budi")).toBeInTheDocument();
     expect(window.localStorage.getItem("ad.locale")).toBe("en");
     expect(document.documentElement.lang).toBe("en");
-    expect(screen.getByRole("button", { name: "English" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /English/ })).toHaveAttribute("aria-pressed", "true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Bahasa Indonesia" }));
+    fireEvent.click(screen.getByRole("button", { name: /Bahasa Indonesia/ }));
     expect(screen.getByRole("link", { name: "Riwayat" })).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("id");
   });

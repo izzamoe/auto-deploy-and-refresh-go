@@ -50,6 +50,13 @@
   --color-ring: var(--ring);
   --color-nav: var(--nav);
   --color-nav-foreground: var(--nav-foreground);
+  --color-rail: var(--rail);
+  --color-rail-foreground: var(--rail-foreground);
+  --color-rail-muted: var(--rail-muted);
+  --color-rail-active: var(--rail-active);
+  --color-rail-active-foreground: var(--rail-active-foreground);
+  --color-track: var(--track);
+  --color-danger-chart: var(--danger-chart);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

@@ -10,6 +10,7 @@ import type { MessageKey } from "@/i18n";
 import { LOGIN_PATH, api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { LocaleToggle } from "./LocaleToggle";
+import { RailTip } from "./RailTip";
 import { ThemeToggle } from "./ThemeToggle";
 
 interface NavItem {
@@ -51,40 +52,41 @@ export function Sidebar() {
     >
       <nav
         aria-label={t("nav.label")}
-        className="flex items-center gap-1 overflow-x-auto rounded-pill bg-card p-2 shadow-card md:h-full md:flex-col md:overflow-visible md:py-4"
+        className="flex items-center gap-1 overflow-x-auto rounded-pill bg-rail p-2 shadow-card md:h-full md:flex-col md:overflow-y-auto md:overflow-x-hidden md:py-4 md:[scrollbar-width:none]"
       >
         {NAV_ITEMS.map(({ href, label, icon: Icon, match }) => {
           const active = match(pathname);
           return (
-            <Link
-              key={href}
-              href={href}
-              aria-label={t(label)}
-              title={t(label)}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "inline-flex size-11 shrink-0 items-center justify-center rounded-full",
-                active ? "bg-nav text-nav-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              <Icon className="size-5" aria-hidden="true" />
-            </Link>
+            <RailTip key={href} label={t(label)}>
+              <Link
+                href={href}
+                aria-label={t(label)}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "inline-flex size-11 shrink-0 items-center justify-center rounded-full focus-visible:outline-rail-foreground",
+                  active ? "bg-rail-active text-rail-active-foreground" : "text-rail-muted hover:bg-white/10 hover:text-rail-foreground",
+                )}
+              >
+                <Icon className="size-5" aria-hidden="true" />
+              </Link>
+            </RailTip>
           );
         })}
 
         <div className="ml-auto flex items-center gap-1 md:ml-0 md:mt-auto md:flex-col">
           <ThemeToggle />
           <LocaleToggle className="md:flex-col" />
-          <button
-            type="button"
-            onClick={() => logout.mutate()}
-            disabled={logout.isPending}
-            aria-label={t("shell.logout")}
-            title={t("shell.logout")}
-            className="inline-flex size-11 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-          >
-            <LogOut className="size-5" aria-hidden="true" />
-          </button>
+          <RailTip label={t("shell.logout")}>
+            <button
+              type="button"
+              onClick={() => logout.mutate()}
+              disabled={logout.isPending}
+              aria-label={t("shell.logout")}
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full text-rail-muted hover:bg-white/10 hover:text-rail-foreground focus-visible:outline-rail-foreground disabled:opacity-50"
+            >
+              <LogOut className="size-5" aria-hidden="true" />
+            </button>
+          </RailTip>
         </div>
       </nav>
       {logout.isError && (

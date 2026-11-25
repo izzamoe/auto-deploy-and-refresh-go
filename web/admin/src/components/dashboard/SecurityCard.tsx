@@ -11,6 +11,7 @@ import { useI18n } from "@/i18n";
 import { api } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
+import { CARD_TITLE } from "@/components/common/cardStyles";
 
 type State = "ok" | "warn" | "unknown";
 
@@ -41,11 +42,11 @@ export function SecurityCard() {
   const https = typeof window !== "undefined" && window.location.protocol === "https:";
 
   return (
-    <section aria-labelledby={id} data-testid="security-card" className="rounded-card bg-card p-5 shadow-card">
-      <h2 id={id} className="text-lg font-semibold">
+    <section aria-labelledby={id} data-testid="security-card" className="flex flex-col rounded-card bg-card p-5 shadow-card">
+      <h2 id={id} className={CARD_TITLE}>
         {t("dashboard.security.title")}
       </h2>
-      <ul className="mt-3 space-y-3">
+      <ul className="mb-4 mt-3 space-y-3">
         <Row state={session.mustChangePassword ? "warn" : "ok"} text={t("dashboard.security.password")} />
         <Row
           state={activeTokens === undefined ? "unknown" : "ok"}
@@ -57,7 +58,7 @@ export function SecurityCard() {
         />
         <Row state={https ? "ok" : "warn"} text={https ? t("dashboard.security.cookie") : t("dashboard.security.cookieNo")} />
       </ul>
-      <Button asChild variant="outline" className="mt-4 w-full">
+      <Button asChild variant="outline" className="mt-auto w-full">
         <Link href="/account/">{t("dashboard.security.manage")}</Link>
       </Button>
     </section>

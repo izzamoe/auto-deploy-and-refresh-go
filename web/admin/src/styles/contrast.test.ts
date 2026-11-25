@@ -77,6 +77,16 @@ const PAIRS: Array<[string, string, number, string]> = [
   ["ring", "card", UI, "focus ring on a card"],
   ["ring", "background", UI, "focus ring on the frame"],
   ["nav", "card", UI, "active navigation disc on the sidebar pill"],
+  ["rail-foreground", "rail", TEXT, "sidebar rail icons / text"],
+  ["rail-muted", "rail", TEXT, "inactive sidebar icons and language labels"],
+  ["rail-active-foreground", "rail-active", TEXT, "active sidebar item"],
+  ["rail-active", "rail", UI, "active sidebar disc against the rail"],
+  ["track", "card", UI, "gauge track against a card"],
+  ["primary", "card", UI, "gauge arc / chart line against a card"],
+  ["primary", "background", UI, "chart line / chip against the frame"],
+  ["primary-foreground", "primary", TEXT, "icon or label on a green chip"],
+  ["danger-chart", "card", TEXT, "failed figure / red chart line on a card"],
+  ["danger-chart", "background", TEXT, "red figure on the frame"],
 ];
 
 const report: string[] = [];

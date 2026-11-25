@@ -92,16 +92,47 @@ describe("Dashboard (T087, FR-100, FR-026, FR-108)", () => {
     expect(screen.getByRole("img", { name: "Grafik area: deploy berhasil dan gagal per hari" })).toBeInTheDocument();
   });
 
-  it("rate=null shows 'Belum ada data' (gauge and tile), no delta pill", async () => {
+  it("rate=null shows 'Belum ada data' ONCE (gauge only), no delta pill, no chart line", async () => {
     installFetch(routes({ ...FULL, successRate: { succeeded: 0, total: 0, rate: null, previousRate: null }, deploys24h: { total: 0, succeeded: 0, failed: 0, canceled: 0 }, daily: [], recent: [] }));
     mount();
     await screen.findByTestId("dashboard");
     expect(screen.getByTestId("gauge-value")).toHaveTextContent("Belum ada data");
-    expect(await screen.findByTestId("tile-success-rate")).toHaveTextContent("Belum ada data");
+    expect(screen.queryByTestId("tile-success-rate")).toBeNull();
+    expect(screen.getAllByText("Belum ada data")).toHaveLength(1); // not repeated in the chart panel
+    expect(screen.getByTestId("chart-empty")).toHaveTextContent("Belum ada deploy pada rentang ini.");
+    expect(screen.queryByRole("img", { name: /Grafik area/ })).toBeNull(); // no flat line at 0
+    expect(screen.queryByTestId("chart-table")).toBeNull();
     expect(screen.queryByTestId("delta-pill")).toBeNull();
     expect(screen.queryByTestId("gauge-arc")).toBeNull();
     expect(screen.getByText("Belum ada deploy.")).toBeInTheDocument();
     expect(screen.queryByTestId("mini-bars")).toBeNull(); // no series is invented
+  });
+
+  it("days present but all zero: only the empty state, never a red line flat at 0", async () => {
+    const zeroDays = DAILY.map((d) => ({ ...d, succeeded: 0, failed: 0, canceled: 0 }));
+    installFetch(routes({ ...FULL, daily: zeroDays }));
+    mount();
+    await screen.findByTestId("dashboard");
+    expect(screen.getByTestId("chart-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("chart-legend")).toBeNull();
+    expect(screen.queryByRole("img", { name: /Grafik area/ })).toBeNull();
+  });
+
+  it("a day with data draws the chart and no empty state", async () => {
+    installFetch(routes());
+    mount();
+    await screen.findByTestId("dashboard");
+    expect(screen.queryByTestId("chart-empty")).toBeNull();
+    expect(screen.getByRole("img", { name: /Grafik area/ })).toBeInTheDocument();
+  });
+
+  it("the success rate is shown once: in the gauge card, with the delta pill, not in the chart panel", async () => {
+    installFetch(routes());
+    mount();
+    await screen.findByTestId("dashboard");
+    expect(screen.queryByTestId("tile-success-rate")).toBeNull();
+    expect(within(screen.getByTestId("success-gauge")).getByTestId("delta-pill")).toBeInTheDocument();
+    expect(within(screen.getByTestId("activity")).queryByTestId("delta-pill")).toBeNull();
   });
 
   it("delta pill says how the rate moved against the previous period", async () => {

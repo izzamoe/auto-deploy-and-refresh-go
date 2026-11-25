@@ -31,6 +31,7 @@ export const idHistory = {
   "history.logs.title": "Log deploy {tag}",
   "history.logs.desc": "Log service yang disimpan saat deploy ini selesai.",
   "history.page": "Halaman {page} dari {pages} · {total} deploy",
+  "history.page.one": "Halaman {page} dari {pages} · {total} deploy",
   "history.prev": "Sebelumnya",
   "history.next": "Berikutnya",
   "history.pagination": "Halaman riwayat",

@@ -7,6 +7,7 @@ import { StatusPill } from "@/components/common/StatusPill";
 import { useI18n } from "@/i18n";
 import type { Schemas } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import { CARD_TITLE } from "@/components/common/cardStyles";
 
 const BAR: Record<string, string> = {
   succeeded: "bg-primary",
@@ -24,7 +25,7 @@ export function RecentDeploys({ jobs }: { jobs: Schemas["Job"][] }) {
   return (
     <section aria-labelledby={id} data-testid="recent-deploys" className="rounded-card bg-card p-5 shadow-card">
       <div className="flex items-center justify-between gap-2">
-        <h2 id={id} className="text-lg font-semibold">
+        <h2 id={id} className={CARD_TITLE}>
           {t("dashboard.recent.title")}
         </h2>
         <Link href="/history/" className="rounded-pill px-3 py-1 text-sm font-medium text-primary-text underline-offset-4 hover:underline">

@@ -9,7 +9,7 @@ export function MiniBars({ values, className }: { values: readonly number[]; cla
     <svg aria-hidden="true" focusable="false" viewBox="0 0 100 32" preserveAspectRatio="none" className={className} data-testid="mini-bars">
       {values.map((v, i) => {
         const h = v <= 0 ? 1 : Math.max(2, (v / max) * 30);
-        return <rect key={i} x={i * slot + (slot - barW) / 2} y={32 - h} width={barW} height={h} rx={1} className={v > 0 ? "fill-primary" : "fill-muted-foreground/30"} />;
+        return <rect key={i} x={i * slot + (slot - barW) / 2} y={32 - h} width={barW} height={h} rx={1} className={v > 0 ? "fill-primary-text" : "fill-track/50"} />;
       })}
     </svg>
   );

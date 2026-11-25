@@ -3,7 +3,7 @@
 // Area chart in plain SVG (no chart library: bundle budget Q-20). Overlapping translucent
 // areas with a 2 px line each. Colour never carries identity alone: a legend names the
 // series, hovering/focusing shows a tooltip, and a screen-reader table holds every value.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { cn } from "@/lib/utils";
 
@@ -27,13 +27,35 @@ interface AreaChartProps {
   className?: string;
 }
 
-const W = 600;
-const H = 200;
-const PAD = { l: 28, r: 8, t: 10, b: 22 };
+// The viewBox follows the real pixel width of the chart (see `useWidth`), so axis text stays
+// 12 px on a 360 px phone as well as on a desktop; no scaled-down 6 px labels.
+const DEFAULT_W = 600;
+const H = 220;
+const PAD = { l: 34, r: 14, t: 10, b: 30 };
+const MIN_LABEL_GAP = 64; // px between two x labels
+
+function useWidth() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(DEFAULT_W);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const w = Math.round(el.clientWidth);
+      if (w > 0) setWidth(w);
+    };
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width] as const;
+}
 
 const TONE: Record<AreaSeries["tone"], { fill: string; stroke: string; swatch: string }> = {
-  success: { fill: "fill-primary/20", stroke: "stroke-primary", swatch: "bg-primary" },
-  danger: { fill: "fill-destructive/20", stroke: "stroke-destructive", swatch: "bg-destructive" },
+  success: { fill: "fill-primary-text/20", stroke: "stroke-primary-text", swatch: "bg-primary-text" },
+  danger: { fill: "fill-danger-chart/20", stroke: "stroke-danger-chart", swatch: "bg-danger-chart" },
 };
 
 function niceMax(v: number): number {
@@ -46,6 +68,7 @@ function niceMax(v: number): number {
 
 export function AreaChart({ labels, series, ariaLabel, tableCaption, dateHeader, extraColumns = [], className }: AreaChartProps) {
   const n = labels.length;
+  const [boxRef, W] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
   const max = niceMax(Math.max(0, ...series.flatMap((s) => s.values)));
   const innerW = W - PAD.l - PAD.r;
@@ -54,7 +77,10 @@ export function AreaChart({ labels, series, ariaLabel, tableCaption, dateHeader,
   const x = (i: number) => PAD.l + (n === 1 ? innerW / 2 : (i / span) * innerW);
   const y = (v: number) => PAD.t + innerH - (v / max) * innerH;
   const ticks = [0, max / 2, max];
-  const labelEvery = Math.max(1, Math.ceil(n / 7));
+  // Labels are counted back from the last point so the newest date is always shown and the
+  // spacing is even; how many fit depends on the real width.
+  const fit = Math.max(2, Math.floor(innerW / MIN_LABEL_GAP) + 1);
+  const labelEvery = Math.max(1, Math.ceil((n - 1) / (fit - 1)));
 
   function onMove(e: PointerEvent<SVGSVGElement>) {
     const box = e.currentTarget.getBoundingClientRect();
@@ -65,7 +91,7 @@ export function AreaChart({ labels, series, ariaLabel, tableCaption, dateHeader,
   }
 
   return (
-    <div className={cn("relative", className)}>
+    <div ref={boxRef} className={cn("relative", className)}>
       <ul className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-sm" data-testid="chart-legend">
         {series.map((s) => (
           <li key={s.key} className="flex items-center gap-2">
@@ -79,21 +105,23 @@ export function AreaChart({ labels, series, ariaLabel, tableCaption, dateHeader,
         role="img"
         aria-label={ariaLabel}
         viewBox={`0 0 ${W} ${H}`}
-        className="h-auto w-full touch-pan-y"
+        width={W}
+        height={H}
+        className="block h-auto w-full touch-pan-y"
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
         {ticks.map((t) => (
           <g key={t}>
             <line x1={PAD.l} x2={W - PAD.r} y1={y(t)} y2={y(t)} className="stroke-border" strokeWidth={1} />
-            <text x={PAD.l - 6} y={y(t) + 4} textAnchor="end" className="fill-muted-foreground text-[11px]">
+            <text x={PAD.l - 6} y={y(t) + 4} textAnchor="end" className="fill-muted-foreground text-xs">
               {Math.round(t)}
             </text>
           </g>
         ))}
         {labels.map((l, i) =>
-          i % labelEvery === 0 || i === n - 1 ? (
-            <text key={i} x={x(i)} y={H - 6} textAnchor="middle" className="fill-muted-foreground text-[11px]">
+          (n - 1 - i) % labelEvery === 0 ? (
+            <text key={i} x={x(i)} y={H - 8} textAnchor={i === n - 1 ? "end" : i === 0 ? "start" : "middle"} className="fill-muted-foreground text-xs">
               {l}
             </text>
           ) : null,
@@ -114,7 +142,7 @@ export function AreaChart({ labels, series, ariaLabel, tableCaption, dateHeader,
           <g data-testid="chart-crosshair">
             <line x1={x(hover)} x2={x(hover)} y1={PAD.t} y2={PAD.t + innerH} className="stroke-muted-foreground" strokeWidth={1} strokeDasharray="3 3" />
             {series.map((s) => (
-              <circle key={s.key} cx={x(hover)} cy={y(s.values[hover] ?? 0)} r={4} strokeWidth={2} className={cn("stroke-card", s.tone === "success" ? "fill-primary" : "fill-destructive")} />
+              <circle key={s.key} cx={x(hover)} cy={y(s.values[hover] ?? 0)} r={4} strokeWidth={2} className={cn("stroke-card", s.tone === "success" ? "fill-primary-text" : "fill-danger-chart")} />
             ))}
           </g>
         )}

@@ -43,7 +43,7 @@ export function Header() {
         <p className="truncate text-2xl font-semibold tracking-tight" data-testid="greeting">
           {t("shell.greeting", { name: session.username })}
         </p>
-        <p className="truncate text-sm text-muted-foreground" data-testid="subtitle">
+        <p className="text-sm text-muted-foreground" data-testid="subtitle">
           {stats.data
             ? t("shell.subtitle", { active: stats.data.apps.enabled, running: stats.data.active.running })
             : stats.isError
@@ -64,18 +64,15 @@ export function Header() {
         <button
           type="submit"
           aria-label={t("shell.search.submit")}
-          className="inline-flex size-10 items-center justify-center rounded-full bg-nav text-nav-foreground"
+          className="inline-flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground"
         >
           <Search className="size-4" aria-hidden="true" />
         </button>
       </form>
 
-      <span
-        role="status"
-        title={online ? t("shell.connection.online") : t("shell.connection.offline")}
-        className={cn("inline-flex size-3 rounded-full", online ? "bg-primary" : "bg-muted-foreground/60")}
-      >
-        <span className="sr-only">{online ? t("shell.connection.online") : t("shell.connection.offline")}</span>
+      <span role="status" title={online ? t("shell.connection.online") : t("shell.connection.offline")} className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span aria-hidden="true" className={cn("inline-flex size-2.5 rounded-full", online ? "bg-primary" : "bg-muted-foreground/60")} />
+        <span className="sr-only xl:not-sr-only">{online ? t("shell.connection.online") : t("shell.connection.offline")}</span>
       </span>
       <NotificationsPanel />
     </header>

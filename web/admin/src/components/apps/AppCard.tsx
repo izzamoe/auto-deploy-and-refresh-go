@@ -13,6 +13,7 @@ import type { Schemas } from "@/lib/api/client";
 import { effectiveStatus } from "@/lib/events/store";
 import { useJobProgress } from "@/lib/events/provider";
 import { invalidateAfterJob, queryKeys } from "@/lib/query";
+import { CARD_TITLE } from "@/components/common/cardStyles";
 import { cn } from "@/lib/utils";
 import { ProgressBadge } from "./ProgressBadge";
 import { ServiceControls } from "./ServiceControls";
@@ -92,7 +93,7 @@ export function AppCard({ app, onMessage }: Props) {
     >
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-xl font-semibold leading-tight">{app.name}</h2>
+          <h2 className={`truncate leading-tight ${CARD_TITLE}`}>{app.name}</h2>
           <p className="truncate text-sm text-muted-foreground">{app.serviceName}</p>
         </div>
         <span

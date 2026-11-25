@@ -69,19 +69,25 @@ export default function DashboardPage() {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]" data-testid="dashboard">
       <h1 className="sr-only">{t("dashboard.title")}</h1>
-      <div className="min-w-0 space-y-4">
+      <div className="flex min-w-0 flex-col gap-4 xl:[&>:last-child]:flex-1">
         <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
-          <StatCard testId="stat-deploys" title={t("dashboard.deploys24h")} value={formatNumber(s.deploys24h.total)} hint={t("dashboard.deploys24h.hint", { n: s.deploys24h.succeeded })} icon={<BarChart3 />}>
+          <StatCard testId="stat-deploys" title={t("dashboard.deploys24h")} value={formatNumber(s.deploys24h.total)} hint={t("dashboard.deploys24h.hint", { n: s.deploys24h.succeeded })} icon={<BarChart3 />} tone={s.deploys24h.succeeded > 0 ? "success" : "neutral"}>
             {hourly.length > 0 && <MiniBars values={hourly} className="mt-1 h-8 w-full" />}
           </StatCard>
-          <StatCard testId="stat-apps" title={t("dashboard.apps")} value={`${formatNumber(s.apps.enabled)}/${formatNumber(s.apps.total)}`} hint={t("dashboard.apps.hint", { total: s.apps.total })} icon={<AppWindow />} />
-          <StatCard testId="stat-failed" title={t("dashboard.failed24h")} value={formatNumber(s.deploys24h.failed)} hint={t("dashboard.failed24h.hint", { total: s.deploys24h.total })} icon={<XCircle />} />
+          <StatCard testId="stat-apps" title={t("dashboard.apps")} value={`${formatNumber(s.apps.enabled)}/${formatNumber(s.apps.total)}`} hint={t("dashboard.apps.hint", { total: s.apps.total })} icon={<AppWindow />} tone={s.apps.enabled > 0 ? "success" : "neutral"}>
+            {s.apps.total > 0 && (
+              <div aria-hidden="true" data-testid="apps-bar" className="mt-1 h-2 overflow-hidden rounded-pill bg-track/30">
+                <div className="h-full rounded-pill bg-primary" style={{ width: `${Math.round((s.apps.enabled / s.apps.total) * 100)}%` }} />
+              </div>
+            )}
+          </StatCard>
+          <StatCard testId="stat-failed" title={t("dashboard.failed24h")} value={formatNumber(s.deploys24h.failed)} hint={t("dashboard.failed24h.hint", { total: s.deploys24h.total })} icon={<XCircle />} tone={s.deploys24h.failed > 0 ? "danger" : "neutral"} />
           <ActiveDeployCard running={s.active.running} queued={s.active.queued} />
         </div>
         <DeployActivityChart stats={s} range={range} onRangeChange={setRange} />
         <RecentDeploys jobs={s.recent} />
       </div>
-      <div className="grid content-start gap-4 sm:grid-cols-2 xl:grid-cols-1">
+      <div className="grid content-start gap-4 sm:grid-cols-2 xl:flex xl:flex-col xl:[&>:last-child]:flex-1">
         <SuccessGauge rate={s.successRate} range={t(`dashboard.range.${range}`)} />
         <AccountCard />
         <AddAppCard />

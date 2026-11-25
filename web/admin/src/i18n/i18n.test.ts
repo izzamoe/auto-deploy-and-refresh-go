@@ -70,8 +70,43 @@ describe("dictionaries", () => {
 describe("translate", () => {
   it("interpolates placeholders and leaves unknown ones visible", () => {
     expect(translate("id", "shell.greeting", { name: "Budi" })).toBe("Halo, Budi");
-    expect(translate("en", "shell.subtitle", { active: 3, running: 1 })).toBe("3 active apps · 1 deploys running");
+    expect(translate("en", "shell.subtitle", { active: 3, running: 1 })).toBe("3 active apps · 1 running");
     expect(translate("en", "shell.greeting")).toBe("Hello, {name}");
+  });
+
+  // Visual review item 6: "1 active apps" / "of 1 apps" must be singular.
+  it("English picks the singular form for 1 and the plural for 0 and 2 (Intl.PluralRules)", () => {
+    const sub = (n: number) => translate("en", "shell.subtitle", { active: n, running: 0 });
+    expect(sub(0)).toBe("0 active apps · 0 running");
+    expect(sub(1)).toBe("1 active app · 0 running");
+    expect(sub(2)).toBe("2 active apps · 0 running");
+    const of = (n: number) => translate("en", "dashboard.apps.hint", { total: n });
+    expect([of(0), of(1), of(2)]).toEqual(["of 0 apps", "of 1 app", "of 2 apps"]);
+    const tokens = (n: number) => translate("en", "dashboard.security.tokens", { n });
+    expect([tokens(0), tokens(1), tokens(2)]).toEqual(["0 active API tokens", "1 active API token", "2 active API tokens"]);
+    const failed = (n: number) => translate("en", "dashboard.failed24h.hint", { total: n });
+    expect([failed(0), failed(1), failed(2)]).toEqual(["of 0 deploys", "of 1 deploy", "of 2 deploys"]);
+    const unread = (n: number) => translate("en", "shell.notifications.count", { count: n });
+    expect([unread(0), unread(1), unread(2)]).toEqual(["0 unread notifications", "1 unread notification", "2 unread notifications"]);
+    const up = (n: number) => translate("en", "dashboard.delta.up", { n });
+    expect([up(1), up(2)]).toEqual(["up 1 point", "up 2 points"]);
+  });
+
+  it("Indonesian has no plural: 0, 1 and 2 use the same form", () => {
+    const sub = (n: number) => translate("id", "shell.subtitle", { active: n, running: 0 });
+    expect([sub(0), sub(1), sub(2)]).toEqual(["0 app aktif · 0 berjalan", "1 app aktif · 0 berjalan", "2 app aktif · 0 berjalan"]);
+    expect(translate("id", "dashboard.apps.hint", { total: 1 })).toBe("dari 1 app");
+  });
+
+  it("every `.one` message has the same placeholders as its base message and a base sibling", () => {
+    for (const [name, dict] of [["id", id], ["en", en]] as const) {
+      for (const key of Object.keys(dict)) {
+        if (!key.endsWith(".one")) continue;
+        const base = key.slice(0, -".one".length) as MessageKey;
+        expect(base in dict, `${name}: ${key} needs ${base}`).toBe(true);
+        expect(placeholders((dict as Record<string, string>)[key]), `${name}: ${key}`).toEqual(placeholders(dict[base]));
+      }
+    }
   });
 
   it("maps API codes to localized text and never echoes unknown server text", () => {
