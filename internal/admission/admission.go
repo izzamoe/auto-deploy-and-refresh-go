@@ -2,7 +2,6 @@ package admission
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
@@ -17,6 +16,10 @@ const (
 	OutcomeOK           AdmissionOutcome = "ok"
 	OutcomeError        AdmissionOutcome = "error"
 )
+
+// ErrQueueFull is the Error of an OutcomeError caused by a full deploy queue; its text
+// ("queue full") is part of the webhook contract (503 body).
+var ErrQueueFull = errors.New("queue full")
 
 type AdmissionResult struct {
 	Outcome AdmissionOutcome
@@ -65,7 +68,7 @@ func (s *AdmissionService) Admit(bearerToken, tag string) AdmissionResult {
 			return AdmissionResult{Outcome: OutcomeBadRequest, App: app, Tag: tag, Error: err}
 		}
 		if errors.Is(err, store.ErrQueueFull) {
-			return AdmissionResult{Outcome: OutcomeError, App: app, Tag: tag, Error: fmt.Errorf("queue full")}
+			return AdmissionResult{Outcome: OutcomeError, App: app, Tag: tag, Error: ErrQueueFull}
 		}
 		return AdmissionResult{Outcome: OutcomeError, App: app, Tag: tag, Error: err}
 	}

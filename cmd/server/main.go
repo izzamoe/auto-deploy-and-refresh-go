@@ -10,14 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
-	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/izzamoe/auto-deploy/internal/admin"
 	"github.com/izzamoe/auto-deploy/internal/admission"
 	"github.com/izzamoe/auto-deploy/internal/auth"
@@ -30,13 +28,8 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/llmstxt"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
+	"github.com/izzamoe/auto-deploy/internal/webhook"
 )
-
-type response struct {
-	Status string `json:"status"`
-	Tag    string `json:"tag,omitempty"`
-	Error  string `json:"error,omitempty"`
-}
 
 func main() {
 	// Subcommands run and exit before the server boots. "upgrade"/"update"
@@ -271,7 +264,7 @@ func main() {
 	publicPage := func(ctx context.Context, c *app.RequestContext) { c.Next(ctx) }
 	admin.RegisterSessionRoutesHertz(h, sessionHandler, authMW)
 	admin.RegisterTokenRoutesHertz(h, tokensHandler, authMW)
-	h.POST("/webhook", multiAppWebhookHandler(admissionSvc))
+	h.POST("/webhook", webhook.Handler(admissionSvc))
 	llmstxt.RegisterRoutesHertz(h)
 	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, authMW)
 	admin.RegisterAccountRoutesHertz(h, accountHandler, authMW)
@@ -302,50 +295,6 @@ func main() {
 	defer shutdownCancel()
 	if err := h.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
-	}
-}
-
-func multiAppWebhookHandler(admissionSvc *admission.AdmissionService) app.HandlerFunc {
-	return func(ctx context.Context, c *app.RequestContext) {
-		authHeader := string(c.GetHeader("Authorization"))
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			c.JSON(consts.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
-			return
-		}
-		var body struct {
-			Tag string `json:"tag"`
-		}
-		if err := c.BindJSON(&body); err != nil || body.Tag == "" {
-			c.JSON(consts.StatusBadRequest, response{Status: "error", Error: "missing or empty tag"})
-			return
-		}
-		result := admissionSvc.Admit(strings.TrimPrefix(authHeader, "Bearer "), body.Tag)
-		switch result.Outcome {
-		case admission.OutcomeUnauthorized:
-			c.JSON(consts.StatusUnauthorized, response{Status: "error", Error: "unauthorized"})
-		case admission.OutcomeBadRequest:
-			errMsg := "invalid tag"
-			if result.Tag == "" {
-				errMsg = "missing or empty tag"
-			}
-			c.JSON(consts.StatusBadRequest, response{Status: "error", Error: errMsg})
-		case admission.OutcomeDuplicate:
-			c.JSON(consts.StatusOK, response{Status: "duplicate", Tag: body.Tag})
-		case admission.OutcomeQueued:
-			c.JSON(consts.StatusAccepted, response{Status: "queued", Tag: body.Tag})
-		case admission.OutcomeError:
-			errMsg := "internal error"
-			if result.Error != nil {
-				errMsg = result.Error.Error()
-			}
-			if errMsg == "queue full" {
-				c.JSON(consts.StatusServiceUnavailable, response{Status: "error", Error: "queue full"})
-			} else {
-				c.JSON(consts.StatusInternalServerError, response{Status: "error", Error: errMsg})
-			}
-		default:
-			c.JSON(consts.StatusInternalServerError, response{Status: "error", Error: "unexpected outcome"})
-		}
 	}
 }
 

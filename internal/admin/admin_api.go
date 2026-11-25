@@ -524,6 +524,12 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 	}
 
 	if err := h.queue.EnqueueManual(id, body.Tag); err != nil {
+		if errors.Is(err, store.ErrInvalidTag) {
+			// B15: a malformed tag is the caller's mistake (400 invalid_tag), never a 500,
+			// and the validation detail is not echoed back.
+			writeError(c, consts.StatusBadRequest, httpx.CodeInvalidTag, "Invalid tag")
+			return
+		}
 		if errors.Is(err, store.ErrDuplicate) {
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Deploy already queued for this tag")
 			return
