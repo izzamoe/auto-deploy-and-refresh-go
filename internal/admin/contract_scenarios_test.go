@@ -86,7 +86,7 @@ func TestContract(t *testing.T) {
 		appID = jsonField(t, body, "app", "id")
 		e.do(contractCall{op: "createApp", method: "POST", path: "/admin/api/v1/apps", body: map[string]any{"name": "x"}, status: 400, invalid: true})
 		e.do(contractCall{op: "createApp", method: "POST", path: "/admin/api/v1/apps", body: `{`, status: 400, invalid: true})
-		e.do(contractCall{op: "createApp", method: "POST", path: "/admin/api/v1/apps", body: create, status: 400}) // duplicate secret/path/service: HEAD answers 400 validation_failed, the contract says 409 duplicate (T050)
+		e.do(contractCall{op: "createApp", method: "POST", path: "/admin/api/v1/apps", body: create, status: 409}) // duplicate secret/path/service
 
 		e.do(contractCall{op: "getApp", method: "GET", path: "/admin/api/v1/apps/" + appID, status: 200})
 		e.do(contractCall{op: "getApp", method: "GET", path: "/admin/api/v1/apps/nope", status: 404})
@@ -101,6 +101,9 @@ func TestContract(t *testing.T) {
 
 		e.do(contractCall{op: "toggleApp", method: "POST", path: "/admin/api/v1/apps/" + appID + "/toggle", body: map[string]bool{"enabled": true}, status: 200})
 		e.do(contractCall{op: "toggleApp", method: "POST", path: "/admin/api/v1/apps/nope/toggle", body: map[string]bool{"enabled": true}, status: 404})
+
+		e.do(contractCall{op: "rotateWebhookSecret", method: "POST", path: "/admin/api/v1/apps/" + appID + "/webhook-secret/rotate", status: 200})
+		e.do(contractCall{op: "rotateWebhookSecret", method: "POST", path: "/admin/api/v1/apps/nope/webhook-secret/rotate", status: 404})
 
 		e.do(contractCall{op: "getAppEnv", method: "GET", path: "/admin/api/v1/apps/" + appID + "/env", status: 200})
 		e.do(contractCall{op: "getAppEnv", method: "GET", path: "/admin/api/v1/apps/nope/env", status: 404})
@@ -126,6 +129,7 @@ func TestContract(t *testing.T) {
 		e.do(contractCall{op: "deployApp", method: "POST", path: "/admin/api/v1/apps/" + appID + "/deploy", body: map[string]string{"tag": "v1.0.0"}, status: 409})
 		e.do(contractCall{op: "deployApp", method: "POST", path: "/admin/api/v1/apps/nope/deploy", body: map[string]string{"tag": "v1"}, status: 404})
 		e.do(contractCall{op: "deployApp", method: "POST", path: "/admin/api/v1/apps/" + appID + "/deploy", body: map[string]string{"tag": ""}, status: 400, invalid: true})
+		e.do(contractCall{op: "deployApp", method: "POST", path: "/admin/api/v1/apps/" + appID + "/deploy", body: map[string]string{"tag": "v1 bad"}, status: 400}) // invalid_tag (B15)
 
 		_, hist := e.do(contractCall{op: "listHistory", method: "GET", path: "/admin/api/v1/history?appId=" + appID, status: 200})
 		jobID = firstHistoryJobID(t, hist)

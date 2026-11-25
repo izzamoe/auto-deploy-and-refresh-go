@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -22,6 +24,10 @@ var ErrActiveDeployExists = errors.New("active deploy in progress")
 // ErrInvalidAppInput is returned by Create/Update when the configured input validator
 // (SetInputValidator) rejects binaryPath, serviceName, githubRepo or artifactName.
 var ErrInvalidAppInput = errors.New("invalid app input")
+
+// ErrInvalidAppConfig is returned by CreateWithConfig when an environment variable or a
+// command-line argument is invalid; nothing was written.
+var ErrInvalidAppConfig = errors.New("invalid app configuration")
 
 // AppInputValidator judges the deployment-critical fields of an app (FR-040). It is
 // injected by main (deploy.ValidateAppInput) because package deploy imports store.
@@ -189,6 +195,17 @@ func NewAppStore(db *sql.DB) (*AppStore, error) {
 	return &AppStore{db: db}, nil
 }
 
+// GenerateWebhookSecret returns a fresh webhook secret: 32 random bytes, base64url
+// without padding (43 characters, ~256 bits). Used when the admin does not supply one
+// and when a secret is rotated (FR-055).
+func GenerateWebhookSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("app_store: generate webhook secret: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
 func HashSecret(secret string) string {
 	h := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(h[:])
@@ -225,6 +242,88 @@ func (s *AppStore) Create(name, secret, binaryPath, serviceName, githubRepo, art
 		return nil, fmt.Errorf("app_store: insert: %w", err)
 	}
 
+	s.invalidateSecretHashCache()
+	return s.Get(id)
+}
+
+// CreateAppInput is everything one app needs at creation (FR-028).
+type CreateAppInput struct {
+	Name, Secret                                      string
+	BinaryPath, ServiceName, GithubRepo, ArtifactName string
+	EnvVars                                           []EnvVar
+	Args                                              []string
+}
+
+// CreateWithConfig creates the app together with its environment variables and
+// arguments in ONE transaction (B55, FR-028): either every row exists afterwards or
+// none does. Env names and arguments are validated before anything is written
+// (ErrInvalidAppConfig). A duplicate binary path, service name or secret is
+// ErrDuplicateApp.
+func (s *AppStore) CreateWithConfig(in CreateAppInput) (*App, error) {
+	if err := s.checkInput(in.BinaryPath, in.ServiceName, in.GithubRepo, in.ArtifactName); err != nil {
+		return nil, err
+	}
+	for _, v := range in.EnvVars {
+		if err := ValidateEnvVarName(v.Name); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidAppConfig, err)
+		}
+	}
+	if len(in.Args) > maxServiceArgs {
+		return nil, fmt.Errorf("%w: too many arguments: %d, max %d", ErrInvalidAppConfig, len(in.Args), maxServiceArgs)
+	}
+	for _, a := range in.Args {
+		if err := ValidateServiceArg(a); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidAppConfig, err)
+		}
+	}
+	envJSON, err := json.Marshal(in.EnvVars)
+	if err != nil {
+		return nil, fmt.Errorf("app_store: encode env: %w", err)
+	}
+	argsJSON, err := json.Marshal(in.Args)
+	if err != nil {
+		return nil, fmt.Errorf("app_store: encode args: %w", err)
+	}
+	id, err := generateID()
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("app_store: begin create: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	if _, err := tx.Exec(
+		`INSERT INTO apps (id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, in.Name, HashSecret(in.Secret), in.BinaryPath, in.ServiceName, in.GithubRepo, in.ArtifactName,
+	); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrDuplicateApp
+		}
+		return nil, fmt.Errorf("app_store: insert: %w", err)
+	}
+	if len(in.EnvVars) > 0 {
+		if _, err := tx.Exec(appEnvDDL); err != nil {
+			return nil, fmt.Errorf("app_store: create app_env table: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO app_env (app_id, vars, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, id, string(envJSON)); err != nil {
+			return nil, fmt.Errorf("app_store: insert env: %w", err)
+		}
+	}
+	if len(in.Args) > 0 {
+		if _, err := tx.Exec(appArgsDDL); err != nil {
+			return nil, fmt.Errorf("app_store: create app_args table: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO app_args (app_id, args, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, id, string(argsJSON)); err != nil {
+			return nil, fmt.Errorf("app_store: insert args: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("app_store: commit create: %w", err)
+	}
 	s.invalidateSecretHashCache()
 	return s.Get(id)
 }

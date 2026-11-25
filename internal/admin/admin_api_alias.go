@@ -38,6 +38,9 @@ func RegisterLegacyAPIAliases(h *server.Hertz, authMW app.HandlerFunc) {
 }
 
 func isNewInV1(rest string) bool {
+	if strings.HasSuffix(rest, "/webhook-secret/rotate") { // FR-055, new in v1
+		return true
+	}
 	for _, p := range noLegacyAlias {
 		if rest == p || strings.HasPrefix(rest, p+"/") {
 			return true

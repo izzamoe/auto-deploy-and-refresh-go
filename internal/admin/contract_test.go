@@ -39,10 +39,7 @@ const contractSpecPath = "../../api/admin-api.v1.openapi.yaml"
 // contract, keyed "operationId status". Each entry names the task that closes it.
 // A deviation that is not listed here fails the test; a listed one that no longer
 // occurs also fails, so the list cannot rot.
-var knownDeviations = map[string]string{
-	"deleteApp 409": "SPEC GAP (reported to Hermes, specs/ untouched): HEAD answers 409 when the app has an in-progress deploy; the contract's deleteApp lists only 200/401/403/404. Resolved when the contract adds the 409 or a later task changes the behaviour.",
-	"createApp 201": "BARU (FR-076): the contract returns the webhook secret once in the create response; HEAD does not. Closed by T050 (atomic create + secret).",
-}
+var knownDeviations = map[string]string{}
 
 // contractCoverage records, across every environment of a test run, which operations
 // got a case and which known deviations were actually observed.

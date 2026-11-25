@@ -48,6 +48,15 @@ type adminAPIAppRequest struct {
 	GithubRepo    string `json:"githubRepo"`
 	ArtifactName  string `json:"artifactName"`
 	Enabled       *bool  `json:"enabled"`
+	// EnvVars and Args are accepted by create only (FR-028): the app, its env and its
+	// args are written in one transaction. update ignores them (own endpoints).
+	EnvVars []adminAPIEnvVarRequest `json:"envVars"`
+	Args    []string                `json:"args"`
+}
+
+type adminAPIEnvVarRequest struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 func (r adminAPIAppRequest) webhookSecret() string {
@@ -198,6 +207,37 @@ func validateAdminAPIAppRequest(body adminAPIAppRequest, requireSecret bool) []h
 	return errs
 }
 
+// validateAdminAPIAppConfig checks the env vars and args of a create request and
+// returns field errors (envVars[i].name, args[i], args). Nothing is written before
+// this passes.
+func validateAdminAPIAppConfig(body adminAPIAppRequest) []httpx.FieldError {
+	var errs []httpx.FieldError
+	add := func(field, msg string) {
+		errs = append(errs, httpx.FieldError{Field: field, Code: httpx.CodeValidationFailed, Message: msg})
+	}
+	seen := map[string]bool{}
+	for i, v := range body.EnvVars {
+		if err := store.ValidateEnvVarName(v.Name); err != nil {
+			add("envVars["+strconv.Itoa(i)+"].name", err.Error())
+			continue
+		}
+		if seen[v.Name] {
+			add("envVars["+strconv.Itoa(i)+"].name", "duplicate environment variable name")
+		}
+		seen[v.Name] = true
+	}
+	if len(body.Args) > store.MaxServiceArgs {
+		add("args", "too many arguments: "+strconv.Itoa(len(body.Args))+", max "+strconv.Itoa(store.MaxServiceArgs))
+	} else {
+		for i, a := range body.Args {
+			if err := store.ValidateServiceArg(a); err != nil {
+				add("args["+strconv.Itoa(i)+"]", err.Error())
+			}
+		}
+	}
+	return errs
+}
+
 func hasFieldError(errs []httpx.FieldError, field string) bool {
 	for _, e := range errs {
 		if e.Field == field {
@@ -327,6 +367,10 @@ func (h *AdminAPIHandler) ListAppsHertz(ctx context.Context, c *app.RequestConte
 	c.JSON(consts.StatusOK, map[string]any{"apps": resp})
 }
 
+// CreateAppHertz creates the app with its env vars and args in ONE transaction
+// (FR-028). The webhook secret is optional: when the client sends none the server
+// generates 32 random bytes (FR-055). Either way the secret is returned in the 201 and
+// nowhere else, ever again (FR-076); only its hash is stored.
 func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestContext) {
 	if !requireAdminAPIJSONRequestHertz(c) {
 		return
@@ -337,26 +381,74 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 
-	if errs := validateAdminAPIAppRequest(body, true); len(errs) > 0 {
+	errs := validateAdminAPIAppRequest(body, false)
+	errs = append(errs, validateAdminAPIAppConfig(body)...)
+	if len(errs) > 0 {
 		writeAdminAPIFieldErrorsHertz(c, errs)
 		return
 	}
 
-	app, err := h.store.Create(body.Name, body.webhookSecret(), body.BinaryPath, body.ServiceName, body.GithubRepo, body.ArtifactName)
+	secret := body.webhookSecret()
+	if secret == "" {
+		generated, err := store.GenerateWebhookSecret()
+		if err != nil {
+			logHandlerError(c, "generate webhook secret failed", err)
+			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error creating app")
+			return
+		}
+		secret = generated
+	}
+	envVars := make([]store.EnvVar, 0, len(body.EnvVars))
+	for _, v := range body.EnvVars {
+		envVars = append(envVars, store.EnvVar{Name: v.Name, Value: v.Value})
+	}
+
+	app, err := h.store.CreateWithConfig(store.CreateAppInput{
+		Name: body.Name, Secret: secret,
+		BinaryPath: body.BinaryPath, ServiceName: body.ServiceName, GithubRepo: body.GithubRepo, ArtifactName: body.ArtifactName,
+		EnvVars: envVars, Args: body.Args,
+	})
 	if err != nil {
-		if errors.Is(err, store.ErrInvalidAppInput) {
+		switch {
+		case errors.Is(err, store.ErrInvalidAppInput), errors.Is(err, store.ErrInvalidAppConfig):
 			writeAdminAPIValidationErrorHertz(c, []string{"App fields are invalid"})
-			return
+		case errors.Is(err, store.ErrDuplicateApp):
+			// One message for every cause: it must not say WHICH of binary path,
+			// service name or secret collided (FR-055).
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "An app with this binary path, service name, or webhook secret already exists")
+		default:
+			logHandlerError(c, "create app failed", err)
+			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error creating app")
 		}
-		if errors.Is(err, store.ErrDuplicateApp) {
-			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
-			return
-		}
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error creating app")
 		return
 	}
 
-	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app)})
+	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app), "webhookSecret": secret})
+}
+
+// RotateWebhookSecretHertz replaces the app's webhook secret with 32 fresh random
+// bytes and returns it once (FR-055). The previous secret stops working at once.
+func (h *AdminAPIHandler) RotateWebhookSecretHertz(ctx context.Context, c *app.RequestContext) {
+	id := c.Param("id")
+	if _, ok := h.getAppOr404(c, id); !ok {
+		return
+	}
+	secret, err := store.GenerateWebhookSecret()
+	if err != nil {
+		logHandlerError(c, "generate webhook secret failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error rotating secret")
+		return
+	}
+	if err := h.store.RotateSecret(id, secret); err != nil {
+		if isAdminAPINotFoundError(err) {
+			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+			return
+		}
+		logHandlerError(c, "rotate webhook secret failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error rotating secret")
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]any{"secret": secret})
 }
 
 func (h *AdminAPIHandler) GetAppHertz(ctx context.Context, c *app.RequestContext) {
@@ -399,7 +491,7 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 			return
 		}
 		if errors.Is(err, store.ErrDuplicateApp) {
-			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "An app with this binary path, service name, or webhook secret already exists")
 			return
 		}
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error updating app")
@@ -800,6 +892,7 @@ func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth
 	api.PUT("/apps/:id", handler.UpdateAppHertz)
 	api.DELETE("/apps/:id", handler.DeleteAppHertz)
 	api.POST("/apps/:id/toggle", handler.ToggleAppHertz)
+	api.POST("/apps/:id/webhook-secret/rotate", handler.RotateWebhookSecretHertz)
 	api.POST("/apps/:id/deploy", handler.ManualDeployAppHertz)
 	api.GET("/history", handler.ListHistoryHertz)
 	api.POST("/history/:id/retry", handler.RetryHistoryJobHertz)

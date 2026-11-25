@@ -459,6 +459,7 @@ matches what the binary actually serves.
 | POST | `/admin/api/v1/apps/:id/service/:action` | admin session |
 | GET | `/admin/api/v1/apps/:id/service/status` | admin session |
 | POST | `/admin/api/v1/apps/:id/toggle` | admin session |
+| POST | `/admin/api/v1/apps/:id/webhook-secret/rotate` | admin session |
 | GET | `/admin/api/v1/github` | admin session |
 | POST | `/admin/api/v1/github` | admin session |
 | GET | `/admin/api/v1/history` | admin session |

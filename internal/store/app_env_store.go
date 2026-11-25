@@ -25,6 +25,12 @@ func ValidateEnvVarName(name string) error {
 	return nil
 }
 
+const appEnvDDL = `CREATE TABLE IF NOT EXISTS app_env (
+		app_id     TEXT PRIMARY KEY,
+		vars       TEXT NOT NULL DEFAULT '[]',
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`
+
 // AppEnvStore persists per-app environment variables as a single JSON blob per
 // app, kept out of the apps table so the app CRUD path is untouched.
 type AppEnvStore struct {
@@ -34,12 +40,7 @@ type AppEnvStore struct {
 // NewAppEnvStore creates the app_env table if it does not exist yet and
 // returns a store bound to db.
 func NewAppEnvStore(db *sql.DB) (*AppEnvStore, error) {
-	schema := `CREATE TABLE IF NOT EXISTS app_env (
-		app_id     TEXT PRIMARY KEY,
-		vars       TEXT NOT NULL DEFAULT '[]',
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(appEnvDDL); err != nil {
 		return nil, fmt.Errorf("app_env_store: create table: %w", err)
 	}
 	return &AppEnvStore{db: db}, nil
