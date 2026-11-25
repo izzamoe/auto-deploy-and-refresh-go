@@ -58,6 +58,12 @@ type App struct {
 	Enabled           bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// Per-app deploy settings (FR-042, FR-045, FR-047); the zero values are the
+	// pre-hardening behavior (root, no hardening, no HTTP health URL, digest optional).
+	RunAsUser     string
+	Hardening     bool
+	HealthURL     string
+	RequireDigest bool
 	// EnvVars holds environment variables injected into the generated systemd
 	// unit for this app. It is NOT persisted by AppStore — it is stored
 	// separately (AppEnvStore) and populated on demand by callers that render
@@ -141,7 +147,7 @@ func (s *AppStore) loadSecretHashCache() (map[string]App, error) {
 		return *m, nil
 	}
 	rows, err := s.db.Query(
-		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 		 FROM apps WHERE enabled = 1`,
 	)
 	if err != nil {
@@ -192,7 +198,31 @@ func NewAppStore(db *sql.DB) (*AppStore, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("app_store: create table: %w", err)
 	}
+	// The per-app settings columns are added by migration v1 too (same definitions);
+	// adding them here keeps the store usable before Migrate has run. Idempotent.
+	if err := ensureAppSettingsColumns(db); err != nil {
+		return nil, fmt.Errorf("app_store: %w", err)
+	}
 	return &AppStore{db: db}, nil
+}
+
+func ensureAppSettingsColumns(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, col := range v1Columns {
+		switch col.column {
+		case "run_as_user", "hardening", "health_url", "require_digest":
+		default:
+			continue
+		}
+		if err := addColumnIfMissing(tx, col.table, col.column, col.definition); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // GenerateWebhookSecret returns a fresh webhook secret: 32 random bytes, base64url
@@ -252,6 +282,43 @@ type CreateAppInput struct {
 	BinaryPath, ServiceName, GithubRepo, ArtifactName string
 	EnvVars                                           []EnvVar
 	Args                                              []string
+	// Settings is written with the row; nil keeps the column defaults.
+	Settings *AppSettings
+}
+
+// AppSettings are the per-app deploy settings stored beside the core app fields.
+type AppSettings struct {
+	RunAsUser     string
+	Hardening     bool
+	HealthURL     string
+	RequireDigest bool
+}
+
+// UpdateSettings replaces the per-app deploy settings (FR-042, FR-045, FR-047).
+func (s *AppStore) UpdateSettings(id string, set AppSettings) error {
+	result, err := s.db.Exec(
+		`UPDATE apps SET run_as_user = ?, hardening = ?, health_url = ?, require_digest = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		set.RunAsUser, boolToInt(set.Hardening), set.HealthURL, boolToInt(set.RequireDigest), id,
+	)
+	if err != nil {
+		return fmt.Errorf("app_store: update settings: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("app_store: update settings rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("app_store: app %q not found", id)
+	}
+	s.invalidateSecretHashCache()
+	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // CreateWithConfig creates the app together with its environment variables and
@@ -305,6 +372,14 @@ func (s *AppStore) CreateWithConfig(in CreateAppInput) (*App, error) {
 		}
 		return nil, fmt.Errorf("app_store: insert: %w", err)
 	}
+	if in.Settings != nil {
+		if _, err := tx.Exec(
+			`UPDATE apps SET run_as_user = ?, hardening = ?, health_url = ?, require_digest = ? WHERE id = ?`,
+			in.Settings.RunAsUser, boolToInt(in.Settings.Hardening), in.Settings.HealthURL, boolToInt(in.Settings.RequireDigest), id,
+		); err != nil {
+			return nil, fmt.Errorf("app_store: insert settings: %w", err)
+		}
+	}
 	if len(in.EnvVars) > 0 {
 		if _, err := tx.Exec(appEnvDDL); err != nil {
 			return nil, fmt.Errorf("app_store: create app_env table: %w", err)
@@ -330,7 +405,7 @@ func (s *AppStore) CreateWithConfig(in CreateAppInput) (*App, error) {
 
 func (s *AppStore) List() ([]App, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 		 FROM apps ORDER BY created_at ASC`,
 	)
 	if err != nil {
@@ -351,7 +426,7 @@ func (s *AppStore) List() ([]App, error) {
 
 func (s *AppStore) Get(id string) (*App, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 		 FROM apps WHERE id = ?`,
 		id,
 	)
@@ -486,7 +561,7 @@ func (s *AppStore) BootstrapIfEmpty(legacy *config.LegacyBootstrapConfig) (*App,
 	}
 	if count > 0 {
 		row := s.db.QueryRow(
-			`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+			`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 			 FROM apps ORDER BY created_at ASC LIMIT 1`,
 		)
 		app, err := scanAppRow(row)
@@ -559,6 +634,7 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 	rows, err := s.db.Query(`
 		SELECT a.id, a.name, a.webhook_secret_hash, a.binary_path, a.service_name,
 		       a.github_repo, a.artifact_name, a.enabled, a.created_at, a.updated_at,
+		       a.run_as_user, a.hardening, a.health_url, a.require_digest,
 		       j.id, j.tag, j.status, j.download_bytes, j.download_speed_bps, j.created_at
 		FROM apps a
 		LEFT JOIN (
@@ -576,7 +652,7 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 	var apps []AppWithLastDeploy
 	for rows.Next() {
 		var a AppWithLastDeploy
-		var enabled int
+		var enabled, hardening, requireDigest int
 		var jobID, tag, status sql.NullString
 		var downloadBytes sql.NullInt64
 		var downloadSpeed sql.NullFloat64
@@ -585,11 +661,14 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 			&a.ID, &a.Name, &a.WebhookSecretHash, &a.BinaryPath,
 			&a.ServiceName, &a.GithubRepo, &a.ArtifactName,
 			&enabled, &a.CreatedAt, &a.UpdatedAt,
+			&a.RunAsUser, &hardening, &a.HealthURL, &requireDigest,
 			&jobID, &tag, &status, &downloadBytes, &downloadSpeed, &deployedAt,
 		); err != nil {
 			return nil, fmt.Errorf("app_store: scan with last deploy: %w", err)
 		}
 		a.Enabled = enabled == 1
+		a.Hardening = hardening == 1
+		a.RequireDigest = requireDigest == 1
 		if jobID.Valid {
 			a.LastJobID = jobID.String
 		}
@@ -622,28 +701,34 @@ func isUniqueViolation(err error) bool {
 
 func scanApp(rows *sql.Rows) (App, error) {
 	var app App
-	var enabled int
+	var enabled, hardening, requireDigest int
 	if err := rows.Scan(
 		&app.ID, &app.Name, &app.WebhookSecretHash, &app.BinaryPath,
 		&app.ServiceName, &app.GithubRepo, &app.ArtifactName,
 		&enabled, &app.CreatedAt, &app.UpdatedAt,
+		&app.RunAsUser, &hardening, &app.HealthURL, &requireDigest,
 	); err != nil {
 		return App{}, fmt.Errorf("app_store: scan: %w", err)
 	}
 	app.Enabled = enabled == 1
+	app.Hardening = hardening == 1
+	app.RequireDigest = requireDigest == 1
 	return app, nil
 }
 
 func scanAppRow(row *sql.Row) (App, error) {
 	var app App
-	var enabled int
+	var enabled, hardening, requireDigest int
 	if err := row.Scan(
 		&app.ID, &app.Name, &app.WebhookSecretHash, &app.BinaryPath,
 		&app.ServiceName, &app.GithubRepo, &app.ArtifactName,
 		&enabled, &app.CreatedAt, &app.UpdatedAt,
+		&app.RunAsUser, &hardening, &app.HealthURL, &requireDigest,
 	); err != nil {
 		return App{}, err
 	}
 	app.Enabled = enabled == 1
+	app.Hardening = hardening == 1
+	app.RequireDigest = requireDigest == 1
 	return app, nil
 }

@@ -50,6 +50,12 @@ type adminAPIAppRequest struct {
 	GithubRepo    string `json:"githubRepo"`
 	ArtifactName  string `json:"artifactName"`
 	Enabled       *bool  `json:"enabled"`
+	// Per-app deploy settings (FR-042, FR-045, FR-047). On update an absent field keeps
+	// the stored value; on create an absent field takes the default.
+	RunAsUser     *string `json:"runAsUser"`
+	Hardening     *bool   `json:"hardening"`
+	HealthURL     *string `json:"healthUrl"`
+	RequireDigest *bool   `json:"requireDigest"`
 	// EnvVars and Args are accepted by create only (FR-028): the app, its env and its
 	// args are written in one transaction. update ignores them (own endpoints).
 	EnvVars []adminAPIEnvVarRequest `json:"envVars"`
@@ -84,6 +90,10 @@ type adminAPIAppResponse struct {
 	GithubRepo           string                    `json:"githubRepo"`
 	ArtifactName         string                    `json:"artifactName"`
 	Enabled              bool                      `json:"enabled"`
+	RunAsUser            string                    `json:"runAsUser"`
+	Hardening            bool                      `json:"hardening"`
+	HealthURL            string                    `json:"healthUrl"`
+	RequireDigest        bool                      `json:"requireDigest"`
 	CreatedAt            time.Time                 `json:"createdAt"`
 	UpdatedAt            time.Time                 `json:"updatedAt"`
 	LastDeployTag        string                    `json:"lastDeployTag,omitempty"`
@@ -214,6 +224,34 @@ func validateAdminAPIAppRequest(body adminAPIAppRequest, requireSecret bool) []h
 // validateAdminAPIAppConfig checks the env vars and args of a create request and
 // returns field errors (envVars[i].name, args[i], args). Nothing is written before
 // this passes.
+// validateAdminAPIAppSettings checks the optional per-app deploy settings.
+func validateAdminAPIAppSettings(body adminAPIAppRequest) []httpx.FieldError {
+	var errs []httpx.FieldError
+	if body.HealthURL != nil {
+		if err := deploy.ValidateHealthURL(*body.HealthURL); err != nil {
+			errs = append(errs, httpx.FieldError{Field: "healthUrl", Message: "Health URL " + err.Error()})
+		}
+	}
+	return errs
+}
+
+// settingsFrom merges the request over base (update) or the defaults (create).
+func settingsFrom(body adminAPIAppRequest, base store.AppSettings) store.AppSettings {
+	if body.RunAsUser != nil {
+		base.RunAsUser = *body.RunAsUser
+	}
+	if body.Hardening != nil {
+		base.Hardening = *body.Hardening
+	}
+	if body.HealthURL != nil {
+		base.HealthURL = *body.HealthURL
+	}
+	if body.RequireDigest != nil {
+		base.RequireDigest = *body.RequireDigest
+	}
+	return base
+}
+
 func validateAdminAPIAppConfig(body adminAPIAppRequest) []httpx.FieldError {
 	var errs []httpx.FieldError
 	add := func(field, msg string) {
@@ -266,15 +304,19 @@ func appWithLastDeployResponse(app store.AppWithLastDeploy) adminAPIAppResponse 
 
 func appResponse(app store.App) adminAPIAppResponse {
 	return adminAPIAppResponse{
-		ID:           app.ID,
-		Name:         app.Name,
-		BinaryPath:   app.BinaryPath,
-		ServiceName:  app.ServiceName,
-		GithubRepo:   app.GithubRepo,
-		ArtifactName: app.ArtifactName,
-		Enabled:      app.Enabled,
-		CreatedAt:    app.CreatedAt,
-		UpdatedAt:    app.UpdatedAt,
+		ID:            app.ID,
+		Name:          app.Name,
+		BinaryPath:    app.BinaryPath,
+		ServiceName:   app.ServiceName,
+		GithubRepo:    app.GithubRepo,
+		ArtifactName:  app.ArtifactName,
+		Enabled:       app.Enabled,
+		RunAsUser:     app.RunAsUser,
+		Hardening:     app.Hardening,
+		HealthURL:     app.HealthURL,
+		RequireDigest: app.RequireDigest,
+		CreatedAt:     app.CreatedAt,
+		UpdatedAt:     app.UpdatedAt,
 	}
 }
 
@@ -387,6 +429,7 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 
 	errs := validateAdminAPIAppRequest(body, false)
 	errs = append(errs, validateAdminAPIAppConfig(body)...)
+	errs = append(errs, validateAdminAPIAppSettings(body)...)
 	if len(errs) > 0 {
 		writeAdminAPIFieldErrorsHertz(c, errs)
 		return
@@ -411,6 +454,7 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 		Name: body.Name, Secret: secret,
 		BinaryPath: body.BinaryPath, ServiceName: body.ServiceName, GithubRepo: body.GithubRepo, ArtifactName: body.ArtifactName,
 		EnvVars: envVars, Args: body.Args,
+		Settings: createSettings(body),
 	})
 	if err != nil {
 		switch {
@@ -428,6 +472,12 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app), "webhookSecret": secret})
+}
+
+// createSettings are the settings of a new app: the request over the defaults.
+func createSettings(body adminAPIAppRequest) *store.AppSettings {
+	set := settingsFrom(body, store.AppSettings{})
+	return &set
 }
 
 // RotateWebhookSecretHertz replaces the app's webhook secret with 32 fresh random
@@ -479,7 +529,9 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 
-	if errs := validateAdminAPIAppRequest(body, false); len(errs) > 0 {
+	errs := validateAdminAPIAppRequest(body, false)
+	errs = append(errs, validateAdminAPIAppSettings(body)...)
+	if len(errs) > 0 {
 		writeAdminAPIFieldErrorsHertz(c, errs)
 		return
 	}
@@ -498,6 +550,13 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "An app with this binary path, service name, or webhook secret already exists")
 			return
 		}
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error updating app")
+		return
+	}
+
+	current := store.AppSettings{RunAsUser: app.RunAsUser, Hardening: app.Hardening, HealthURL: app.HealthURL, RequireDigest: app.RequireDigest}
+	if err := h.store.UpdateSettings(id, settingsFrom(body, current)); err != nil {
+		logHandlerError(c, "update app settings failed", err)
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error updating app")
 		return
 	}

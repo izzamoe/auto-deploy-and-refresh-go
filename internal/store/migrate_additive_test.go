@@ -272,7 +272,12 @@ func TestMigrate_BuiltInIdempotent(t *testing.T) {
 // earlier build) must not make the migration fail.
 func TestMigrate_CompletesPartiallyMigratedDatabase(t *testing.T) {
 	db := newHeadDB(t)
-	mustExec(t, db, `ALTER TABLE apps ADD COLUMN run_as_user TEXT NOT NULL DEFAULT ''`)
+	// apps.run_as_user (and the other per-app settings columns) already exist here:
+	// NewAppStore adds them itself since T056, which is exactly the "column already
+	// there" situation this test is about.
+	if _, ok := tableColumns(t, db, "apps")["run_as_user"]; !ok {
+		mustExec(t, db, `ALTER TABLE apps ADD COLUMN run_as_user TEXT NOT NULL DEFAULT ''`)
+	}
 	mustExec(t, db, `ALTER TABLE deploy_jobs ADD COLUMN rolled_back INTEGER NOT NULL DEFAULT 0`)
 	if err := Migrate(db); err != nil {
 		t.Fatalf("Migrate on a partially migrated DB: %v", err)

@@ -736,7 +736,8 @@ func TestDeploySuccessStageLifecycle(t *testing.T) {
 		t.Fatalf("terminal phase = %q, want %q", snap.Phase, progress.ProgressStageSucceeded)
 	}
 
-	want := []string{progress.ProgressStageValidating, progress.ProgressStageBackingUp, progress.ProgressStageInstalling, progress.ProgressStageRestarting, progress.ProgressStageHealthcheck}
+	// FR-042 (Q-13): a healthy deploy takes 3 consecutive "active" samples (was 1).
+	want := []string{progress.ProgressStageValidating, progress.ProgressStageBackingUp, progress.ProgressStageInstalling, progress.ProgressStageRestarting, progress.ProgressStageHealthcheck, progress.ProgressStageHealthcheck, progress.ProgressStageHealthcheck}
 	if !equalStrings(stages, want) {
 		t.Fatalf("stages = %v, want %v", stages, want)
 	}
@@ -836,19 +837,18 @@ func TestDeployFailureStageLifecycle(t *testing.T) {
 		t.Fatalf("terminal phase = %q, want %q", snap.Phase, progress.ProgressStageFailed)
 	}
 
+	// FR-042 (Q-13): an unhealthy service is sampled every 2 s for 30 s = 15 samples
+	// (was 5) before the rollback.
 	want := []string{
 		progress.ProgressStageValidating,
 		progress.ProgressStageBackingUp,
 		progress.ProgressStageInstalling,
 		progress.ProgressStageRestarting,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageRollback,
-		progress.ProgressStageRollback,
 	}
+	for i := 0; i < int(healthMaxWait/healthInterval); i++ {
+		want = append(want, progress.ProgressStageHealthcheck)
+	}
+	want = append(want, progress.ProgressStageRollback, progress.ProgressStageRollback)
 	if !equalStrings(stages, want) {
 		t.Fatalf("stages = %v, want %v", stages, want)
 	}

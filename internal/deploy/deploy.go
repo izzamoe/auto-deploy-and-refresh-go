@@ -391,26 +391,24 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 	}
 
 	tracker.SetPhase(app.ID, progress.ProgressStageHealthcheck)
-	for i := 1; i <= 5; i++ {
-		if cancelErr := checkpointRollbackInstalled(control, jobID, cancel.DeployPhaseHealthcheck, app, backupPath, backupCreated); cancelErr != nil {
-			if errors.Is(cancelErr, errDeployCanceled) {
-				return summary, cancelErr
-			}
-			tracker.Fail(app.ID)
-			return summary, cancelErr
+	baseline, haveBaseline := readNRestarts(app.ServiceName)
+	unhealthy, abort := runHealthCheck(app.ServiceName, app.HealthURL, baseline, haveBaseline, func() error {
+		return checkpointRollbackInstalled(control, jobID, cancel.DeployPhaseHealthcheck, app, backupPath, backupCreated)
+	})
+	if abort != nil {
+		if errors.Is(abort, errDeployCanceled) {
+			return summary, abort
 		}
-		deployHealthCheckSleep(2 * time.Second)
-		out, err := runSystemctl("is-active", app.ServiceName)
-		status := strings.TrimSpace(string(out))
-		slog.Info("health check", "attempt", i, "status", status)
-		if err == nil && status == "active" {
-			tracker.Finish(app.ID)
-			return summary, nil
-		}
+		tracker.Fail(app.ID)
+		return summary, abort
+	}
+	if unhealthy == nil {
+		tracker.Finish(app.ID)
+		return summary, nil
 	}
 
-	slog.Error("rolling back", "reason", "service failed health check")
-	return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, errors.New("service failed to restart after deploy"))
+	slog.Error("rolling back", "reason", unhealthy.Error())
+	return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, fmt.Errorf("service failed the health check after deploy: %w", unhealthy))
 }
 
 // rollbackInstalled restores the previous binary (backupPath -> app.BinaryPath)
