@@ -28,7 +28,9 @@ module.exports = defineConfig({
     { name: 'routing', testMatch: /routing\.spec\.ts$/ },
     { name: 'session', testMatch: /session-expiry\.spec\.ts$/, timeout: 180_000 },
     { name: 'a11y', testMatch: /a11y\.spec\.ts$/, timeout: 120_000 },
-    { name: 'visual', testMatch: /visual\.spec\.ts$/, timeout: 120_000 }
+    { name: 'visual', testMatch: /visual\.spec\.ts$/, timeout: 120_000 },
+    // T104: timing budget (FCP); only run on request (`--project=perf`), never by `make e2e` or the CI.
+    { name: 'perf', testMatch: /perf\.spec\.ts$/, timeout: 120_000 }
   ],
   expect: {
     toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled' }
