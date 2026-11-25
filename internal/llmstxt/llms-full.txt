@@ -435,8 +435,6 @@ matches what the binary actually serves.
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| GET | `/admin` | admin session |
-| GET | `/admin/*path` | admin session |
 | GET | `/admin/api/v1/account` | admin session |
 | POST | `/admin/api/v1/account/password` | admin session |
 | POST | `/admin/api/v1/account/sessions/revoke-all` | admin session |
@@ -487,7 +485,6 @@ matches what the binary actually serves.
 | POST | `/admin/apps/:id/update` | admin session |
 | POST | `/admin/apps/create` | admin session |
 | GET | `/admin/apps/new` | admin session |
-| GET | `/admin/assets/*filepath` | admin session |
 | GET | `/admin/events/v1/ws` | admin session |
 | GET | `/admin/login` | public |
 | POST | `/admin/login` | public |

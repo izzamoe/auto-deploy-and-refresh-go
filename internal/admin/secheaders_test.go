@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"net/http"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -119,15 +118,18 @@ func TestBuildCSP_NeverAllowsUnsafeScript(t *testing.T) {
 	}
 }
 
-// The SPA shell: its inline scripts are allowed by hash, the CSP is the document's own.
-func TestCSP_SPAShellListsTheHashesOfItsInlineScripts(t *testing.T) {
+// The static shell: its inline scripts are allowed by hash, the CSP is the document's own.
+func TestCSP_StaticShellListsTheHashesOfItsInlineScripts(t *testing.T) {
 	const inline = `window.__BOOT__=1`
-	page := `<!doctype html><html><head><script>` + inline + `</script><script src="/admin/assets/app.js"></script></head><body></body></html>`
-	handler := &adminSPAHandler{fs: http.FS(fstest.MapFS{"index.html": {Data: []byte(page)}})}
+	page := `<!doctype html><html><head><script>` + inline + `</script><script src="/admin/_next/static/app.js"></script></head><body></body></html>`
+	sh, err := NewStaticHandler(fstest.MapFS{"index.html": {Data: []byte(page)}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := server.New(server.WithHostPorts("127.0.0.1:0"), server.WithDisablePrintRoute(true))
 	SetupMiddleware(h)
-	h.GET("/admin", handler.serveIndexHertz)
-	resp := ut.PerformRequest(h.Engine, "GET", "/admin", nil).Result()
+	RegisterStaticHandlerHertz(h, passThroughAuth, sh)
+	resp := ut.PerformRequest(h.Engine, "GET", "/admin/", nil).Result()
 	csp := string(resp.Header.Peek("Content-Security-Policy"))
 	if !strings.Contains(csp, sriHash(inline)) {
 		t.Fatalf("CSP %q lacks the hash of the inline script", csp)
@@ -135,5 +137,5 @@ func TestCSP_SPAShellListsTheHashesOfItsInlineScripts(t *testing.T) {
 	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") || strings.Contains(csp, "'unsafe-eval'") {
 		t.Errorf("CSP allows unsafe script execution: %q", csp)
 	}
-	assertSecurityHeaders(t, "the SPA shell", func(k string) string { return string(resp.Header.Peek(k)) })
+	assertSecurityHeaders(t, "the static shell", func(k string) string { return string(resp.Header.Peek(k)) })
 }
