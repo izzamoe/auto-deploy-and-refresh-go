@@ -73,6 +73,7 @@ type DownloadSummary struct {
 }
 
 type DeployQueue struct {
+	onEnqueue  atomic.Pointer[func()] // wakes the coordinator (FR-048)
 	db         *sql.DB
 	maxPending int
 	// activeCache is an immutable snapshot of every non-terminal deploy job,
@@ -328,6 +329,16 @@ func scanJobRecord(sc rowScanner) (JobRecord, error) {
 	return item, err
 }
 
+// SetEnqueueHook registers fn, called (without holding any lock) after a job was
+// inserted, so the coordinator can start it at once instead of polling (FR-048).
+func (q *DeployQueue) SetEnqueueHook(fn func()) { q.onEnqueue.Store(&fn) }
+
+func (q *DeployQueue) enqueued() {
+	if fn := q.onEnqueue.Load(); fn != nil && *fn != nil {
+		(*fn)()
+	}
+}
+
 func (q *DeployQueue) DB() *sql.DB {
 	return q.db
 }
@@ -371,6 +382,9 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 	if isUniqueViolation(err) {
 		return ErrDuplicate
 	}
+	if err == nil {
+		q.enqueued()
+	}
 	return err
 }
 
@@ -406,6 +420,9 @@ func (q *DeployQueue) EnqueueManual(appID, tag string) error {
 	q.InvalidateActiveJobsCache()
 	if isUniqueViolation(err) {
 		return ErrDuplicate
+	}
+	if err == nil {
+		q.enqueued()
 	}
 	return err
 }
@@ -685,6 +702,7 @@ func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("create retry job: insert: %w", err)
 	}
+	q.enqueued()
 	return jobID, nil
 }
 

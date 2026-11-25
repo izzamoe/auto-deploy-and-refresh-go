@@ -40,6 +40,9 @@ var (
 	}
 )
 
+// cancelPollFallback is the safety-net interval of the cancel watcher (FR-048).
+var cancelPollFallback = 2 * time.Second
+
 // defaultJournalctlLines is how many recent journal lines CaptureServiceLogs
 // fetches when capturing a deploy's logs.
 const defaultJournalctlLines = 200
@@ -499,20 +502,26 @@ func deployDownloadContext(parent context.Context, jobID string, control *cancel
 		return ctx, cancel
 	}
 	done := make(chan struct{})
+	notify, unsubscribe := control.Subscribe()
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(25 * time.Millisecond)
+		defer unsubscribe()
+		// FR-048: a cancel request in this process is delivered by notification; the
+		// ticker is only the fallback for a request that was missed.
+		ticker := time.NewTicker(cancelPollFallback)
 		defer ticker.Stop()
 		for {
+			// Check first: a request may have landed before the subscription existed.
+			requested, err := control.IsCancelRequested(jobID)
+			if err == nil && requested {
+				cancel()
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
+			case <-notify:
 			case <-ticker.C:
-				requested, err := control.IsCancelRequested(jobID)
-				if err == nil && requested {
-					cancel()
-					return
-				}
 			}
 		}
 	}()

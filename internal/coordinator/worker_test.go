@@ -447,3 +447,102 @@ func TestCoordinatorSummaryPersisted(t *testing.T) {
 		t.Errorf("DownloadSpeedBPS = %v, want %v", job.DownloadSpeedBPS, wantSummary.SpeedBPS)
 	}
 }
+
+// B23 / FR-048: an idle coordinator must not hammer the database. It used to list the
+// apps every 100 ms (10+ queries/s); the notification-based loop needs at most one per
+// fallback interval (>= 2 s).
+func TestCoordinator_IdleDoesNotPollTheAppsTable(t *testing.T) {
+	c, _, _ := newTestCoordinator(t, func(*store.App, string, string) (store.DownloadSummary, error) {
+		return store.DownloadSummary{}, nil
+	})
+	var calls atomic.Int32
+	inner := c.listApps
+	c.listApps = func() ([]store.App, error) {
+		calls.Add(1)
+		return inner()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.Start(ctx)
+	time.Sleep(2 * time.Second)
+	cancel()
+	c.Wait()
+	if n := calls.Load(); n > 2 {
+		t.Fatalf("B23: %d apps.List queries in 2 s of idling (%.0f/s); want <= 1 per 2 s fallback interval plus the first pass", n, float64(n)/2)
+	}
+}
+
+// FR-048: a new job starts at once (wake channel), not at the next poll.
+func TestCoordinator_EnqueueStartsTheJobWithoutWaitingForThePollInterval(t *testing.T) {
+	started := make(chan time.Time, 4)
+	c, apps, q := newTestCoordinator(t, func(*store.App, string, string) (store.DownloadSummary, error) {
+		started <- time.Now()
+		return store.DownloadSummary{}, nil
+	})
+	app, err := apps.Create("wake", "sec-wake-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/opt/wake/wake", "wake.service", "o/r", "art")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); c.Wait() }()
+	c.Start(ctx)
+	time.Sleep(300 * time.Millisecond) // the scheduler is idle and waiting
+	enqueuedAt := time.Now()
+	if err := q.Enqueue(app.ID, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case at := <-started:
+		if d := at.Sub(enqueuedAt); d > 200*time.Millisecond {
+			t.Fatalf("the job started %v after the enqueue, want < 200 ms (fallback poll is %v)", d, pollFallback)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the job never started")
+	}
+}
+
+// FR-048: a job queued behind a running one of the same app starts as soon as that one ends.
+func TestCoordinator_NextJobOfTheSameAppStartsWhenTheRunningOneEnds(t *testing.T) {
+	release := make(chan struct{})
+	var starts []time.Time
+	var mu sync.Mutex
+	c, apps, q := newTestCoordinator(t, func(_ *store.App, _ string, tag string) (store.DownloadSummary, error) {
+		mu.Lock()
+		starts = append(starts, time.Now())
+		n := len(starts)
+		mu.Unlock()
+		if n == 1 {
+			<-release
+		}
+		return store.DownloadSummary{}, nil
+	})
+	app, err := apps.Create("seq", "sec-seq-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/opt/seq/seq", "seq.service", "o/r", "art")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); c.Wait() }()
+	c.Start(ctx)
+	_ = q.Enqueue(app.ID, "v1")
+	_ = q.Enqueue(app.ID, "v2")
+	time.Sleep(300 * time.Millisecond)
+	releasedAt := time.Now()
+	close(release)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(starts)
+		var second time.Time
+		if n >= 2 {
+			second = starts[1]
+		}
+		mu.Unlock()
+		if n >= 2 {
+			if d := second.Sub(releasedAt); d > 300*time.Millisecond {
+				t.Fatalf("the queued job started %v after the first one ended, want < 300 ms", d)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the second job never started")
+}

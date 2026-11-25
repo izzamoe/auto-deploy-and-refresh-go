@@ -25,6 +25,10 @@ func sleepOrDone(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// pollFallback is how often an idle coordinator re-checks the queue when no
+// notification arrived (FR-048): a safety net, not the primary mechanism.
+var pollFallback = 2 * time.Second
+
 // DeployRunner is the legacy runner kept for backward compatibility with main.go.
 type DeployRunner func(tag string) error
 
@@ -98,6 +102,7 @@ type CoordinatorRunner func(app *store.App, jobID, tag string) (store.DownloadSu
 
 type Coordinator struct {
 	apps        *store.AppStore
+	listApps    func() ([]store.App, error) // seam: tests count the idle queries (B23)
 	q           *store.DeployQueue
 	runner      CoordinatorRunner
 	tracker     *progress.ProgressTracker
@@ -105,6 +110,7 @@ type Coordinator struct {
 	logCapturer func(serviceName string, since time.Time) string
 	events      cancel.EventSink
 	wg          sync.WaitGroup
+	wake        chan struct{} // buffered(1): "look at the queue now" (FR-048)
 
 	mu         sync.Mutex
 	activeApps map[string]bool
@@ -113,11 +119,21 @@ type Coordinator struct {
 func NewCoordinator(apps *store.AppStore, q *store.DeployQueue, runner CoordinatorRunner, tracker *progress.ProgressTracker) *Coordinator {
 	return &Coordinator{
 		apps:       apps,
+		listApps:   apps.List,
 		q:          q,
 		runner:     runner,
 		tracker:    tracker,
 		notifier:   telegram.NopNotifier{},
 		activeApps: make(map[string]bool),
+		wake:       make(chan struct{}, 1),
+	}
+}
+
+// Wake asks the scheduler to look at the queue now; it never blocks and coalesces.
+func (c *Coordinator) Wake() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -155,6 +171,9 @@ func (c *Coordinator) SetLogCapturer(fn func(serviceName string, since time.Time
 }
 
 func (c *Coordinator) Start(ctx context.Context) {
+	// FR-048: a new job wakes the scheduler; the fallback ticker only covers lost wakes
+	// and out-of-process changes (an app enabled, a restored database).
+	c.q.SetEnqueueHook(c.Wake)
 	c.wg.Go(func() {
 		c.schedule(ctx)
 	})
@@ -187,10 +206,10 @@ func (c *Coordinator) schedule(ctx context.Context) {
 		default:
 		}
 
-		apps, err := c.apps.List()
+		apps, err := c.listApps()
 		if err != nil {
 			slog.Error("coordinator: list apps failed", "err", err)
-			if !sleepOrDone(ctx, 100*time.Millisecond) {
+			if !sleepOrDone(ctx, time.Second) {
 				return
 			}
 			continue
@@ -229,10 +248,25 @@ func (c *Coordinator) schedule(ctx context.Context) {
 		}
 
 		if !dispatched {
-			if !sleepOrDone(ctx, 100*time.Millisecond) {
+			if !c.waitForWork(ctx) {
 				return
 			}
 		}
+	}
+}
+
+// waitForWork blocks until a wake notification, the fallback interval or shutdown;
+// it reports false on shutdown.
+func (c *Coordinator) waitForWork(ctx context.Context) bool {
+	timer := time.NewTimer(pollFallback)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-c.wake:
+		return true
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -242,6 +276,7 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		c.mu.Lock()
 		delete(c.activeApps, app.ID)
 		c.mu.Unlock()
+		c.Wake() // jobs queued behind this one can start now
 	}()
 
 	// Timestamp before the deploy runs so the job's stored log can be scoped to

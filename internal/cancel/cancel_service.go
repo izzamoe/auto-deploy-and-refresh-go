@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
@@ -118,6 +119,38 @@ type CancelCheckpointDecision struct {
 type CancelService struct {
 	q      *store.DeployQueue
 	events EventSink
+
+	subMu sync.Mutex
+	subs  map[chan struct{}]struct{}
+}
+
+// Subscribe returns a channel that receives a (coalesced) signal whenever a cancel was
+// requested in this process, so deploys react at once instead of polling (FR-048). The
+// returned func must be called when the subscriber is done.
+func (s *CancelService) Subscribe() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	s.subMu.Lock()
+	if s.subs == nil {
+		s.subs = map[chan struct{}]struct{}{}
+	}
+	s.subs[ch] = struct{}{}
+	s.subMu.Unlock()
+	return ch, func() {
+		s.subMu.Lock()
+		delete(s.subs, ch)
+		s.subMu.Unlock()
+	}
+}
+
+func (s *CancelService) notifyCancel() {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	for ch := range s.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func NewCancelService(q *store.DeployQueue) *CancelService {
@@ -182,6 +215,7 @@ func (s *CancelService) RequestJobCancel(jobID string) (CancelJobResult, error) 
 	// Status transitions above may remove jobs from the active set that backs
 	// IsDuplicate; drop the queue's cached snapshot so it rebuilds.
 	s.q.InvalidateActiveJobsCache()
+	s.notifyCancel() // FR-048: running deploys react at once
 	s.publishCancelResult(result)
 	return result, nil
 }
@@ -255,6 +289,7 @@ func (s *CancelService) RequestAppCancel(appID string) (CancelAppResult, error) 
 		return CancelAppResult{}, err
 	}
 	s.q.InvalidateActiveJobsCache()
+	s.notifyCancel() // FR-048: running deploys react at once
 	for _, item := range result.Requested {
 		s.publishCancelResult(item)
 	}
@@ -346,6 +381,7 @@ func (s *CancelService) markTerminal(jobID, status, message string) error {
 		status, message, jobID,
 	)
 	s.q.InvalidateActiveJobsCache()
+	s.notifyCancel() // FR-048: running deploys react at once
 	return err
 }
 

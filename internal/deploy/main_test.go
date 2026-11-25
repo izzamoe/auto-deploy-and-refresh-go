@@ -76,6 +76,7 @@ func newTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	db.SetMaxOpenConns(1) // ":memory:" is per connection; production also uses a single connection
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
