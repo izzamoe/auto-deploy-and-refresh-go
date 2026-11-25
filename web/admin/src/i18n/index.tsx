@@ -7,29 +7,32 @@
 // translated content (no flash of the wrong language).
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { PropsWithChildren } from "react";
-import { id } from "./id";
+import { idCore } from "./id/core";
+import { DICTIONARIES, registerMessages } from "./registry";
+import type { Dictionary, Locale } from "./registry";
 import type { MessageKey } from "./id";
 
 export type { MessageKey } from "./id";
 
-export type Locale = "id" | "en";
+export type { Locale } from "./registry";
+export { DICTIONARIES, registerMessages } from "./registry";
 export const LOCALES: readonly Locale[] = ["id", "en"];
 export const DEFAULT_LOCALE: Locale = "id";
 export const LOCALE_STORAGE_KEY = "ad.locale";
 
-type Dictionary = Record<MessageKey, string>;
-
-// `id` (the default) ships in the shared bundle; `en` is a separate chunk fetched only when
-// the English UI is needed, so the initial JS (Q-20) does not carry both languages.
-export const DICTIONARIES: Partial<Record<Locale, Dictionary>> = { id };
+// `id` (the default) starts with the CORE messages only; every page/component imports the
+// namespace module of the text it uses (see i18n/id/*.ts), so a route ships just its own
+// text. `en` is one separate chunk fetched only when the English UI is needed. Both keep the
+// initial JS (Q-20) small.
+registerMessages("id", idCore);
 
 export function registerDictionary(locale: Locale, dict: Dictionary) {
-  DICTIONARIES[locale] = dict;
+  registerMessages(locale, dict);
 }
 
 /** Resolves once the dictionary of `locale` is available (no-op when already loaded). */
 export async function loadDictionary(locale: Locale): Promise<void> {
-  if (DICTIONARIES[locale]) return;
+  if (locale === "en" ? DICTIONARIES.en && Object.keys(DICTIONARIES.en).length > 0 : DICTIONARIES[locale]) return;
   if (locale === "en") registerDictionary("en", (await import("./en")).en);
 }
 
@@ -50,7 +53,7 @@ export function detectLocale(stored: string | null | undefined, languages: reado
 }
 
 export function translate(locale: Locale, key: MessageKey, params?: Params): string {
-  const template = DICTIONARIES[locale]?.[key] ?? id[key] ?? key;
+  const template = DICTIONARIES[locale]?.[key] ?? DICTIONARIES.id?.[key] ?? key;
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (whole, name: string) => (name in params ? String(params[name]) : whole));
 }
@@ -59,7 +62,7 @@ export function translate(locale: Locale, key: MessageKey, params?: Params): str
 // to the generic message instead of echoing server text.
 export function translateError(locale: Locale, code: string | undefined, status?: number): string {
   const key = `error.${code ?? ""}` as MessageKey;
-  if (code && key in (DICTIONARIES[locale] ?? id)) return translate(locale, key);
+  if (code && key in (DICTIONARIES[locale] ?? DICTIONARIES.id ?? {})) return translate(locale, key);
   if (status !== undefined && status >= 400 && !code) return translate(locale, "error.http", { status });
   return translate(locale, "error.unknown");
 }

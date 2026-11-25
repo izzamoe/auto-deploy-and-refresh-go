@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/form";
 import { useI18n } from "@/i18n";
 import { PartEditor } from "./PartEditor";
 import type { PartStatus } from "./PartEditor";

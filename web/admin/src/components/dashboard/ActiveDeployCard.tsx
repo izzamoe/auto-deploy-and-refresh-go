@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/dashboard";
 import { Rocket } from "lucide-react";
 import { useId } from "react";
 import { useI18n } from "@/i18n";

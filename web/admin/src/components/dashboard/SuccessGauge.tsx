@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/dashboard";
 import { useId } from "react";
 import { Gauge } from "@/components/charts/Gauge";
 import { useI18n } from "@/i18n";

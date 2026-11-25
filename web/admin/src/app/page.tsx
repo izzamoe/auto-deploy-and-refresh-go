@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/dashboard";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { AppWindow, BarChart3, XCircle } from "lucide-react";
 import dynamic from "next/dynamic";

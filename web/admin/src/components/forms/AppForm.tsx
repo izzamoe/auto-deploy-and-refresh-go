@@ -8,6 +8,8 @@
 //  - EDIT: env and args are loaded separately. A part that is not loaded (or failed to load)
 //    is disabled and NEVER sent (B53); a part whose text did not change is NOT sent either
 //    (FR-074); the form state is local, so refetches and notifications never reset typing (B54).
+import "@/i18n/id/form";
+import "@/i18n/id/unit";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import Link from "next/link";

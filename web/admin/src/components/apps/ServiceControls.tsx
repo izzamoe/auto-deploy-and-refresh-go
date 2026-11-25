@@ -1,5 +1,7 @@
 "use client";
 
+import "@/i18n/id/apps";
+import "@/i18n/id/unit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, RefreshCw, RotateCw, Square } from "lucide-react";
 import dynamic from "next/dynamic";

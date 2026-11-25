@@ -2,6 +2,7 @@
 
 // Manual deploy: pick a release from GitHub or, when the list is unavailable/empty, type the
 // tag. Loaded on demand (next/dynamic); the releases query only runs while the dialog is open.
+import "@/i18n/id/apps";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { FormEvent } from "react";

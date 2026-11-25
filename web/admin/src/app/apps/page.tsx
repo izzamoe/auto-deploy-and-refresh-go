@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/apps";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw } from "lucide-react";
 import Link from "next/link";

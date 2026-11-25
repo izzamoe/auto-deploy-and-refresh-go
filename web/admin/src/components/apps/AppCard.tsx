@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/apps";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import Link from "next/link";

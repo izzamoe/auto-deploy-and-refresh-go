@@ -2,6 +2,7 @@
 
 // Preview-then-confirm for generating the systemd unit (it writes /etc/systemd/system as
 // root, so applying is deliberately a second explicit step). Shared with the app form (T089).
+import "@/i18n/id/unit";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";

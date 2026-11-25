@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/dashboard";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, HelpCircle } from "lucide-react";
 import Link from "next/link";

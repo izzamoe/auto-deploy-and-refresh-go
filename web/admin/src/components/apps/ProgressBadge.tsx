@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/apps";
 import { StatusPill } from "@/components/common/StatusPill";
 import { Progress } from "@/components/ui/progress";
 import { useI18n } from "@/i18n";

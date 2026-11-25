@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/dashboard";
 import Link from "next/link";
 import { useId } from "react";
 import { Button } from "@/components/ui/button";

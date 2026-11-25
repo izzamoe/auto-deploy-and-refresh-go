@@ -3,6 +3,7 @@
 // Log viewer dialog (service journal, job logs, system logs). Loaded on demand (next/dynamic)
 // so the dialog code is not in the initial bundle (Q-20). Requests are aborted on close,
 // on a new load and on unmount; the server reports `truncated` (FR-058) and we say so.
+import "@/i18n/id/apps";
 import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";

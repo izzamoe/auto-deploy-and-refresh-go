@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/form";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useI18n } from "@/i18n";

@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/dashboard";
 import { useId } from "react";
 import { AreaChart } from "@/components/charts/AreaChart";
 import { useI18n } from "@/i18n";

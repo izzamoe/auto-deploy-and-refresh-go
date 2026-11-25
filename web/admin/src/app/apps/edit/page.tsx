@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/form";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { AppForm } from "@/components/forms/AppForm";
