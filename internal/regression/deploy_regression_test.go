@@ -110,7 +110,7 @@ func TestRegression_B11_CancelEventShape(t *testing.T) {
 	}
 	for _, e := range s.evs {
 		// identical mapping to AdminEventHub.BroadcastCancelEvent (admin_events.go:302-304)
-		b, _ := json.Marshal(admin.AdminEvent{Version: "v1", Type: e.Type, AppID: e.AppID, JobID: e.JobID, Payload: e.Payload})
+		b, _ := json.Marshal(admin.AdminEvent{Protocol: "2", Type: e.Type, AppID: e.AppID, JobID: e.JobID, Payload: e.Payload})
 		var m map[string]any
 		json.Unmarshal(b, &m)
 		p, _ := m["payload"].(map[string]any)

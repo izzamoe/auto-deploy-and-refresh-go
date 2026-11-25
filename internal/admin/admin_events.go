@@ -10,7 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/llmstxt"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -20,7 +22,7 @@ import (
 )
 
 const (
-	adminEventProtocolVersion     = "v1"
+	adminEventProtocolVersion     = "2"
 	adminEventTypeHello           = "hello"
 	adminEventTypeSnapshot        = "snapshot"
 	adminEventTypeJobStatus       = "job_status"
@@ -34,11 +36,13 @@ const (
 	adminEventWriteTimeout = 5 * time.Second
 )
 
+// AdminEvent is the envelope of events-ws.md section 2 (protocol "2"): jobId and
+// appId are always top-level.
 type AdminEvent struct {
-	Version   string    `json:"version"`
+	Protocol  string    `json:"protocol"`
 	ID        string    `json:"id"`
 	Type      string    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp time.Time `json:"ts"`
 	AppID     string    `json:"appId,omitempty"`
 	JobID     string    `json:"jobId,omitempty"`
 	Payload   any       `json:"payload,omitempty"`
@@ -60,10 +64,19 @@ type compactAdminProgressEvent struct {
 	Message         string `json:"msg"`
 }
 
+// adminEventHelloPayload is the payload of the first event of every connection
+// (events-ws.md 3.1).
+type adminEventHelloPayload struct {
+	ServerVersion    string     `json:"serverVersion"`
+	SessionExpiresAt *time.Time `json:"sessionExpiresAt,omitempty"`
+	HeartbeatSeconds int        `json:"heartbeatSeconds"`
+}
+
 type AdminEventHub struct {
-	tracker *progress.ProgressTracker
-	now     func() time.Time
-	nextID  atomic.Uint64
+	tracker       *progress.ProgressTracker
+	now           func() time.Time
+	nextID        atomic.Uint64
+	serverVersion string
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -76,15 +89,35 @@ type adminEventClient struct {
 
 func NewAdminEventHub(tracker *progress.ProgressTracker) *AdminEventHub {
 	return &AdminEventHub{
-		tracker: tracker,
-		now:     time.Now,
-		clients: make(map[*adminEventClient]struct{}),
+		tracker:       tracker,
+		now:           time.Now,
+		serverVersion: llmstxt.Version,
+		clients:       make(map[*adminEventClient]struct{}),
 	}
 }
 
+// SetServerVersion overrides the version reported in the hello event (default:
+// the build version stamped into llmstxt.Version by the linker).
+func (h *AdminEventHub) SetServerVersion(v string) { h.serverVersion = v }
+
 const adminEventHeartbeatInterval = 30 * time.Second
 
+// EventsWebSocket upgrades the request. The origin is verified by the default of
+// coder/websocket (no OriginPatterns, no InsecureSkipVerify): a browser page on
+// another origin cannot open this socket with the admin's cookie (K4, FR-012).
 func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) {
+	h.serveEvents(w, r, nil, nil)
+}
+
+// serveEvents is EventsWebSocket plus what only the caller knows: when the signed-in
+// session ends (hello.sessionExpiresAt) and any extra response headers for the
+// handshake (the deprecation notice of the pre-v1 path).
+func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sessionExpiresAt *time.Time, extra http.Header) {
+	for k, vs := range extra {
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
 	c, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
@@ -95,7 +128,7 @@ func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) 
 	defer h.removeClient(client)
 
 	ctx := c.CloseRead(context.Background())
-	if !h.writeInitialEvents(ctx, c) {
+	if !h.writeInitialEvents(ctx, c, sessionExpiresAt) {
 		return
 	}
 
@@ -168,8 +201,12 @@ func (c *adminEventClient) close() {
 	})
 }
 
-func (h *AdminEventHub) writeInitialEvents(ctx context.Context, c *websocket.Conn) bool {
-	hello, err := h.encodeEvent(AdminEvent{Type: adminEventTypeHello, Payload: map[string]string{"protocol": adminEventProtocolVersion}})
+func (h *AdminEventHub) writeInitialEvents(ctx context.Context, c *websocket.Conn, sessionExpiresAt *time.Time) bool {
+	hello, err := h.encodeEvent(AdminEvent{Type: adminEventTypeHello, Payload: adminEventHelloPayload{
+		ServerVersion:    h.serverVersion,
+		SessionExpiresAt: sessionExpiresAt,
+		HeartbeatSeconds: int(adminEventHeartbeatInterval / time.Second),
+	}})
 	if err != nil || !writeAdminEventPayload(ctx, c, hello) {
 		return false
 	}
@@ -193,8 +230,8 @@ func (h *AdminEventHub) snapshotAll() []progress.ProgressSnapshot {
 }
 
 func (h *AdminEventHub) encodeEvent(event AdminEvent) ([]byte, error) {
-	if event.Version == "" {
-		event.Version = adminEventProtocolVersion
+	if event.Protocol == "" {
+		event.Protocol = adminEventProtocolVersion
 	}
 	if event.ID == "" {
 		event.ID = h.newEventID()
@@ -220,7 +257,7 @@ func (h *AdminEventHub) encodeProgressEvent(event AdminEvent) ([]byte, error) {
 		frame.JobID = event.JobID
 	}
 	return json.Marshal(compactAdminProgressEvent{
-		Version:         event.Version,
+		Version:         event.Protocol,
 		Type:            adminEventCompactProgress,
 		ID:              event.ID,
 		Timestamp:       event.Timestamp.Format(time.RFC3339Nano),
@@ -291,12 +328,36 @@ func writeAdminEventPayload(ctx context.Context, c *websocket.Conn, payload []by
 	return err == nil
 }
 
+// EventsWebSocketHertz runs behind the auth middleware. A session principal tells
+// the hello event when the session ends; an API-token principal has no session.
 func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.RequestContext) {
-	adaptor.HertzHandler(http.HandlerFunc(h.EventsWebSocket))(ctx, c)
+	var expires *time.Time
+	if p, ok := auth.PrincipalFrom(c); ok && p.Kind == auth.KindSession && !p.ExpiresAt.IsZero() {
+		t := p.ExpiresAt.UTC()
+		expires = &t
+	}
+	var extra http.Header
+	if path := string(c.Request.URI().Path()); path == adminEventsLegacyPath {
+		extra = http.Header{
+			"Deprecation": {"true"},
+			"Link":        {"<" + adminEventsV1Path + `>; rel="successor-version"`},
+		}
+	}
+	adaptor.HertzHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.serveEvents(w, r, expires, extra)
+	}))(ctx, c)
 }
 
+const (
+	adminEventsV1Path     = "/admin/events/v1/ws"
+	adminEventsLegacyPath = "/admin/events/ws"
+)
+
+// RegisterAdminEventRoutesHertz mounts the event socket at /admin/events/v1/ws and, for
+// ONE release, at the pre-v1 path /admin/events/ws with a Deprecation notice (Q-7).
 func RegisterAdminEventRoutesHertz(h *server.Hertz, hub *AdminEventHub, auth app.HandlerFunc) {
-	h.GET("/admin/events/ws", auth, hub.EventsWebSocketHertz)
+	h.GET(adminEventsV1Path, auth, hub.EventsWebSocketHertz)
+	h.GET(adminEventsLegacyPath, auth, hub.EventsWebSocketHertz)
 }
 
 func (h *AdminEventHub) BroadcastCancelEvent(event cancel.CancelEvent) {
