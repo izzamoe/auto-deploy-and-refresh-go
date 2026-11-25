@@ -28,6 +28,7 @@ set -eu
 : "${AUTO_DEPLOY_TR_BIN:=tr}"
 : "${AUTO_DEPLOY_UNAME_BIN:=uname}"
 : "${AUTO_DEPLOY_ID_BIN:=id}"
+: "${AUTO_DEPLOY_SHA256SUM_BIN:=sha256sum}"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 CONTRACT_FILE="${SCRIPT_DIR}/release-contract.sh"
@@ -69,6 +70,33 @@ Contract:
   - runtime files fetched separately from raw.githubusercontent.com at the same tag
   - systemd activation: systemctl daemon-reload && systemctl enable ${AUTO_DEPLOY_SERVICE_UNIT_NAME} && systemctl restart ${AUTO_DEPLOY_SERVICE_UNIT_NAME}
 EOF
+}
+
+# verify_archive_checksum ARCHIVE ASSET_NAME SHA256SUMS_FILE: the release publishes
+# SHA256SUMS (sha256sum format, FR-046, FR-137); an archive that does not match is
+# never unpacked or installed.
+verify_archive_checksum() {
+    archive=$1
+    asset=$2
+    sums=$3
+    expected=""
+    while read -r sum name; do
+        name=${name#\*}
+        if [ "$name" = "$asset" ]; then
+            expected=$sum
+        fi
+    done < "$sums"
+    if [ -z "$expected" ]; then
+        fail "checksum for $asset not found in SHA256SUMS; refusing to install"
+    fi
+    actual=$("$AUTO_DEPLOY_SHA256SUM_BIN" "$archive") || fail "failed to hash $archive"
+    actual=${actual%% *}
+    expected=$(printf '%s' "$expected" | "$AUTO_DEPLOY_TR_BIN" 'A-F' 'a-f')
+    actual=$(printf '%s' "$actual" | "$AUTO_DEPLOY_TR_BIN" 'A-F' 'a-f')
+    if [ "$actual" != "$expected" ]; then
+        fail "checksum mismatch for $asset: expected $expected, got $actual; refusing to install"
+    fi
+    printf 'Verified SHA-256 of %s\n' "$asset"
 }
 
 fail() {
@@ -200,6 +228,7 @@ main() {
     require_command "$AUTO_DEPLOY_TR_BIN" tr
     require_command "$AUTO_DEPLOY_UNAME_BIN" uname
     require_command "$AUTO_DEPLOY_ID_BIN" id
+    require_command "$AUTO_DEPLOY_SHA256SUM_BIN" sha256sum
 
     require_linux
     arch=$(detect_arch)
@@ -229,6 +258,20 @@ main() {
     printf 'Installing auto-deploy %s for Linux %s\n' "$version" "$arch"
 
     download_to_file "$asset_url" "$archive_path" "release asset"
+
+    # FR-046: verify the archive against the release's SHA256SUMS before anything is
+    # unpacked or installed. `auto-deploy upgrade` passes the file it already verified.
+    sums_path="$tmp_dir/SHA256SUMS"
+    if [ -n "${AUTO_DEPLOY_SHA256SUMS_FILE:-}" ]; then
+        cp -- "$AUTO_DEPLOY_SHA256SUMS_FILE" "$sums_path" || fail "failed to read $AUTO_DEPLOY_SHA256SUMS_FILE"
+        verify_archive_checksum "$archive_path" "$asset_name" "$sums_path"
+    elif "$AUTO_DEPLOY_CURL_BIN" -fsSL "$(release_asset_url "$version" SHA256SUMS)" -o "$sums_path"; then
+        verify_archive_checksum "$archive_path" "$asset_name" "$sums_path"
+    elif [ "${AUTO_DEPLOY_ALLOW_UNVERIFIED:-}" = "1" ]; then
+        printf 'WARNING: SHA256SUMS is not published for %s; installing WITHOUT checksum verification (AUTO_DEPLOY_ALLOW_UNVERIFIED=1)\n' "$version" >&2
+    else
+        fail "failed to download SHA256SUMS for $version; refusing to install an unverified archive (set AUTO_DEPLOY_ALLOW_UNVERIFIED=1 to override)"
+    fi
     validate_archive_contract "$archive_path" "$archive_contents_file"
 
     if ! "$AUTO_DEPLOY_UNZIP_BIN" -q "$archive_path" -d "$tmp_dir/unpacked"; then

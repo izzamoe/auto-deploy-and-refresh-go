@@ -36,8 +36,8 @@ func TestDeploy_RefusesUnsafeAppBeforeTouchingAnything(t *testing.T) {
 			client := fakeBodyClientCounting(&downloads)
 
 			_, err := DeployWithControl(app, "job-unsafe", "v1", tracker, client, nil)
-			if err == nil || !strings.Contains(err.Error(), "invalid app configuration: "+tc.field) {
-				t.Fatalf("error = %v, want 'invalid app configuration: %s ...'", err, tc.field)
+			if err == nil || !strings.Contains(err.Error(), "edit app: "+tc.field+" is invalid") {
+				t.Fatalf("error = %v, want 'edit app: %s is invalid ...'", err, tc.field)
 			}
 			if called {
 				t.Error("systemctl must not be called for an unsafe app")

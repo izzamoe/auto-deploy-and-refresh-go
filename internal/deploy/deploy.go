@@ -266,7 +266,7 @@ func DeployArtifactContext(parent context.Context, app *store.App, jobID, tag st
 	// path that skipped it) must not reach the filesystem or systemctl with an unsafe
 	// binary path, service name, repo or artifact name.
 	if errs := ValidateAppInput(AppInput{BinaryPath: app.BinaryPath, ServiceName: app.ServiceName, GithubRepo: app.GithubRepo, ArtifactName: app.ArtifactName}); len(errs) > 0 {
-		return store.DownloadSummary{}, fmt.Errorf("invalid app configuration: %s: %s", errs[0].Field, errs[0].Message)
+		return store.DownloadSummary{}, fmt.Errorf("edit app: %s is invalid (%s); this stored value predates input validation and must be corrected before the app can be deployed", errs[0].Field, errs[0].Message)
 	}
 
 	tmpPath := app.BinaryPath + ".tmp"

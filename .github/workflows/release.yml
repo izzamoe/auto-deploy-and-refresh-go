@@ -137,7 +137,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum -- *.zip > SHA256SUMS
+          # install.sh is a release asset too, so `auto-deploy upgrade` can verify the
+          # script it runs against the same file (FR-046).
+          cp ../../install.sh install.sh
+          sha256sum -- *.zip install.sh > SHA256SUMS
           sha256sum --check SHA256SUMS
           cat SHA256SUMS
 
@@ -150,6 +153,7 @@ jobs:
             dist/release/${{ steps.contract.outputs.asset_amd64 }}
             dist/release/${{ steps.contract.outputs.asset_arm64 }}
             dist/release/SHA256SUMS
+            dist/release/install.sh
           if-no-files-found: error
 
   publish-release:
@@ -197,6 +201,7 @@ jobs:
             dist/release/${{ needs.build-release.outputs.asset_amd64 }}
             dist/release/${{ needs.build-release.outputs.asset_arm64 }}
             dist/release/SHA256SUMS
+            dist/release/install.sh
           fail_on_unmatched_files: true
           # body_path supplies the tag annotation; generate_release_notes then
           # appends the commit/PR changelog beneath it.
