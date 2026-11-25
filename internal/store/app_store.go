@@ -384,6 +384,24 @@ func (s *AppStore) Delete(id string) error {
 		return ErrActiveDeployExists
 	}
 
+	// B14/FR-035: everything that belongs to the app goes in the SAME transaction —
+	// its env vars (secrets) and args as much as its jobs — so a failure in any child
+	// delete leaves the app and all its data intact. The tables belong to other stores
+	// that may not have been constructed on this database, hence the existence check
+	// (the names are constants, never request data).
+	for _, table := range []string{"app_env", "app_args"} {
+		var exists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&exists); err != nil {
+			return fmt.Errorf("app_store: check %s table: %w", table, err)
+		}
+		if exists == 0 {
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE app_id = ?`, id); err != nil {
+			return fmt.Errorf("app_store: delete %s: %w", table, err)
+		}
+	}
+
 	if _, err := tx.Exec(`DELETE FROM deploy_jobs WHERE app_id = ?`, id); err != nil {
 		return fmt.Errorf("app_store: delete jobs: %w", err)
 	}

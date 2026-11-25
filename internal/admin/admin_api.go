@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/deploy"
 	"github.com/izzamoe/auto-deploy/internal/httpx"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
@@ -385,8 +386,30 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
 }
 
+// DeleteAppHertz removes the app with its env vars, args and jobs in ONE
+// transaction (B14, FR-035). ?removeUnitFile=true (Q-10, default false) also removes
+// the unit file auto-deploy generated for it; a hand-written unit file is never
+// removed, and a failure to remove the unit does not undo the deletion.
 func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestContext) {
-	if err := h.store.Delete(c.Param("id")); err != nil {
+	id := c.Param("id")
+	removeUnitFile := false
+	if raw := string(c.Query("removeUnitFile")); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeAdminAPIValidationErrorHertz(c, []string{"removeUnitFile must be true or false"})
+			return
+		}
+		removeUnitFile = v
+	}
+	// The service name must be read before the row is gone.
+	serviceName := ""
+	if removeUnitFile {
+		if existing, err := h.store.Get(id); err == nil && existing != nil {
+			serviceName = existing.ServiceName
+		}
+	}
+
+	if err := h.store.Delete(id); err != nil {
 		if errors.Is(err, store.ErrActiveDeployExists) {
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Cannot delete app with active deploy")
 			return
@@ -395,10 +418,23 @@ func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestCont
 			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
 			return
 		}
+		logHandlerError(c, "delete app failed", err)
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to delete app")
 		return
 	}
-	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: "App deleted successfully"})
+
+	message := "App deleted successfully"
+	if removeUnitFile && serviceName != "" {
+		removed, err := deploy.RemoveServiceUnit(serviceName)
+		switch {
+		case err != nil:
+			logHandlerError(c, "remove unit file after app delete failed", err)
+			message += "; the unit file could not be removed"
+		case removed:
+			message += "; unit file removed"
+		}
+	}
+	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: message})
 }
 
 func (h *AdminAPIHandler) ToggleAppHertz(ctx context.Context, c *app.RequestContext) {
