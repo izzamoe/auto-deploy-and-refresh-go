@@ -13,7 +13,7 @@ permissions:
 # Runners are the self-hosted Linux x64 pool; every gate must fail the run when it fails.
 jobs:
   build-release:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
       asset_amd64: ${{ steps.contract.outputs.asset_amd64 }}
@@ -159,7 +159,7 @@ jobs:
   publish-release:
     if: github.event_name == 'push'
     needs: build-release
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
