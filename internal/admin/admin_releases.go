@@ -94,5 +94,6 @@ func (h *ReleasesHandler) ListAppReleasesHertz(ctx context.Context, c *app.Reque
 // RegisterReleasesRoutesHertz registers GET /admin/api/apps/:id/releases
 // under the given auth middleware.
 func RegisterReleasesRoutesHertz(h *server.Hertz, handler *ReleasesHandler, auth app.HandlerFunc) {
-	h.GET("/admin/api/apps/:id/releases", auth, handler.ListAppReleasesHertz)
+	api := h.Group("/admin/api/v1", auth)
+	api.GET("/apps/:id/releases", handler.ListAppReleasesHertz)
 }

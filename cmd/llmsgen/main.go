@@ -285,6 +285,10 @@ func scanFile(path string, seen map[string]route) error {
 		if hasIdentArg(call.Args[1:], "notFound") {
 			return true
 		}
+		// Pre-v1 aliases (Q-7) live for one release and are not advertised.
+		if hasIdentArg(call.Args[1:], "deprecatedAlias") {
+			return true
+		}
 
 		r := route{Method: sel.Sel.Name, Path: path, Auth: hasAuthArg(call.Args[1:])}
 		if g, isGroup := groups[recv.Name]; isGroup {

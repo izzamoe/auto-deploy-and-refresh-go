@@ -2,6 +2,10 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -80,26 +84,42 @@ func (h *TelegramConfigHandler) apply(cfg store.TelegramConfig) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.manager != nil {
-		h.manager.Stop()
-		h.manager = nil
-	}
+	old := h.manager
+	h.manager = nil
 
 	if !telegramConfigComplete(cfg) {
 		h.notifier.SetNotifier(telegram.NopNotifier{})
+		if old != nil {
+			old.Stop() // drains what was queued
+		}
 		return
 	}
 
+	// FR-052: route new messages to the new manager FIRST (they queue there until it
+	// starts), then stop the old one, which delivers what it still holds. The new manager
+	// starts only afterwards: both would otherwise share one connection and session.
 	m := h.newManager(telegram.Config{
 		AppID:        cfg.AppID,
 		AppHash:      cfg.AppHash,
 		BotToken:     cfg.BotToken,
 		ChatUsername: cfg.ChatUsername,
-		SessionPath:  h.sessionPath,
+		SessionPath:  sessionPathFor(h.sessionPath, cfg),
 	})
+	h.notifier.SetNotifier(m)
+	if old != nil {
+		old.Stop()
+	}
 	m.Start(h.baseCtx)
 	h.manager = m
-	h.notifier.SetNotifier(m)
+}
+
+// sessionPathFor derives the gotd session file from the credential set: a session
+// authenticated for one bot/app must never be reused by another (FR-052). Only a hash
+// prefix reaches the file name.
+func sessionPathFor(base string, cfg store.TelegramConfig) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", cfg.AppID, cfg.AppHash, cfg.BotToken)))
+	ext := filepath.Ext(base)
+	return strings.TrimSuffix(base, ext) + "-" + hex.EncodeToString(sum[:6]) + ext
 }
 
 func telegramConfigComplete(cfg store.TelegramConfig) bool {
@@ -111,7 +131,10 @@ func telegramConfigComplete(cfg store.TelegramConfig) bool {
 // write-mostly-secret spirit as webhook secrets elsewhere in this
 // codebase, but surfaced as a masked value here instead of omitted
 // entirely, per the product requirement for this field).
-func maskBotToken(token string) string {
+func maskBotToken(token string) string { return maskSecret(token) }
+
+// maskSecret hides all but the last 4 characters of a stored secret (B27).
+func maskSecret(token string) string {
 	if token == "" {
 		return ""
 	}
@@ -133,7 +156,7 @@ type telegramConfigResponse struct {
 func telegramConfigResponseFrom(cfg store.TelegramConfig) telegramConfigResponse {
 	return telegramConfigResponse{
 		AppID:        cfg.AppID,
-		AppHash:      cfg.AppHash,
+		AppHash:      maskSecret(cfg.AppHash),
 		BotToken:     maskBotToken(cfg.BotToken),
 		ChatUsername: cfg.ChatUsername,
 		Enabled:      cfg.Enabled,
@@ -146,6 +169,10 @@ type telegramConfigRequest struct {
 	BotToken     string `json:"botToken"`
 	ChatUsername string `json:"chatUsername"`
 	Enabled      *bool  `json:"enabled"`
+	// ClearAppHash / ClearBotToken remove the stored secret (FR-029); without them a
+	// blank or masked value keeps it.
+	ClearAppHash  bool `json:"clearAppHash"`
+	ClearBotToken bool `json:"clearBotToken"`
 }
 
 // GetTelegramConfigHertz returns the current Telegram config, with the bot
@@ -186,6 +213,16 @@ func (h *TelegramConfigHandler) SaveTelegramConfigHertz(ctx context.Context, c *
 	if botToken == "" || botToken == maskBotToken(current.BotToken) {
 		botToken = current.BotToken
 	}
+	if body.ClearBotToken {
+		botToken = ""
+	}
+	appHash := strings.TrimSpace(body.AppHash)
+	if appHash == "" || appHash == maskSecret(current.AppHash) {
+		appHash = current.AppHash
+	}
+	if body.ClearAppHash {
+		appHash = ""
+	}
 
 	enabled := current.Enabled
 	if body.Enabled != nil {
@@ -194,7 +231,7 @@ func (h *TelegramConfigHandler) SaveTelegramConfigHertz(ctx context.Context, c *
 
 	newCfg := store.TelegramConfig{
 		AppID:        body.AppID,
-		AppHash:      strings.TrimSpace(body.AppHash),
+		AppHash:      appHash,
 		BotToken:     botToken,
 		ChatUsername: strings.TrimSpace(body.ChatUsername),
 		Enabled:      enabled,
@@ -242,7 +279,7 @@ func validateTelegramConfig(cfg store.TelegramConfig) []string {
 // routes. Must be registered before RegisterAdminAPIRoutesHertz, whose
 // /admin/api/*path catch-all would otherwise shadow these specific routes.
 func RegisterTelegramRoutesHertz(h *server.Hertz, handler *TelegramConfigHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/telegram", handler.GetTelegramConfigHertz)
 	api.POST("/telegram", handler.SaveTelegramConfigHertz)
 }

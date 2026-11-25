@@ -89,6 +89,8 @@ type releaseAssetJSON struct {
 	// Authorization header downloads the asset (redirecting to a signed URL),
 	// which is the only way to fetch assets from private repositories.
 	URL string `json:"url"`
+	// Digest is the asset's published checksum ("sha256:<hex>"); absent on older assets.
+	Digest string `json:"digest"`
 }
 
 type releaseJSON struct {
@@ -225,4 +227,43 @@ func (c *Client) assetAPIURL(ctx context.Context, owner, repo, tag, assetName, t
 		}
 	}
 	return "", fmt.Errorf("github: asset %q not found in release %s of %s/%s", assetName, tag, owner, repo)
+}
+
+// ArtifactDigest returns the "sha256:<hex>" digest GitHub publishes for the named
+// release asset, "" when the asset has none (older releases), or an error when the
+// release or asset cannot be found (FR-045). It works without a token for public
+// repositories.
+func (c *Client) ArtifactDigest(ctx context.Context, repo, tag, artifact string) (string, error) {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return "", fmt.Errorf("github: invalid repo %q (want owner/name)", repo)
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s", apiBaseURL, owner, name, tag)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("github: build release request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if token := c.currentToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github: release request for %s/%s@%s failed: %w", owner, name, tag, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("github: release request for %s/%s@%s returned status %d", owner, name, tag, resp.StatusCode)
+	}
+	var rel releaseJSON
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", fmt.Errorf("github: decode release response for %s/%s@%s: %w", owner, name, tag, err)
+	}
+	for _, a := range rel.Assets {
+		if a.Name == artifact {
+			return a.Digest, nil
+		}
+	}
+	return "", fmt.Errorf("github: asset %q not found in release %s of %s/%s", artifact, tag, owner, name)
 }

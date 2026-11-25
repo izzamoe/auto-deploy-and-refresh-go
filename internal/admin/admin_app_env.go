@@ -106,7 +106,7 @@ func (h *AppEnvHandler) SaveAppEnvHertz(ctx context.Context, c *app.RequestConte
 // registered before RegisterAdminAPIRoutesHertz, whose /admin/api/*path
 // catch-all would otherwise shadow these specific routes.
 func RegisterAppEnvRoutesHertz(h *server.Hertz, handler *AppEnvHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/apps/:id/env", handler.GetAppEnvHertz)
 	api.PUT("/apps/:id/env", handler.SaveAppEnvHertz)
 }

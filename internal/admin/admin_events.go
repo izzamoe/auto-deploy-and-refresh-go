@@ -10,7 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/llmstxt"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -20,7 +22,7 @@ import (
 )
 
 const (
-	adminEventProtocolVersion     = "v1"
+	adminEventProtocolVersion     = "2"
 	adminEventTypeHello           = "hello"
 	adminEventTypeSnapshot        = "snapshot"
 	adminEventTypeJobStatus       = "job_status"
@@ -34,11 +36,13 @@ const (
 	adminEventWriteTimeout = 5 * time.Second
 )
 
+// AdminEvent is the envelope of events-ws.md section 2 (protocol "2"): jobId and
+// appId are always top-level.
 type AdminEvent struct {
-	Version   string    `json:"version"`
+	Protocol  string    `json:"protocol"`
 	ID        string    `json:"id"`
 	Type      string    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp time.Time `json:"ts"`
 	AppID     string    `json:"appId,omitempty"`
 	JobID     string    `json:"jobId,omitempty"`
 	Payload   any       `json:"payload,omitempty"`
@@ -60,10 +64,20 @@ type compactAdminProgressEvent struct {
 	Message         string `json:"msg"`
 }
 
+// adminEventHelloPayload is the payload of the first event of every connection
+// (events-ws.md 3.1).
+type adminEventHelloPayload struct {
+	ServerVersion    string     `json:"serverVersion"`
+	SessionExpiresAt *time.Time `json:"sessionExpiresAt,omitempty"`
+	HeartbeatSeconds int        `json:"heartbeatSeconds"`
+}
+
 type AdminEventHub struct {
-	tracker *progress.ProgressTracker
-	now     func() time.Time
-	nextID  atomic.Uint64
+	tracker       *progress.ProgressTracker
+	now           func() time.Time
+	nextID        atomic.Uint64
+	serverVersion string
+	sessions      SessionChecker
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -76,36 +90,122 @@ type adminEventClient struct {
 
 func NewAdminEventHub(tracker *progress.ProgressTracker) *AdminEventHub {
 	return &AdminEventHub{
-		tracker: tracker,
-		now:     time.Now,
-		clients: make(map[*adminEventClient]struct{}),
+		tracker:       tracker,
+		now:           time.Now,
+		serverVersion: llmstxt.Version,
+		clients:       make(map[*adminEventClient]struct{}),
 	}
 }
 
+// SetServerVersion overrides the version reported in the hello event (default:
+// the build version stamped into llmstxt.Version by the linker).
+func (h *AdminEventHub) SetServerVersion(v string) { h.serverVersion = v }
+
 const adminEventHeartbeatInterval = 30 * time.Second
 
+// adminEventSessionCheckInterval is how often an open socket re-checks its session row
+// (events-ws.md close codes: every 60 s plus the in-process revocation signal).
+var adminEventSessionCheckInterval = 60 * time.Second
+
+// SessionChecker is what an open socket needs from the session manager to notice
+// that its session ended: a re-check of the session row and a revocation signal.
+type SessionChecker interface {
+	Recheck(sessionID, userID string, tokenVersion int) error
+	Subscribe() (<-chan struct{}, func())
+}
+
+// SetSessionChecker enables 4401 closes for session-authenticated sockets (B12).
+func (h *AdminEventHub) SetSessionChecker(sc SessionChecker) { h.sessions = sc }
+
+// EventsWebSocket upgrades the request. The origin is verified by the default of
+// coder/websocket (no OriginPatterns, no InsecureSkipVerify): a browser page on
+// another origin cannot open this socket with the admin's cookie (K4, FR-012).
 func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) {
+	h.serveEvents(w, r, nil, nil)
+}
+
+// Close codes of events-ws.md section 5.
+const (
+	closeSessionEnded        websocket.StatusCode = 4401
+	closeProtocolUnsupported websocket.StatusCode = 4409
+)
+
+// eventSession identifies the session a socket was opened with, so the hub can notice
+// when it ends. Nil for API-token principals (no session to expire).
+type eventSession struct {
+	sessionID    string
+	userID       string
+	tokenVersion int
+	expiresAt    time.Time
+}
+
+// serveEvents is EventsWebSocket plus what only the caller knows: when the signed-in
+// session ends (hello.sessionExpiresAt) and any extra response headers for the
+// handshake (the deprecation notice of the pre-v1 path).
+func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess *eventSession, extra http.Header) {
+	var sessionExpiresAt *time.Time
+	if sess != nil && !sess.expiresAt.IsZero() {
+		t := sess.expiresAt.UTC()
+		sessionExpiresAt = &t
+	}
+	for k, vs := range extra {
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
 	c, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer c.CloseNow()
 
+	// FR-025 / RV-14: a client asking for another protocol gets 4409 (reload banner).
+	if q, ok := r.URL.Query()["protocol"]; ok && (len(q) != 1 || q[0] != adminEventProtocolVersion) {
+		_ = c.Close(closeProtocolUnsupported, "unsupported protocol")
+		return
+	}
+
 	client := h.addClient()
 	defer h.removeClient(client)
 
 	ctx := c.CloseRead(context.Background())
-	if !h.writeInitialEvents(ctx, c) {
+	if !h.writeInitialEvents(ctx, c, sessionExpiresAt) {
 		return
 	}
 
 	heartbeat := time.NewTicker(adminEventHeartbeatInterval)
 	defer heartbeat.Stop()
 
+	// B12 / FR-025: a socket must not outlive its session. Re-check the session row
+	// periodically and on the in-process revocation signal.
+	var recheck <-chan time.Time
+	var revoked <-chan struct{}
+	if sess != nil && h.sessions != nil {
+		t := time.NewTicker(adminEventSessionCheckInterval)
+		defer t.Stop()
+		recheck = t.C
+		ch, unsubscribe := h.sessions.Subscribe()
+		defer unsubscribe()
+		revoked = ch
+	}
+	sessionOK := func() bool {
+		return h.sessions.Recheck(sess.sessionID, sess.userID, sess.tokenVersion) == nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-recheck:
+			if !sessionOK() {
+				_ = c.Close(closeSessionEnded, "session ended")
+				return
+			}
+		case <-revoked:
+			if !sessionOK() {
+				_ = c.Close(closeSessionEnded, "session ended")
+				return
+			}
 		case <-heartbeat.C:
 			hb, encErr := h.encodeEvent(AdminEvent{Type: adminEventTypeHeartbeat})
 			if encErr != nil {
@@ -168,17 +268,67 @@ func (c *adminEventClient) close() {
 	})
 }
 
-func (h *AdminEventHub) writeInitialEvents(ctx context.Context, c *websocket.Conn) bool {
-	hello, err := h.encodeEvent(AdminEvent{Type: adminEventTypeHello, Payload: map[string]string{"protocol": adminEventProtocolVersion}})
+func (h *AdminEventHub) writeInitialEvents(ctx context.Context, c *websocket.Conn, sessionExpiresAt *time.Time) bool {
+	hello, err := h.encodeEvent(AdminEvent{Type: adminEventTypeHello, Payload: adminEventHelloPayload{
+		ServerVersion:    h.serverVersion,
+		SessionExpiresAt: sessionExpiresAt,
+		HeartbeatSeconds: int(adminEventHeartbeatInterval / time.Second),
+	}})
 	if err != nil || !writeAdminEventPayload(ctx, c, hello) {
 		return false
 	}
 
-	snapshot, err := h.encodeEvent(AdminEvent{Type: adminEventTypeSnapshot, Payload: h.snapshotAll()})
+	snapshot, err := h.encodeEvent(AdminEvent{Type: adminEventTypeSnapshot, Payload: adminEventSnapshotPayload{Jobs: h.snapshotJobs()}})
 	if err != nil {
 		return false
 	}
 	return writeAdminEventPayload(ctx, c, snapshot)
+}
+
+// adminEventSnapshotPayload is the payload of the second event of every connection
+// (events-ws.md 3.2).
+type adminEventSnapshotPayload struct {
+	Jobs []adminEventSnapshotJob `json:"jobs"`
+}
+
+// adminEventSnapshotJob is one active deployment. status is a JobStatus (B52: the
+// tracker phase must never be shown as the job status); percent/totalBytes are -1
+// while the size is unknown, like the OpenAPI Progress schema.
+type adminEventSnapshotJob struct {
+	AppID           string    `json:"appId"`
+	JobID           string    `json:"jobId"`
+	Tag             string    `json:"tag"`
+	Status          string    `json:"status"`
+	Phase           string    `json:"phase"`
+	Percent         int64     `json:"percent"`
+	DownloadedBytes int64     `json:"downloadedBytes"`
+	TotalBytes      int64     `json:"totalBytes"`
+	SpeedBPS        int64     `json:"speedBps"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+// snapshotJobs lists the ACTIVE deployments only: entries that reached a terminal
+// phase are not re-sent (FR-033).
+func (h *AdminEventHub) snapshotJobs() []adminEventSnapshotJob {
+	jobs := make([]adminEventSnapshotJob, 0)
+	for _, snap := range h.snapshotAll() {
+		if snap.Phase == progress.ProgressStageSucceeded || snap.Phase == progress.ProgressStageFailed {
+			continue
+		}
+		jobs = append(jobs, adminEventSnapshotJob{
+			AppID:           snap.AppID,
+			JobID:           snap.JobID,
+			Tag:             snap.Tag,
+			Status:          progressStatusForStage(snap.Phase),
+			Phase:           snap.Phase,
+			Percent:         progressPercentInt(snap.Percent),
+			DownloadedBytes: snap.DownloadedBytes,
+			TotalBytes:      snap.TotalBytes,
+			SpeedBPS:        int64(snap.SpeedBPS),
+			UpdatedAt:       snap.UpdatedAt.UTC(),
+		})
+	}
+	return jobs
 }
 
 func (h *AdminEventHub) snapshotAll() []progress.ProgressSnapshot {
@@ -193,8 +343,8 @@ func (h *AdminEventHub) snapshotAll() []progress.ProgressSnapshot {
 }
 
 func (h *AdminEventHub) encodeEvent(event AdminEvent) ([]byte, error) {
-	if event.Version == "" {
-		event.Version = adminEventProtocolVersion
+	if event.Protocol == "" {
+		event.Protocol = adminEventProtocolVersion
 	}
 	if event.ID == "" {
 		event.ID = h.newEventID()
@@ -220,7 +370,7 @@ func (h *AdminEventHub) encodeProgressEvent(event AdminEvent) ([]byte, error) {
 		frame.JobID = event.JobID
 	}
 	return json.Marshal(compactAdminProgressEvent{
-		Version:         event.Version,
+		Version:         event.Protocol,
 		Type:            adminEventCompactProgress,
 		ID:              event.ID,
 		Timestamp:       event.Timestamp.Format(time.RFC3339Nano),
@@ -291,14 +441,60 @@ func writeAdminEventPayload(ctx context.Context, c *websocket.Conn, payload []by
 	return err == nil
 }
 
+// EventsWebSocketHertz runs behind the auth middleware. A session principal tells
+// the hello event when the session ends; an API-token principal has no session.
 func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.RequestContext) {
-	adaptor.HertzHandler(http.HandlerFunc(h.EventsWebSocket))(ctx, c)
+	var sess *eventSession
+	if p, ok := auth.PrincipalFrom(c); ok && p.Kind == auth.KindSession {
+		sess = &eventSession{sessionID: p.SessionID, userID: p.UserID, tokenVersion: p.TokenVersion, expiresAt: p.ExpiresAt}
+	}
+	var extra http.Header
+	if path := string(c.Request.URI().Path()); path == adminEventsLegacyPath {
+		extra = http.Header{
+			"Deprecation": {"true"},
+			"Link":        {"<" + adminEventsV1Path + `>; rel="successor-version"`},
+		}
+	}
+	adaptor.HertzHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.serveEvents(w, r, sess, extra)
+	}))(ctx, c)
 }
 
+const (
+	adminEventsV1Path     = "/admin/events/v1/ws"
+	adminEventsLegacyPath = "/admin/events/ws"
+)
+
+// RegisterAdminEventRoutesHertz mounts the event socket at /admin/events/v1/ws and, for
+// ONE release, at the pre-v1 path /admin/events/ws with a Deprecation notice (Q-7).
 func RegisterAdminEventRoutesHertz(h *server.Hertz, hub *AdminEventHub, auth app.HandlerFunc) {
-	h.GET("/admin/events/ws", auth, hub.EventsWebSocketHertz)
+	h.GET("/admin/events/v1/ws", auth, hub.EventsWebSocketHertz)
+	h.GET("/admin/events/ws", auth, deprecatedAlias, hub.EventsWebSocketHertz)
 }
 
 func (h *AdminEventHub) BroadcastCancelEvent(event cancel.CancelEvent) {
 	h.Broadcast(AdminEvent{Type: event.Type, AppID: event.AppID, JobID: event.JobID, Payload: event.Payload})
+}
+
+func progressStatusForStage(stage string) string {
+	switch stage {
+	case progress.ProgressStageQueued:
+		return progress.ProgressStatusPending
+	case progress.ProgressStageSucceeded:
+		return progress.ProgressStatusSucceeded
+	case progress.ProgressStageFailed:
+		return progress.ProgressStatusFailed
+	default:
+		return progress.ProgressStatusInProgress
+	}
+}
+
+func progressPercentInt(percent float64) int64 {
+	if percent < 0 {
+		return -1
+	}
+	if percent > 100 {
+		return 100
+	}
+	return int64(percent)
 }

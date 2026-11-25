@@ -176,3 +176,29 @@ func TestListReleasesTimesOutOnSlowServer(t *testing.T) {
 		t.Fatal("expected a timeout error, got nil")
 	}
 }
+
+// B20 / FR-045: the asset digest published by the release API ("sha256:<hex>") is
+// exposed so the deploy can verify the download.
+func TestArtifactDigest_ReturnsTheAssetDigest(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v1.2.3",
+			"assets": []map[string]any{
+				{"name": "other", "url": "https://api.github.com/x/1", "digest": "sha256:" + strings.Repeat("a", 64)},
+				{"name": "app-linux-amd64", "url": "https://api.github.com/x/2", "digest": "sha256:" + strings.Repeat("b", 64)},
+				{"name": "legacy", "url": "https://api.github.com/x/3"},
+			},
+		})
+	})
+	c := NewClient("")
+	got, err := c.ArtifactDigest(context.Background(), "owner/repo", "v1.2.3", "app-linux-amd64")
+	if err != nil || got != "sha256:"+strings.Repeat("b", 64) {
+		t.Errorf("digest = %q, %v", got, err)
+	}
+	if got, err := c.ArtifactDigest(context.Background(), "owner/repo", "v1.2.3", "legacy"); err != nil || got != "" {
+		t.Errorf("an asset without a digest must give an empty digest, got %q, %v", got, err)
+	}
+	if _, err := c.ArtifactDigest(context.Background(), "owner/repo", "v1.2.3", "missing"); err == nil {
+		t.Error("an unknown asset must be an error")
+	}
+}

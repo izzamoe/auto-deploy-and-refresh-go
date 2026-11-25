@@ -10,7 +10,7 @@ tells this server which tag to roll out. The server does the rest.
 your CI:  build → publish GitHub Release → POST /webhook {"tag": "..."}
                                                  │
 this server:  download asset → validate ELF → backup → swap → systemctl restart
-              → is-active check ×5 → rollback on failure
+              → health check (3 stable samples) → rollback on failure
 ```
 
 ## Before you write any YAML

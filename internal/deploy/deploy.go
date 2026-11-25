@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/hertz/pkg/app/client"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/download"
 	"github.com/izzamoe/auto-deploy/internal/progress"
@@ -32,13 +32,45 @@ var (
 	renameFile             = os.Rename
 	chmodFile              = os.Chmod
 	deployHealthCheckSleep = time.Sleep
-	runJournalctl          = func(args ...string) ([]byte, error) {
+	// runJournalctl keeps at most maxJournalReadBytes (the TAIL) of journalctl's output, so
+	// "lines=all" on a huge journal cannot exhaust memory (FR-050, FR-058).
+	runJournalctl = func(args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), systemctlTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "journalctl", args...)
-		return cmd.CombinedOutput()
+		buf := &tailBuffer{max: maxJournalReadBytes}
+		cmd.Stdout, cmd.Stderr = buf, buf
+		err := cmd.Run()
+		return buf.Bytes(), err
 	}
 )
+
+// cancelPollFallback is the safety-net interval of the cancel watcher (FR-048).
+var cancelPollFallback = 2 * time.Second
+
+// maxJournalReadBytes bounds what one journalctl invocation may keep in memory.
+const maxJournalReadBytes = 4 << 20
+
+// tailBuffer is an io.Writer that keeps only the last max bytes written to it.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > 2*b.max {
+		b.buf = append([]byte(nil), b.buf[len(b.buf)-b.max:]...)
+	}
+	return len(p), nil
+}
+
+func (b *tailBuffer) Bytes() []byte {
+	if len(b.buf) > b.max {
+		return b.buf[len(b.buf)-b.max:]
+	}
+	return b.buf
+}
 
 // defaultJournalctlLines is how many recent journal lines CaptureServiceLogs
 // fetches when capturing a deploy's logs.
@@ -75,6 +107,13 @@ func CaptureServiceLogsLines(serviceName string, lines int) string {
 		return fmt.Sprintf("failed to read logs for %s: %v", serviceName, err)
 	}
 	return string(out)
+}
+
+// CaptureServiceLogsBounded is CaptureServiceLogsLines limited to maxBytes of the newest
+// output; truncated reports that older output was cut (the log then starts with a
+// one-line marker). FR-058: live log responses are bounded in bytes AND lines.
+func CaptureServiceLogsBounded(serviceName string, lines, maxBytes int) (log string, truncated bool) {
+	return store.CapLogTail(CaptureServiceLogsLines(serviceName, lines), maxBytes)
 }
 
 // CaptureServiceLogsSince returns serviceName's systemd journal limited to
@@ -134,11 +173,7 @@ func resolveArtifactDownload(ctx context.Context, resolver ArtifactResolver, rep
 	return resolver.ArtifactDownload(ctx, repo, tag, artifact)
 }
 
-func downloadBinary(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client) (store.DownloadSummary, error) {
-	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, nil, maxArtifactBytes)
-}
-
-func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, headers map[string]string, maxBytes int64) (store.DownloadSummary, error) {
+func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *http.Client, headers map[string]string, maxBytes int64) (store.DownloadSummary, error) {
 	slog.Info("downloading", "url", url)
 	resp, err := download.DownloadWithRetryContext(ctx, client, url, headers, nil)
 	if err != nil {
@@ -238,18 +273,30 @@ func validateDownloadedArtifact(path string) error {
 	return nil
 }
 
-// DeployWithControl deploys app's release from the public GitHub download URL
-// (no authentication). Kept for callers that do not need private-repo support;
-// it delegates to DeployArtifact with a nil resolver.
-func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client, control *cancel.CancelService) (store.DownloadSummary, error) {
-	return DeployArtifact(app, jobID, tag, tracker, client, control, nil)
+// DeployArtifact deploys app's release. The ArtifactResolver lets the download
+// authenticate against the GitHub API (required for assets in private
+// repositories); a nil resolver downloads from the public GitHub URL without
+// authentication.
+func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
+	return DeployArtifactContext(context.Background(), app, jobID, tag, tracker, client, control, resolver)
 }
 
-// DeployArtifact is DeployWithControl with an ArtifactResolver, which lets the
-// download authenticate against the GitHub API (required for assets in private
-// repositories). A nil resolver reproduces DeployWithControl's public-URL path.
-func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
+// DeployArtifactContext is DeployArtifact with a parent context: when it is canceled
+// (process shutdown, FR-044) the download stops, and a self-deploy that is waiting for
+// its own restart is released.
+func DeployArtifactContext(parent context.Context, app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
 	tracker.Start(app.ID, jobID, tag)
+	// B10: whatever path returns (cancel checkpoints included), the tracker entry
+	// ends terminal. A deploy canceled mid-way is "failed" for the tracker (its
+	// phases have no "canceled"); the job status itself is "canceled".
+	defer tracker.FailIfActive(app.ID, jobID)
+
+	// FR-040 defense in depth: an app row written before validation existed (or by a
+	// path that skipped it) must not reach the filesystem or systemctl with an unsafe
+	// binary path, service name, repo or artifact name.
+	if errs := ValidateAppInput(AppInput{BinaryPath: app.BinaryPath, ServiceName: app.ServiceName, GithubRepo: app.GithubRepo, ArtifactName: app.ArtifactName, RunAsUser: app.RunAsUser, HealthURL: app.HealthURL}); len(errs) > 0 {
+		return store.DownloadSummary{}, fmt.Errorf("edit app: %s is invalid (%s); this stored value predates input validation and must be corrected before the app can be deployed", errs[0].Field, errs[0].Message)
+	}
 
 	tmpPath := app.BinaryPath + ".tmp"
 
@@ -270,7 +317,7 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 		}
 	}
 
-	downloadCtx, stopDownloadCancelWatcher := deployDownloadContext(jobID, control)
+	downloadCtx, stopDownloadCancelWatcher := deployDownloadContext(parent, jobID, control)
 	url, headers, err := resolveArtifactDownload(downloadCtx, resolver, app.GithubRepo, tag, app.ArtifactName)
 	if err != nil {
 		stopDownloadCancelWatcher()
@@ -310,6 +357,13 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 		tracker.Fail(app.ID)
 		return summary, err
 	}
+	// FR-045: ELF type + architecture, then the release digest (Q-14).
+	sum, verified, verifyErr := verifyArtifact(downloadCtx, app, resolver, tag, tmpPath)
+	summary.SHA256, summary.Verified = sum, verified
+	if verifyErr != nil {
+		tracker.Fail(app.ID)
+		return summary, verifyErr
+	}
 
 	if err := chmodFile(tmpPath, 0755); err != nil {
 		tracker.Fail(app.ID)
@@ -326,9 +380,28 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 		tracker.Fail(app.ID)
 		return summary, cancelErr
 	}
-	if _, err := os.Stat(app.BinaryPath); err == nil {
+
+	// FR-043/FR-044: the transaction marker is written before anything is touched and
+	// removed once the binary is consistent again (deploy succeeded, rollback restored
+	// the old binary, or nothing was changed). A crash in between leaves it for the
+	// startup recovery.
+	_, statErr := os.Stat(app.BinaryPath)
+	hadBinary := statErr == nil
+	markerPath := deployingMarkerPath(app.BinaryPath)
+	if err := writeDeployingMarker(app.BinaryPath, jobID, tag, hadBinary); err != nil {
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("write deploy marker: %w", err)
+	}
+	leaveMarker := false
+	defer func() {
+		if !leaveMarker {
+			_ = os.Remove(markerPath)
+		}
+	}()
+
+	if hadBinary {
 		slog.Info("backup", "from", app.BinaryPath, "to", backupPath)
-		if err := renameFile(app.BinaryPath, backupPath); err != nil {
+		if err := makeBackup(app.BinaryPath, backupPath); err != nil {
 			tracker.Fail(app.ID)
 			return summary, fmt.Errorf("backup: %w", err)
 		}
@@ -345,13 +418,15 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 	slog.Info("replacing binary")
 	tracker.SetPhase(app.ID, progress.ProgressStageInstalling)
 	cleanup = false
-	if err := renameFile(tmpPath, app.BinaryPath); err != nil {
+	leaveMarker = true // from here on only a restored binary or a success closes the transaction
+	if err := installBinary(tmpPath, app.BinaryPath); err != nil {
+		// rename is atomic: the old binary is still in place. Drop the backup of this
+		// attempt and the temp file; nothing was changed.
 		cleanup = true
+		leaveMarker = false
 		tracker.Fail(app.ID)
 		if backupCreated {
-			if restoreErr := renameFile(backupPath, app.BinaryPath); restoreErr != nil {
-				return summary, fmt.Errorf("replace binary: %w; restore backup: %v", err, restoreErr)
-			}
+			_ = os.Remove(backupPath)
 		}
 		return summary, fmt.Errorf("replace binary: %w", err)
 	}
@@ -365,9 +440,31 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 
 	slog.Info("restarting service", "service", app.ServiceName)
 	tracker.SetPhase(app.ID, progress.ProgressStageRestarting)
-	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("restart service: %w: %s", err, string(out))
+	if IsSelfApp(app) {
+		// Q-19: this process is the one that dies on restart.
+		if err := selfDeployRestart(parent, app, jobID, backupPath); err != nil {
+			if errors.Is(err, store.ErrSelfDeployInFlight) {
+				return summary, err // the new process settles the job; marker + pending stay
+			}
+			var guardErr *selfGuardError
+			if errors.As(err, &guardErr) {
+				// Nothing was restarted: just put the previous binary back.
+				tracker.Fail(app.ID)
+				if !backupCreated {
+					return summary, err
+				}
+				if restoreErr := restoreBackup(backupPath, app.BinaryPath); restoreErr != nil {
+					return summary, fmt.Errorf("%w; restoring the previous binary failed: %v", err, restoreErr)
+				}
+				return summary, fmt.Errorf("%w; the previous binary was restored", err)
+			}
+			return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, err)
+		}
+	} else if out, err := systemctlUnit("restart", app.ServiceName); err != nil {
+		// B9: the new binary is installed but the service will not start. Put
+		// the previous binary back and restart it instead of leaving it down.
+		cause := fmt.Errorf("restart service: %w: %s", err, strings.TrimSpace(string(out)))
+		return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, cause)
 	}
 	if cancelErr := checkpointRollbackInstalled(control, jobID, cancel.DeployPhaseRestarting, app, backupPath, backupCreated); cancelErr != nil {
 		if errors.Is(cancelErr, errDeployCanceled) {
@@ -378,63 +475,79 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 	}
 
 	tracker.SetPhase(app.ID, progress.ProgressStageHealthcheck)
-	for i := 1; i <= 5; i++ {
-		if cancelErr := checkpointRollbackInstalled(control, jobID, cancel.DeployPhaseHealthcheck, app, backupPath, backupCreated); cancelErr != nil {
-			if errors.Is(cancelErr, errDeployCanceled) {
-				return summary, cancelErr
-			}
-			tracker.Fail(app.ID)
-			return summary, cancelErr
+	baseline, haveBaseline := readNRestarts(app.ServiceName)
+	unhealthy, abort := runHealthCheck(app.ServiceName, app.HealthURL, baseline, haveBaseline, func() error {
+		return checkpointRollbackInstalled(control, jobID, cancel.DeployPhaseHealthcheck, app, backupPath, backupCreated)
+	})
+	if abort != nil {
+		if errors.Is(abort, errDeployCanceled) {
+			return summary, abort
 		}
-		deployHealthCheckSleep(2 * time.Second)
-		out, err := runSystemctl("is-active", app.ServiceName)
-		status := strings.TrimSpace(string(out))
-		slog.Info("health check", "attempt", i, "status", status)
-		if err == nil && status == "active" {
-			tracker.Finish(app.ID)
-			return summary, nil
-		}
+		tracker.Fail(app.ID)
+		return summary, abort
+	}
+	if unhealthy == nil {
+		leaveMarker = false
+		tracker.Finish(app.ID)
+		return summary, nil
 	}
 
-	slog.Error("rolling back", "reason", "service failed health check")
-	tracker.SetPhase(app.ID, progress.ProgressStageRollback)
-	if !backupCreated {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("rollback unavailable: no previous binary backup")
-	}
-	if err := renameFile(backupPath, app.BinaryPath); err != nil {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("rollback rename failed: %w", err)
-	}
-	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("rollback restart failed: %w: %s", err, string(out))
-	}
-
-	tracker.Fail(app.ID)
-	return summary, fmt.Errorf("service failed to restart after deploy, rolled back")
+	slog.Error("rolling back", "reason", unhealthy.Error())
+	return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, fmt.Errorf("service failed the health check after deploy: %w", unhealthy))
 }
 
-func deployDownloadContext(jobID string, control *cancel.CancelService) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(context.Background())
+// rollbackInstalled restores the previous binary (backupPath -> app.BinaryPath)
+// after the freshly installed one failed to run, and restarts the service. It
+// always finishes the tracker as failed and returns an error that starts with
+// cause and ends with the outcome of the rollback:
+//   - no backup: "rollback unavailable: no previous binary backup";
+//   - the restore or the restart of the old binary failed: the failure is
+//     reported verbatim and the error does NOT wrap store.ErrRolledBack;
+//   - success: "rolled back ..." and the error wraps store.ErrRolledBack so the
+//     coordinator sets deploy_jobs.rolled_back = 1.
+//
+// The failed new binary is replaced by the rename, so no .bak is left behind.
+func rollbackInstalled(app *store.App, tracker *progress.ProgressTracker, backupPath string, backupCreated bool, cause error) error {
+	tracker.SetPhase(app.ID, progress.ProgressStageRollback)
+	defer tracker.Fail(app.ID)
+	if !backupCreated {
+		return fmt.Errorf("%w; rollback unavailable: no previous binary backup", cause)
+	}
+	if err := restoreBackup(backupPath, app.BinaryPath); err != nil {
+		return fmt.Errorf("%w; rollback rename failed: %v", cause, err)
+	}
+	if out, err := systemctlUnit("restart", app.ServiceName); err != nil {
+		return fmt.Errorf("%w; rollback restart failed: %v: %s", cause, err, strings.TrimSpace(string(out)))
+	}
+	return fmt.Errorf("%w; rolled back to the previous binary and restarted it: %w", cause, store.ErrRolledBack)
+}
+
+func deployDownloadContext(parent context.Context, jobID string, control *cancel.CancelService) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
 	if control == nil {
 		return ctx, cancel
 	}
 	done := make(chan struct{})
+	notify, unsubscribe := control.Subscribe()
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(25 * time.Millisecond)
+		defer unsubscribe()
+		// FR-048: a cancel request in this process is delivered by notification; the
+		// ticker is only the fallback for a request that was missed.
+		ticker := time.NewTicker(cancelPollFallback)
 		defer ticker.Stop()
 		for {
+			// Check first: a request may have landed before the subscription existed.
+			requested, err := control.IsCancelRequested(jobID)
+			if err == nil && requested {
+				cancel()
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
+			case <-notify:
 			case <-ticker.C:
-				requested, err := control.IsCancelRequested(jobID)
-				if err == nil && requested {
-					cancel()
-					return
-				}
 			}
 		}
 	}()
@@ -495,7 +608,7 @@ func checkpointRestoreBackup(control *cancel.CancelService, jobID, tmpPath, back
 		return fmt.Errorf("cancel cleanup temp: %w", err)
 	}
 	if backupCreated {
-		if err := renameFile(backupPath, binaryPath); err != nil {
+		if err := restoreBackup(backupPath, binaryPath); err != nil {
 			if _, checkpointErr := control.Checkpoint(jobID, cancel.DeployPhaseRollbackFailed); checkpointErr != nil {
 				return checkpointErr
 			}
@@ -522,13 +635,13 @@ func checkpointRollbackInstalled(control *cancel.CancelService, jobID string, ph
 		}
 		return fmt.Errorf("cancel rollback unavailable: no previous binary backup")
 	}
-	if err := renameFile(backupPath, app.BinaryPath); err != nil {
+	if err := restoreBackup(backupPath, app.BinaryPath); err != nil {
 		if _, checkpointErr := control.Checkpoint(jobID, cancel.DeployPhaseRollbackFailed); checkpointErr != nil {
 			return checkpointErr
 		}
 		return fmt.Errorf("cancel rollback rename failed: %w", err)
 	}
-	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
+	if out, err := systemctlUnit("restart", app.ServiceName); err != nil {
 		if _, checkpointErr := control.Checkpoint(jobID, cancel.DeployPhaseRollbackFailed); checkpointErr != nil {
 			return checkpointErr
 		}

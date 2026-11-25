@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | `401` | Token rotated in the admin UI, or `DEPLOY_TOKEN` secret holds a stale value. Also raised when the `Bearer ` prefix is missing. | Reissue the token and update the CI secret. |
 | `400 missing or empty tag` | The JSON body was not sent, or `tag` interpolated to an empty string — usually a workflow triggered by something other than a tag push, so `GITHUB_REF_NAME` is a branch. | Restrict the trigger to `push: tags:`, or derive the tag explicitly. |
+| `429` | Too many failed webhook authentications from this address in a minute (30 per minute); the response has `Retry-After`. | Fix the token; wait for the delay. |
 | `503 queue full` | More than the configured maximum (default 10) deploys pending for this app. | Back off and retry. Usually means earlier deploys are stuck or the app is being spammed. |
 | Connection refused / timeout | The webhook URL is wrong, or the server is not publicly reachable from GitHub's runners. | Confirm the URL with the owner. |
 
@@ -23,7 +24,9 @@ history page.
 | `empty artifact` / `too small` | The build produced a zero-byte or truncated file — usually a build step that failed without failing the job. |
 | `download too large` | Asset exceeds 100 MiB. Build with `-ldflags "-s -w"`. |
 | `restart service` error | The systemd unit name configured for the app does not exist on the host. Owner-side configuration, not a pipeline problem. |
-| Rolled back after health check | The unit did not report `active` within ~10 seconds. |
+| Rolled back after health check | The unit was not `active` for three consecutive samples two seconds apart within 30 seconds, restarted itself while being sampled, or the configured `healthUrl` did not answer 2xx. |
+| `edit app: <field> is invalid (...)` | The app was stored before input validation became stricter (binary path, service name, repository or artifact name). Owner-side: open the app in the admin UI, correct the field, save. |
+| digest mismatch / missing digest | The release's published SHA-256 for the asset does not match the download, or the app requires a digest and the asset has none. Rebuild and republish the asset. |
 
 ## Diagnosing a rollback
 
@@ -35,7 +38,8 @@ contract was satisfied and the problem is the application itself. Likely causes,
    exactly that, and that `file <asset>` reported `{{ARCH_UNAME}}`.
 2. **Missing runtime configuration.** The app crashes on startup for want of an
    environment variable. These are managed per app in the admin UI, not by the pipeline.
-3. **Slow startup.** The service needs more than ~10 seconds to reach `active`.
+3. **Slow startup.** The service needs more than about 30 seconds to reach `active`, or
+   restarts itself while the health check samples it.
 4. **Dynamic linking.** A binary built with `CGO_ENABLED=1` may need shared libraries the
    host lacks. Build with `CGO_ENABLED=0` when possible.
 

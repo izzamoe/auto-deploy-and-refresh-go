@@ -43,7 +43,7 @@ tells this server which tag to roll out. The server does the rest.
 your CI:  build → publish GitHub Release → POST /webhook {"tag": "..."}
                                                  │
 this server:  download asset → validate ELF → backup → swap → systemctl restart
-              → is-active check ×5 → rollback on failure
+              → health check (3 stable samples) → rollback on failure
 ```
 
 ## Before you write any YAML
@@ -281,7 +281,8 @@ token does not grant access to those endpoints.
 > `POST /webhook` with `Authorization: Bearer <app-token>` and `{"tag": "v1.2.3"}`. 202 means queued, 200 means the same tag is already in flight, and neither means the deploy succeeded.
 
 This is the only endpoint your pipeline calls. Everything else on this server is the
-admin UI and requires a session cookie your pipeline does not have.
+admin UI and its JSON API (`/admin/api/v1`), which needs an admin session or an admin API
+token that your pipeline does not have. The webhook token is not accepted there either.
 
 ## Request
 
@@ -306,27 +307,36 @@ and target service all come from the app's stored configuration, not from the re
 | 200 | `duplicate` | This tag is already queued or running for this app. | Succeed — it is not an error. |
 | 400 | `error` | Body unparseable, or `tag` missing/empty. | Fail; the request is malformed. |
 | 401 | `error` | No `Bearer` prefix, or no app matches the token hash. | Fail; the token is wrong or was rotated. |
+| 429 | `error` | Too many failed authentications from this address (30 per minute); carries `Retry-After`. Requests with a valid token are not counted. | Fix the token; retry after the delay. |
 | 503 | `error` | The app's queue is full (default 10 pending). | Back off and retry; do not fail hard. |
-| 500 | `error` | Internal failure while enqueueing. | Retry once, then fail. |
+| 500 | `error` | Internal failure while enqueueing. The body is the fixed `internal error`; details are in the server log. | Retry once, then fail. |
 
-A 401 is deliberately identical whether the token is malformed or simply unknown — it
-never reveals which applications exist.
+Every error body also carries a machine-readable `code` (for example `rate_limited`,
+`internal_error`) and every response an `X-Request-ID` header; clients that ignore both keep
+working. A 401 is deliberately identical whether the token is malformed or simply unknown —
+it never reveals which applications exist.
 
 ## What happens after 202
 
 The queued job runs through these phases, visible on the app's history page:
 
 1. **Download** — `https://github.com/{repo}/releases/download/{tag}/{artifact}`
-2. **Validate** — non-empty, ≥4 bytes, ELF magic, ≤100 MiB
+2. **Validate** — non-empty, ≥4 bytes, ELF magic for the host architecture, ≤100 MiB; when
+   the release publishes a SHA-256 `digest` for the asset it must match (an app with
+   `requireDigest` refuses an asset that has none)
 3. **Backup** — current binary copied to `<binary>.bak`
-4. **Install** — new binary written and `chmod 0755`
+4. **Install** — new binary written, `chmod 0755` and swapped in atomically (a crash in
+   the middle is recovered at the next start)
 5. **Restart** — `systemctl restart <unit>`
-6. **Health check** — up to 5 attempts, sleeping 2 s before each, requiring
-   `systemctl is-active <unit>` to report `active`
+6. **Health check** — three consecutive samples two seconds apart in which
+   `systemctl is-active <unit>` reports `active` and the restart counter (`NRestarts`)
+   has not moved, within a 30 s cap; when the app has a `healthUrl` it must also answer 2xx
 7. **Rollback** — on health-check failure, `.bak` is restored and the unit restarted again
 
-The health check gives the service roughly 10 seconds to reach `active`. A unit that takes
-longer to become ready will be rolled back even though the binary is fine.
+The health check gives the service up to 30 seconds to become `active` and stay up for
+three samples. A unit that takes longer to become ready, or that restarts itself while the
+samples are taken (a crash loop under `Restart=always`), is rolled back even though the
+binary is fine.
 
 ---
 
@@ -340,6 +350,7 @@ longer to become ready will be rolled back even though the binary is fine.
 | --- | --- | --- |
 | `401` | Token rotated in the admin UI, or `DEPLOY_TOKEN` secret holds a stale value. Also raised when the `Bearer ` prefix is missing. | Reissue the token and update the CI secret. |
 | `400 missing or empty tag` | The JSON body was not sent, or `tag` interpolated to an empty string — usually a workflow triggered by something other than a tag push, so `GITHUB_REF_NAME` is a branch. | Restrict the trigger to `push: tags:`, or derive the tag explicitly. |
+| `429` | Too many failed webhook authentications from this address in a minute (30 per minute); the response has `Retry-After`. | Fix the token; wait for the delay. |
 | `503 queue full` | More than the configured maximum (default 10) deploys pending for this app. | Back off and retry. Usually means earlier deploys are stuck or the app is being spammed. |
 | Connection refused / timeout | The webhook URL is wrong, or the server is not publicly reachable from GitHub's runners. | Confirm the URL with the owner. |
 
@@ -355,7 +366,9 @@ history page.
 | `empty artifact` / `too small` | The build produced a zero-byte or truncated file — usually a build step that failed without failing the job. |
 | `download too large` | Asset exceeds 100 MiB. Build with `-ldflags "-s -w"`. |
 | `restart service` error | The systemd unit name configured for the app does not exist on the host. Owner-side configuration, not a pipeline problem. |
-| Rolled back after health check | The unit did not report `active` within ~10 seconds. |
+| Rolled back after health check | The unit was not `active` for three consecutive samples two seconds apart within 30 seconds, restarted itself while being sampled, or the configured `healthUrl` did not answer 2xx. |
+| `edit app: <field> is invalid (...)` | The app was stored before input validation became stricter (binary path, service name, repository or artifact name). Owner-side: open the app in the admin UI, correct the field, save. |
+| digest mismatch / missing digest | The release's published SHA-256 for the asset does not match the download, or the app requires a digest and the asset has none. Rebuild and republish the asset. |
 
 ## Diagnosing a rollback
 
@@ -367,7 +380,8 @@ contract was satisfied and the problem is the application itself. Likely causes,
    exactly that, and that `file <asset>` reported `{{ARCH_UNAME}}`.
 2. **Missing runtime configuration.** The app crashes on startup for want of an
    environment variable. These are managed per app in the admin UI, not by the pipeline.
-3. **Slow startup.** The service needs more than ~10 seconds to reach `active`.
+3. **Slow startup.** The service needs more than about 30 seconds to reach `active`, or
+   restarts itself while the health check samples it.
 4. **Dynamic linking.** A binary built with `CGO_ENABLED=1` may need shared libraries the
    host lacks. Build with `CGO_ENABLED=0` when possible.
 
@@ -395,9 +409,9 @@ happily swallow a connection error and let the job go green.
 | `DEPLOY_QUEUE_DB_PATH` | `deploy-queue.db` | SQLite file holding all persistent state. |
 | `DEPLOY_QUEUE_MAX` | `10` | Max pending deploys per application; must be a positive integer or startup fails. |
 | `DOWNLOAD_DNS` | `1.1.1.1` | DNS resolver used for release downloads. |
-| `ADMIN_USERNAME` | `admin` | Admin login. Setting it to an empty string is a startup error. |
-| `ADMIN_PASSWORD` | `hehe` | Admin password — change it on any reachable install. |
-| `COOKIE_SECURE` | unset | Set to `true`/`1` only when serving over HTTPS. Setting it on plain HTTP makes the browser drop the session cookie and login silently fails. |
+| `SESSION_KEY_PATH` | `session.key` next to the database | Signing key of the admin sessions; created with mode 0600 on first start. Deleting it signs everyone out. |
+| `COOKIE_SECURE` | `true` | `Secure` flag and `__Host-` name of the session cookie. Serving the admin over plain HTTP requires `COOKIE_SECURE=false`, otherwise the browser drops the cookie and login silently fails. |
+| `TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs/IPs of the reverse proxy whose `CF-Connecting-IP`/`X-Forwarded-For` are trusted as the client address. **Required behind Cloudflare, `cloudflared` or any proxy** (see below). |
 | `GITHUB_TOKEN` | empty | Raises the GitHub API rate limit and enables private-repository artifact downloads. Can also be stored in the database from the admin UI. |
 | `SELF_SERVICE_NAME` | `auto-deploy.service` | This service's own systemd unit, read by the admin log viewer. |
 
@@ -405,7 +419,7 @@ happily swallow a connection error and let the job go green.
 
 `WEBHOOK_SECRET`, `DEPLOY_BINARY_PATH`, `DEPLOY_SERVICE_NAME`, `GITHUB_REPO`, and
 `ARTIFACT_NAME` seed a single application on first startup when the registry is empty.
-Once any application exists they are ignored — manage applications at `/admin/apps`.
+Once any application exists they are ignored — manage applications in the admin UI at `/admin/`.
 
 ## Per-application settings
 
@@ -420,11 +434,36 @@ deploy on its own does not pick up a change to either.
 
 These are the values a pipeline author must be told; see the table in *Read this first*.
 
-## Admin session
+## Admin accounts and sessions
 
-`POST /admin/login` issues a signed JWT in an httpOnly cookie with a 24-hour TTL. Every
-route marked *admin session* in the endpoint table requires that cookie. Deploy tokens do
-not work on admin routes, and the admin cookie is not needed for `/webhook`.
+There are no admin credentials in the environment. The first account of a fresh database
+(`admin`) gets a random password that is written to `initial-admin-password` next to the
+database (mode 0600, never logged); the owner reads it, signs in at `/admin/` and must
+change it, which deletes the file. The retired username/password variables of earlier
+releases are ignored (a start-up warning names them).
+
+Signing in (`POST /admin/api/v1/session`, from the sign-in page) issues a server-side
+session in an httpOnly cookie: idle timeout 12 hours, absolute limit 7 days. Every route
+marked *admin session* in the endpoint table requires that cookie or an admin API token
+(`Authorization: Bearer adt_...`, created on the account page, shown once; tokens cannot
+manage accounts or tokens). Scripts that speak HTTP Basic keep working with the API token
+as the password (the user name is ignored); the account password is never accepted as a
+Basic credential. Deploy (webhook) tokens do not work on admin routes, and no
+admin credential is needed for `/webhook`. Sign-in attempts are rate limited (5 per 15
+minutes per address and user, 20 per minute per address).
+
+## Behind Cloudflare, cloudflared or a reverse proxy
+
+Rate limits and the audit log use the client address. Behind a proxy the socket peer is
+the proxy, so the real address is read from `CF-Connecting-IP` / `X-Forwarded-For` **only
+when the peer is inside `TRUSTED_PROXY_CIDRS`**. Setting it is a required step:
+
+- `cloudflared` on the same host: `TRUSTED_PROXY_CIDRS=127.0.0.1/32`.
+- Cloudflare connecting directly: the published Cloudflare ranges, comma separated.
+- Another reverse proxy: that proxy's address or network.
+
+If it is empty while a request carries one of those headers, the headers are ignored and
+one warning is logged; every visitor then shares the proxy's single rate-limit bucket.
 
 ---
 
@@ -435,55 +474,46 @@ matches what the binary actually serves.
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| GET | `/admin` | admin session |
-| GET | `/admin/*path` | admin session |
-| GET | `/admin/api/account` | admin session |
-| POST | `/admin/api/account/password` | admin session |
-| POST | `/admin/api/account/username` | admin session |
-| GET | `/admin/api/apps` | admin session |
-| POST | `/admin/api/apps` | admin session |
-| POST | `/admin/api/apps/:app_id/cancel` | admin session |
-| DELETE | `/admin/api/apps/:id` | admin session |
-| GET | `/admin/api/apps/:id` | admin session |
-| PUT | `/admin/api/apps/:id` | admin session |
-| GET | `/admin/api/apps/:id/args` | admin session |
-| PUT | `/admin/api/apps/:id/args` | admin session |
-| POST | `/admin/api/apps/:id/deploy` | admin session |
-| GET | `/admin/api/apps/:id/env` | admin session |
-| PUT | `/admin/api/apps/:id/env` | admin session |
-| GET | `/admin/api/apps/:id/logs` | admin session |
-| GET | `/admin/api/apps/:id/releases` | admin session |
-| POST | `/admin/api/apps/:id/service-unit/apply` | admin session |
-| GET | `/admin/api/apps/:id/service-unit/preview` | admin session |
-| POST | `/admin/api/apps/:id/service/:action` | admin session |
-| GET | `/admin/api/apps/:id/service/status` | admin session |
-| POST | `/admin/api/apps/:id/toggle` | admin session |
-| GET | `/admin/api/github` | admin session |
-| POST | `/admin/api/github` | admin session |
-| GET | `/admin/api/history` | admin session |
-| POST | `/admin/api/history/:id/retry` | admin session |
-| POST | `/admin/api/jobs/:job_id/cancel` | admin session |
-| GET | `/admin/api/jobs/:job_id/logs` | admin session |
-| GET | `/admin/api/system/logs` | admin session |
-| GET | `/admin/api/telegram` | admin session |
-| POST | `/admin/api/telegram` | admin session |
-| GET | `/admin/apps` | admin session |
-| POST | `/admin/apps/:id/delete` | admin session |
-| POST | `/admin/apps/:id/deploy` | admin session |
-| POST | `/admin/apps/:id/disable` | admin session |
-| GET | `/admin/apps/:id/edit` | admin session |
-| POST | `/admin/apps/:id/enable` | admin session |
-| GET | `/admin/apps/:id/history` | admin session |
-| POST | `/admin/apps/:id/retry/:jobid` | admin session |
-| POST | `/admin/apps/:id/update` | admin session |
-| POST | `/admin/apps/create` | admin session |
-| GET | `/admin/apps/new` | admin session |
-| GET | `/admin/assets/*filepath` | admin session |
-| GET | `/admin/events/ws` | admin session |
-| GET | `/admin/login` | public |
-| POST | `/admin/login` | public |
-| GET | `/admin/logout` | public |
-| GET | `/admin/progress/ws` | admin session |
+| GET | `/admin/api/v1/account` | admin session |
+| POST | `/admin/api/v1/account/password` | admin session |
+| POST | `/admin/api/v1/account/sessions/revoke-all` | admin session |
+| POST | `/admin/api/v1/account/username` | admin session |
+| GET | `/admin/api/v1/apps` | admin session |
+| POST | `/admin/api/v1/apps` | admin session |
+| POST | `/admin/api/v1/apps/:app_id/cancel` | admin session |
+| DELETE | `/admin/api/v1/apps/:id` | admin session |
+| GET | `/admin/api/v1/apps/:id` | admin session |
+| PUT | `/admin/api/v1/apps/:id` | admin session |
+| GET | `/admin/api/v1/apps/:id/args` | admin session |
+| PUT | `/admin/api/v1/apps/:id/args` | admin session |
+| POST | `/admin/api/v1/apps/:id/deploy` | admin session |
+| GET | `/admin/api/v1/apps/:id/env` | admin session |
+| PUT | `/admin/api/v1/apps/:id/env` | admin session |
+| GET | `/admin/api/v1/apps/:id/logs` | admin session |
+| GET | `/admin/api/v1/apps/:id/releases` | admin session |
+| POST | `/admin/api/v1/apps/:id/service-unit/apply` | admin session |
+| GET | `/admin/api/v1/apps/:id/service-unit/preview` | admin session |
+| POST | `/admin/api/v1/apps/:id/service/:action` | admin session |
+| GET | `/admin/api/v1/apps/:id/service/status` | admin session |
+| POST | `/admin/api/v1/apps/:id/toggle` | admin session |
+| POST | `/admin/api/v1/apps/:id/webhook-secret/rotate` | admin session |
+| GET | `/admin/api/v1/github` | admin session |
+| POST | `/admin/api/v1/github` | admin session |
+| GET | `/admin/api/v1/history` | admin session |
+| POST | `/admin/api/v1/history/:id/retry` | admin session |
+| POST | `/admin/api/v1/jobs/:job_id/cancel` | admin session |
+| GET | `/admin/api/v1/jobs/:job_id/logs` | admin session |
+| DELETE | `/admin/api/v1/session` | admin session |
+| GET | `/admin/api/v1/session` | admin session |
+| POST | `/admin/api/v1/session` | public |
+| GET | `/admin/api/v1/stats` | admin session |
+| GET | `/admin/api/v1/system/logs` | admin session |
+| GET | `/admin/api/v1/telegram` | admin session |
+| POST | `/admin/api/v1/telegram` | admin session |
+| GET | `/admin/api/v1/tokens` | admin session |
+| POST | `/admin/api/v1/tokens` | admin session |
+| DELETE | `/admin/api/v1/tokens/:id` | admin session |
+| GET | `/admin/events/v1/ws` | admin session |
 | GET | `/llms-full.txt` | public |
 | GET | `/llms.txt` | public |
 | POST | `/webhook` | bearer token |

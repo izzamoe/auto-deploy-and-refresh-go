@@ -144,6 +144,22 @@ func (pt *ProgressTracker) Fail(appID string) {
 	})
 }
 
+// FailIfActive marks the deployment for appID as failed unless it already
+// reached a terminal phase (succeeded or failed). jobID must match the entry's
+// job: if a newer deployment replaced the entry (Start overwrites), the call is
+// a no-op. DeployArtifact defers it so every exit path (cancel checkpoints,
+// early returns, panics) leaves a terminal entry that Cleanup can remove (B10).
+func (pt *ProgressTracker) FailIfActive(appID, jobID string) {
+	pt.mutate(appID, func(e *progressEntry) {
+		if e.snapshot.JobID != jobID || !e.finishedAt.IsZero() {
+			return
+		}
+		e.snapshot.Phase = ProgressStageFailed
+		e.snapshot.UpdatedAt = pt.now()
+		e.finishedAt = pt.now()
+	})
+}
+
 func publishProgress(sink ProgressSink, snapshot ProgressSnapshot) {
 	if sink == nil {
 		return

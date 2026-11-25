@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
-	"github.com/cloudwego/hertz/pkg/app/client"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
 
-func downloadBinaryWithMaxBytes(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, maxBytes int64) (store.DownloadSummary, error) {
+func downloadBinaryWithMaxBytes(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *http.Client, maxBytes int64) (store.DownloadSummary, error) {
 	resp, err := DownloadWithRetryContext(context.Background(), client, url, nil, nil)
 	if err != nil {
 		return store.DownloadSummary{}, fmt.Errorf("download failed: %w", err)

@@ -9,7 +9,7 @@
 #
 # NOTE: In multi-app mode, each app has its own unique DEPLOY_WEBHOOK_SECRET.
 # The server identifies which app to deploy based on the secret provided.
-# Add apps and get their secrets via the admin UI at /admin/apps.
+# Add apps and get their secrets via the admin UI at /admin/ (Apps page).
 #
 # RESPONSE CONTRACT:
 #   202 Accepted = deploy queued successfully (always for valid requests)

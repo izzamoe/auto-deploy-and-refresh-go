@@ -147,7 +147,7 @@ func TestFullDocumentCarriesCuratedSectionsAndRoutes(t *testing.T) {
 		"Failure symptoms and their causes",
 		"HTTP endpoints (generated from source)",
 		"| POST | `/webhook` | bearer token |",
-		"| GET | `/admin/api/apps` | admin session |",
+		"| GET | `/admin/api/v1/apps` | admin session |",
 	} {
 		if !strings.Contains(full, want) {
 			t.Errorf("llms-full.txt does not contain %q", want)

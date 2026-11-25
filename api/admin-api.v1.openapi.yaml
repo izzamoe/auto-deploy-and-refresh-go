@@ -1,0 +1,1350 @@
+openapi: 3.1.0
+info:
+  title: auto-deploy admin API
+  version: "1.0.0"
+  description: "Kontrak API admin v1 auto-deploy (fitur 001). Semua respons error memakai skema Error. Bentuk respons sukses mempertahankan bentuk HEAD 7c385e8 (admin_api.go) kecuali yang ditandai BARU."
+servers:
+  - url: /
+tags:
+  - name: session
+  - name: account
+  - name: tokens
+  - name: apps
+  - name: history
+  - name: jobs
+  - name: settings
+  - name: system
+  - name: stats
+  - name: webhook
+security:
+  - sessionCookie: []
+  - bearerToken: []
+  - basicToken: []
+paths:
+  /admin/api/v1/session:
+    get:
+      tags: [session]
+      operationId: getSession
+      summary: "Status sesi saat ini (BARU, FR-016)"
+      responses:
+        "200":
+          description: Sesi valid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [session]
+      operationId: createSession
+      summary: "Login halaman (BARU, FR-015). Set-Cookie sesi."
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: "Login sukses. Header Set-Cookie berisi cookie sesi (HttpOnly, Secure default, SameSite=Strict)."
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [session]
+      operationId: deleteSession
+      summary: "Logout dan cabut sesi di server (FR-007)"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "204":
+          description: Sesi dicabut dan cookie dihapus
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/api/v1/account:
+    get:
+      tags: [account]
+      operationId: getAccount
+      responses:
+        "200":
+          description: Akun saat ini
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Account" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/api/v1/account/password:
+    post:
+      tags: [account]
+      operationId: changePassword
+      summary: "Ganti password; menaikkan token_version dan menerbitkan ulang sesi saat ini (FR-005)"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePasswordRequest" }
+      responses:
+        "200":
+          description: Password diganti
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusMessage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /admin/api/v1/account/username:
+    post:
+      tags: [account]
+      operationId: changeUsername
+      summary: "Ganti username; menaikkan token_version dan menerbitkan ulang sesi saat ini via Set-Cookie (FR-005, B3)"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangeUsernameRequest" }
+      responses:
+        "200":
+          description: Username diganti
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusMessage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/api/v1/account/sessions/revoke-all:
+    post:
+      tags: [account]
+      operationId: revokeAllSessions
+      summary: "Cabut semua sesi lain (BARU, FR-005)"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "200":
+          description: Semua sesi lain dicabut
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusMessage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/api/v1/tokens:
+    get:
+      tags: [tokens]
+      operationId: listApiTokens
+      summary: "Daftar token API (BARU, FR-014); hanya sesi cookie"
+      responses:
+        "200":
+          description: Daftar token tanpa nilai rahasia
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tokens]
+                properties:
+                  tokens:
+                    type: array
+                    items: { $ref: "#/components/schemas/ApiToken" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [tokens]
+      operationId: createApiToken
+      summary: "Buat token API; nilai penuh dikembalikan sekali"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 64 }
+      responses:
+        "201":
+          description: Token dibuat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiTokenCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/api/v1/tokens/{tokenId}:
+    parameters:
+      - name: tokenId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [tokens]
+      operationId: revokeApiToken
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "204":
+          description: Token dicabut
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps:
+    get:
+      tags: [apps]
+      operationId: listApps
+      responses:
+        "200":
+          description: Daftar app dengan deploy terakhir
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apps]
+                properties:
+                  apps:
+                    type: array
+                    items: { $ref: "#/components/schemas/App" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [apps]
+      operationId: createApp
+      summary: "Buat app beserta env dan args dalam satu transaksi (FR-028, B55)"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppCreateRequest" }
+      responses:
+        "201":
+          description: App dibuat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/api/v1/apps/{appId}:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    get:
+      tags: [apps]
+      operationId: getApp
+      responses:
+        "200":
+          description: App
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [app]
+                properties:
+                  app: { $ref: "#/components/schemas/App" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [apps]
+      operationId: updateApp
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppUpdateRequest" }
+      responses:
+        "200":
+          description: App diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, app]
+                properties:
+                  status: { type: string, enum: [updated] }
+                  app: { $ref: "#/components/schemas/App" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [apps]
+      operationId: deleteApp
+      summary: "Hapus app beserta env, args, dan job dalam satu transaksi (FR-035, B14)"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+        - name: removeUnitFile
+          in: query
+          required: false
+          description: "Q-10 USULAN. Hapus unit file yang digenerate. Default false."
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: App dihapus
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusMessage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/api/v1/apps/{appId}/toggle:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    post:
+      tags: [apps]
+      operationId: toggleApp
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Status enabled diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, app]
+                properties:
+                  status: { type: string, enum: [updated] }
+                  app: { $ref: "#/components/schemas/App" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/deploy:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    post:
+      tags: [apps]
+      operationId: deployApp
+      summary: "Deploy manual; tag tidak valid = 400 invalid_tag (B15)"
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tag]
+              properties:
+                tag: { type: string, minLength: 1 }
+      responses:
+        "202":
+          description: Masuk antrean
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, tag]
+                properties:
+                  status: { type: string, enum: [queued] }
+                  tag: { type: string }
+                  jobId: { type: string, description: "BARU. ID job yang dibuat." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/QueueFull" }
+  /admin/api/v1/apps/{appId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    post:
+      tags: [apps]
+      operationId: cancelAppJobs
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "200":
+          description: Permintaan cancel untuk semua job aktif app
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, result]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  result: { $ref: "#/components/schemas/CancelAppResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/webhook-secret/rotate:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    post:
+      tags: [apps]
+      operationId: rotateWebhookSecret
+      summary: "BARU (FR-055, B31). Server men-generate secret 32 byte; dikembalikan sekali."
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "200":
+          description: Secret baru
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secret]
+                properties:
+                  secret: { type: string, minLength: 43 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/env:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    get:
+      tags: [apps]
+      operationId: getAppEnv
+      responses:
+        "200":
+          description: Environment variables app
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [envVars]
+                properties:
+                  envVars:
+                    type: array
+                    items: { $ref: "#/components/schemas/EnvVar" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [apps]
+      operationId: saveAppEnv
+      summary: "Ganti penuh env. Klien wajib hanya mengirim bila data sudah termuat (FR-074)."
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [envVars]
+              properties:
+                envVars:
+                  type: array
+                  items: { $ref: "#/components/schemas/EnvVar" }
+      responses:
+        "200":
+          description: Env disimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, envVars]
+                properties:
+                  status: { type: string, enum: [updated] }
+                  envVars:
+                    type: array
+                    items: { $ref: "#/components/schemas/EnvVar" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/args:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    get:
+      tags: [apps]
+      operationId: getAppArgs
+      responses:
+        "200":
+          description: Argumen baris perintah
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [args]
+                properties:
+                  args:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [apps]
+      operationId: saveAppArgs
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [args]
+              properties:
+                args:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Args disimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, args]
+                properties:
+                  status: { type: string, enum: [updated] }
+                  args:
+                    type: array
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/releases:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    get:
+      tags: [apps]
+      operationId: listAppReleases
+      responses:
+        "200":
+          description: Tag rilis GitHub
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [releases]
+                properties:
+                  releases:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/Upstream" }
+  /admin/api/v1/apps/{appId}/service-unit/preview:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    get:
+      tags: [apps]
+      operationId: previewServiceUnit
+      responses:
+        "200":
+          description: Isi unit systemd yang akan ditulis
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unit]
+                properties:
+                  unit: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/service-unit/apply:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    post:
+      tags: [apps]
+      operationId: applyServiceUnit
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "200":
+          description: Unit ditulis dan di-enable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusMessage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/Internal" }
+  /admin/api/v1/apps/{appId}/logs:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    get:
+      tags: [apps]
+      operationId: getAppLogs
+      parameters:
+        - $ref: "#/components/parameters/LogLines"
+      responses:
+        "200":
+          description: Log journal unit app (dibatasi byte, FR-058)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogText" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/service/status:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+    get:
+      tags: [apps]
+      operationId: getServiceStatus
+      responses:
+        "200":
+          description: Status systemd unit
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/apps/{appId}/service/{action}:
+    parameters:
+      - $ref: "#/components/parameters/AppId"
+      - name: action
+        in: path
+        required: true
+        schema: { type: string, enum: [start, stop, restart] }
+    post:
+      tags: [apps]
+      operationId: controlService
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "200":
+          description: Aksi systemd dijalankan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, message]
+                properties:
+                  status: { type: string }
+                  output: { type: string }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/history:
+    get:
+      tags: [history]
+      operationId: listHistory
+      parameters:
+        - name: appId
+          in: query
+          required: false
+          schema: { type: string }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          description: "Ukuran halaman; batas atas mengikuti kode saat ini (discovery diperlukan di admin_api.go ListHistoryHertz)"
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Riwayat job terpaginasi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HistoryPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/history/{jobId}/retry:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    post:
+      tags: [history]
+      operationId: retryJob
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "202":
+          description: Job retry masuk antrean
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, jobId]
+                properties:
+                  status: { type: string, enum: [queued] }
+                  jobId: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/QueueFull" }
+  /admin/api/v1/jobs/{jobId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    post:
+      tags: [jobs]
+      operationId: cancelJob
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      responses:
+        "200":
+          description: Hasil permintaan cancel
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, result]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  result: { $ref: "#/components/schemas/CancelJobResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/jobs/{jobId}/logs:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [jobs]
+      operationId: getJobLogs
+      responses:
+        "200":
+          description: Log tersimpan job (dibatasi byte, B25)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogText" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/api/v1/github:
+    get:
+      tags: [settings]
+      operationId: getGitHubConfig
+      responses:
+        "200":
+          description: Konfigurasi GitHub (token dimask)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config]
+                properties:
+                  config: { $ref: "#/components/schemas/GitHubConfig" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [settings]
+      operationId: saveGitHubConfig
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string, description: "Kosong = pertahankan token lama" }
+                clear: { type: boolean, default: false, description: "BARU (B27). true = hapus token tersimpan" }
+      responses:
+        "200":
+          description: Tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, config]
+                properties:
+                  status: { type: string, enum: [updated] }
+                  config: { $ref: "#/components/schemas/GitHubConfig" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/api/v1/telegram:
+    get:
+      tags: [settings]
+      operationId: getTelegramConfig
+      responses:
+        "200":
+          description: Konfigurasi Telegram (appHash dan botToken dimask, B27)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config]
+                properties:
+                  config: { $ref: "#/components/schemas/TelegramConfig" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [settings]
+      operationId: saveTelegramConfig
+      parameters:
+        - $ref: "#/components/parameters/XAdminRequest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TelegramConfigUpdate" }
+      responses:
+        "200":
+          description: Tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, config]
+                properties:
+                  status: { type: string, enum: [updated] }
+                  config: { $ref: "#/components/schemas/TelegramConfig" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/api/v1/system/logs:
+    get:
+      tags: [system]
+      operationId: getSystemLogs
+      parameters:
+        - $ref: "#/components/parameters/LogLines"
+      responses:
+        "200":
+          description: Log journal auto-deploy sendiri
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/LogText"
+                  - type: object
+                    required: [service]
+                    properties:
+                      service: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/api/v1/stats:
+    get:
+      tags: [stats]
+      operationId: getStats
+      summary: "BARU (FR-026). Data dasbor."
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema: { type: string, enum: [7d, 30d], default: 7d }
+        - name: tz
+          in: query
+          required: false
+          description: "Q-8 USULAN. Nama zona IANA untuk bucket harian; default UTC."
+          schema: { type: string, default: UTC }
+      responses:
+        "200":
+          description: Statistik
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Stats" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /webhook:
+    post:
+      tags: [webhook]
+      operationId: webhookDeploy
+      summary: "Webhook CI (lihat contracts/webhook.md). Bearer = webhook secret app."
+      security:
+        - webhookSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tag]
+              properties:
+                tag: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Duplikat (job aktif untuk tag sama sudah ada)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "202":
+          description: Masuk antrean
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "400":
+          description: Tag kosong/tidak valid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "401":
+          description: Secret salah
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "429":
+          description: "BARU (FR-055). Terlalu banyak kegagalan auth dari IP ini."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "500":
+          description: "Error internal generik (tanpa err.Error() mentah, B15)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "503":
+          description: Antrean penuh
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-admin_session
+      description: "Nama cookie bila Secure. Bila COOKIE_SECURE=false (dev) nama = admin_session. Mutasi wajib header X-Admin-Request dan Origin/Sec-Fetch-Site same-origin (FR-011)."
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: "Token API adt_... (FR-014). Dibebaskan dari CSRF."
+    basicToken:
+      type: http
+      scheme: basic
+      description: "Password = token API. Password admin ditolak."
+    webhookSecret:
+      type: http
+      scheme: bearer
+      description: Webhook secret per app
+  parameters:
+    AppId:
+      name: appId
+      in: path
+      required: true
+      schema: { type: string }
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema: { type: string }
+    XAdminRequest:
+      name: X-Admin-Request
+      in: header
+      required: false
+      description: "Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API."
+      schema: { type: string, enum: ["true"] }
+    LogLines:
+      name: lines
+      in: query
+      required: false
+      description: "Jumlah baris; default 100; maks 5000; all dibatasi byte (FR-058)"
+      schema: { type: string }
+  responses:
+    BadRequest:
+      description: Permintaan tidak valid
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: "Tidak terautentikasi. TIDAK membawa WWW-Authenticate kecuali request membawa Authorization Basic (FR-001)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: "password_change_required atau csrf_rejected"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Tidak ditemukan
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Konflik (duplikat)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Terlalu banyak percobaan
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    QueueFull:
+      description: Antrean penuh
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Upstream:
+      description: Gagal menghubungi GitHub
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Internal:
+      description: Error internal (pesan generik)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    ErrorCode:
+      type: string
+      enum:
+        - session_expired
+        - session_revoked
+        - unauthorized
+        - password_change_required
+        - csrf_rejected
+        - rate_limited
+        - validation_failed
+        - invalid_tag
+        - invalid_json
+        - not_found
+        - duplicate
+        - queue_full
+        - upstream_error
+        - artifact_digest_mismatch
+        - artifact_arch_mismatch
+        - internal_error
+        - forbidden
+        - unsupported_media_type
+        - payload_too_large
+        - method_not_allowed
+    FieldError:
+      type: object
+      required: [code, message]
+      properties:
+        field: { type: string }
+        code: { type: string }
+        message: { type: string }
+    Error:
+      type: object
+      required: [status, code, error, errors]
+      properties:
+        status: { type: string, enum: [error] }
+        code: { $ref: "#/components/schemas/ErrorCode" }
+        error: { type: string, description: "Pesan aman untuk manusia (Inggris; FE menerjemahkan berdasarkan code)" }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/FieldError" }
+        requestId: { type: string }
+    StatusMessage:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }
+        message: { type: string }
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 64 }
+        password: { type: string, minLength: 1, maxLength: 1024 }
+    Session:
+      type: object
+      required: [username, mustChangePassword, expiresAt, absoluteExpiresAt]
+      properties:
+        username: { type: string }
+        mustChangePassword: { type: boolean }
+        expiresAt: { type: string, format: date-time }
+        absoluteExpiresAt: { type: string, format: date-time }
+    Account:
+      type: object
+      required: [username, mustChangePassword]
+      properties:
+        username: { type: string }
+        mustChangePassword: { type: boolean }
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string }
+        newPassword: { type: string, minLength: 1 }
+    ChangeUsernameRequest:
+      type: object
+      required: [currentPassword, newUsername]
+      properties:
+        currentPassword: { type: string }
+        newUsername: { type: string, minLength: 1, maxLength: 64 }
+    ApiToken:
+      type: object
+      required: [id, name, prefix, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        prefix: { type: string }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        revokedAt: { type: [string, "null"], format: date-time }
+    ApiTokenCreated:
+      allOf:
+        - $ref: "#/components/schemas/ApiToken"
+        - type: object
+          required: [token]
+          properties:
+            token: { type: string, description: "Nilai penuh adt_...; hanya ditampilkan sekali" }
+    JobStatus:
+      type: string
+      description: "Enum dikonfirmasi eksekutor dari internal/store/queue.go (data-model.md 0)"
+      enum: [pending, in_progress, cancel_requested, succeeded, failed, canceled]
+    Progress:
+      type: object
+      required: [appId, jobId, tag, phase, downloadedBytes, totalBytes, speedBps, percent, updatedAt]
+      properties:
+        appId: { type: string }
+        jobId: { type: string }
+        tag: { type: string }
+        phase: { type: string }
+        status: { $ref: "#/components/schemas/JobStatus" }
+        downloadedBytes: { type: integer, format: int64 }
+        totalBytes: { type: integer, format: int64 }
+        speedBps: { type: number }
+        percent: { type: number }
+        updatedAt: { type: string, format: date-time }
+    App:
+      type: object
+      required: [id, name, binaryPath, serviceName, githubRepo, artifactName, enabled, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        binaryPath: { type: string }
+        serviceName: { type: string }
+        githubRepo: { type: string }
+        artifactName: { type: string }
+        enabled: { type: boolean }
+        runAsUser: { type: string, description: "BARU (FR-047). Kosong = root." }
+        hardening: { type: boolean, description: "BARU (FR-047)" }
+        healthUrl: { type: string, description: "BARU (FR-042)" }
+        requireDigest: { type: boolean, description: "BARU (FR-045)" }
+        isSelf: { type: boolean, description: "BARU (FR-144)" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastDeployTag: { type: string }
+        lastDeployStatus: { type: string }
+        lastDeployTime: { type: string, format: date-time }
+        lastJobId: { type: string }
+        lastJobStatus: { $ref: "#/components/schemas/JobStatus" }
+        lastDownloadBytes: { type: integer, format: int64 }
+        lastDownloadSpeedBps: { type: number }
+        liveProgress: { $ref: "#/components/schemas/Progress" }
+    AppFields:
+      type: object
+      required: [name, binaryPath, serviceName, githubRepo, artifactName]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        binaryPath:
+          type: string
+          description: "Absolut, ter-Clean, tanpa karakter kontrol, spasi, persen, dolar, backslash; bukan di bawah direktori sistem terlarang (FR-040)"
+        serviceName: { type: string, description: "Cocok ValidateServiceUnitName; tidak diawali tanda minus" }
+        githubRepo: { type: string, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" }
+        artifactName: { type: string, description: "Tanpa slash, tanpa .., tanpa karakter kontrol" }
+        enabled: { type: boolean, default: true }
+        runAsUser: { type: string }
+        hardening: { type: boolean }
+        healthUrl: { type: string }
+        requireDigest: { type: boolean }
+        isSelf: { type: boolean }
+    AppCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/AppFields"
+        - type: object
+          properties:
+            webhookSecret:
+              type: string
+              minLength: 32
+              description: "Opsional; bila kosong server men-generate (FR-055)"
+            envVars:
+              type: array
+              items: { $ref: "#/components/schemas/EnvVar" }
+            args:
+              type: array
+              items: { type: string }
+    AppUpdateRequest:
+      allOf:
+        - $ref: "#/components/schemas/AppFields"
+        - type: object
+          properties:
+            webhookSecret:
+              type: string
+              description: "Kosong = pertahankan; bila diisi minimal 32 karakter"
+    AppCreated:
+      type: object
+      required: [status, app, webhookSecret]
+      properties:
+        status: { type: string, enum: [created] }
+        app: { $ref: "#/components/schemas/App" }
+        webhookSecret: { type: string, description: "Ditampilkan sekali (FR-076)" }
+    EnvVar:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string, pattern: "^[A-Za-z_][A-Za-z0-9_]*$" }
+        value: { type: string }
+    Job:
+      type: object
+      required: [id, appId, appEnabled, tag, status, trigger, downloadBytes, downloadDurationMs, downloadSpeedBps, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        appId: { type: string }
+        appName: { type: string }
+        appEnabled: { type: boolean }
+        tag: { type: string }
+        status: { $ref: "#/components/schemas/JobStatus" }
+        trigger: { type: string }
+        retryOfJobId: { type: string }
+        errorMsg: { type: string }
+        downloadBytes: { type: integer, format: int64 }
+        downloadDurationMs: { type: integer, format: int64 }
+        downloadSpeedBps: { type: number }
+        rolledBack: { type: boolean, description: BARU }
+        artifactVerified: { type: boolean, description: BARU }
+        finishedAt: { type: [string, "null"], format: date-time, description: BARU }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        liveProgress: { $ref: "#/components/schemas/Progress" }
+    HistoryPage:
+      type: object
+      required: [history, total, page, pageSize]
+      properties:
+        app: { $ref: "#/components/schemas/App" }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/Job" }
+        total: { type: integer }
+        page: { type: integer }
+        pageSize: { type: integer }
+    CancelJobResult:
+      type: object
+      required: [jobId, status, outcome]
+      properties:
+        jobId: { type: string }
+        appId: { type: string }
+        previousState: { type: string }
+        status: { type: string }
+        outcome: { type: string }
+        message: { type: string }
+    CancelAppResult:
+      type: object
+      required: [appId, total, pending, active, terminal, unknown, pendingCanceled, activeSignaled, alreadyTerminal, requested]
+      properties:
+        appId: { type: string }
+        total: { type: integer }
+        pending: { type: integer }
+        active: { type: integer }
+        terminal: { type: integer }
+        unknown: { type: integer }
+        pendingCanceled: { type: integer }
+        activeSignaled: { type: integer }
+        alreadyTerminal: { type: integer }
+        requested:
+          type: array
+          items: { $ref: "#/components/schemas/CancelJobResult" }
+    LogText:
+      type: object
+      required: [log]
+      properties:
+        log: { type: string }
+        truncated: { type: boolean, description: "BARU (FR-058)" }
+    GitHubConfig:
+      type: object
+      required: [token, hasToken, source]
+      properties:
+        token: { type: string, description: Dimask }
+        hasToken: { type: boolean }
+        source: { type: string }
+    TelegramConfig:
+      type: object
+      required: [appId, appHash, botToken, chatUsername, enabled]
+      properties:
+        appId: { type: integer }
+        appHash: { type: string, description: "Dimask (B27)" }
+        botToken: { type: string, description: Dimask }
+        chatUsername: { type: string }
+        enabled: { type: boolean }
+    TelegramConfigUpdate:
+      type: object
+      properties:
+        appId: { type: integer }
+        appHash: { type: string, description: "Kosong = pertahankan" }
+        botToken: { type: string, description: "Kosong = pertahankan" }
+        chatUsername: { type: string }
+        enabled: { type: boolean }
+        clearAppHash: { type: boolean, default: false }
+        clearBotToken: { type: boolean, default: false }
+    DailyBucket:
+      type: object
+      required: [date, succeeded, failed, canceled]
+      properties:
+        date: { type: string, format: date }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        canceled: { type: integer }
+    Stats:
+      type: object
+      required: [generatedAt, range, tz, apps, deploys24h, active, successRate, daily, rollbacks, recent]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        range: { type: string, enum: [7d, 30d] }
+        tz: { type: string }
+        apps:
+          type: object
+          required: [total, enabled]
+          properties:
+            total: { type: integer }
+            enabled: { type: integer }
+        deploys24h:
+          type: object
+          required: [total, succeeded, failed, canceled]
+          properties:
+            total: { type: integer }
+            succeeded: { type: integer }
+            failed: { type: integer }
+            canceled: { type: integer }
+            hourly:
+              type: array
+              description: "24 angka total per jam untuk bar mini"
+              items: { type: integer }
+        active:
+          type: object
+          required: [running, queued]
+          properties:
+            running: { type: integer }
+            queued: { type: integer }
+        successRate:
+          type: object
+          required: [succeeded, total]
+          properties:
+            succeeded: { type: integer }
+            total: { type: integer }
+            rate: { type: [number, "null"], minimum: 0, maximum: 1, description: "null bila total = 0" }
+            previousRate: { type: [number, "null"], description: "Periode sebelumnya untuk pill delta" }
+        daily:
+          type: array
+          items: { $ref: "#/components/schemas/DailyBucket" }
+        rollbacks:
+          type: object
+          required: [count]
+          properties:
+            count: { type: integer }
+        recent:
+          type: array
+          maxItems: 10
+          items: { $ref: "#/components/schemas/Job" }
+    WebhookResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [queued, duplicate, error] }
+        tag: { type: string }
+        error: { type: string }
+        code: { $ref: "#/components/schemas/ErrorCode" }

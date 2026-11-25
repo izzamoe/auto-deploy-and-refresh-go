@@ -33,6 +33,12 @@ func ValidateServiceArg(arg string) error {
 	return nil
 }
 
+const appArgsDDL = `CREATE TABLE IF NOT EXISTS app_args (
+		app_id     TEXT PRIMARY KEY,
+		args       TEXT NOT NULL DEFAULT '[]',
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`
+
 // AppArgsStore persists the per-app command-line arguments appended to the
 // service's ExecStart line, as a single JSON array per app. It mirrors
 // AppEnvStore: a table of its own, so the apps CRUD path stays untouched.
@@ -43,12 +49,7 @@ type AppArgsStore struct {
 // NewAppArgsStore creates the app_args table if it does not exist yet and
 // returns a store bound to db.
 func NewAppArgsStore(db *sql.DB) (*AppArgsStore, error) {
-	schema := `CREATE TABLE IF NOT EXISTS app_args (
-		app_id     TEXT PRIMARY KEY,
-		args       TEXT NOT NULL DEFAULT '[]',
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(appArgsDDL); err != nil {
 		return nil, fmt.Errorf("app_args_store: create table: %w", err)
 	}
 	return &AppArgsStore{db: db}, nil
@@ -77,6 +78,9 @@ func (s *AppArgsStore) Get(appID string) ([]string, error) {
 
 // Set replaces the stored command-line arguments for appID. Every argument is
 // validated; an empty slice clears them.
+// MaxServiceArgs is the longest argument list the store accepts.
+const MaxServiceArgs = maxServiceArgs
+
 func (s *AppArgsStore) Set(appID string, args []string) error {
 	if len(args) > maxServiceArgs {
 		return fmt.Errorf("too many arguments: %d, max %d", len(args), maxServiceArgs)

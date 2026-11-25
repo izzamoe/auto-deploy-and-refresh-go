@@ -65,9 +65,15 @@ type DownloadSummary struct {
 	Bytes      int64
 	DurationMs int64
 	SpeedBPS   float64
+	// SHA256 of the downloaded artifact and whether it was checked against a digest
+	// published by the release (FR-045, Q-14); empty/false when the deploy failed
+	// before verification.
+	SHA256   string
+	Verified bool
 }
 
 type DeployQueue struct {
+	onEnqueue  atomic.Pointer[func()] // wakes the coordinator (FR-048)
 	db         *sql.DB
 	maxPending int
 	// activeCache is an immutable snapshot of every non-terminal deploy job,
@@ -198,6 +204,17 @@ func (q *DeployQueue) Migrate() error {
 		return fmt.Errorf("deploy_queue: create index: %w", err)
 	}
 
+	// B13/FR-034: backfill legacy rows BEFORE the active-unique index exists (legacy
+	// data may hold the same tag active twice; the dedup below demotes the extras and
+	// only then is the index created), and never while a rows cursor is open: the
+	// database has a single connection (MaxOpenConns(1)), so an Exec issued under an
+	// open cursor waits for itself forever.
+	if legacyExists && !newExists {
+		if err := q.backfillLegacyQueue(); err != nil {
+			return err
+		}
+	}
+
 	// A partial UNIQUE index makes the database the final arbiter of "one active
 	// job per (app_id, tag)". IsDuplicate's check-then-insert has a race window
 	// (two concurrent webhooks can both pass the check, then both insert); this
@@ -233,42 +250,70 @@ func (q *DeployQueue) Migrate() error {
 		return fmt.Errorf("deploy_queue: create active-unique index: %w", err)
 	}
 
-	if legacyExists && !newExists {
-		rows, err := q.db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)
-		if err != nil {
-			return fmt.Errorf("deploy_queue: read legacy rows: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var tag, status, errMsg string
-			var createdAt, updatedAt time.Time
-			if err := rows.Scan(&tag, &status, &errMsg, &createdAt, &updatedAt); err != nil {
-				return fmt.Errorf("deploy_queue: scan legacy row: %w", err)
-			}
-			jobID, err := generateJobID()
-			if err != nil {
-				return err
-			}
-			var nullErrMsg *string
-			if errMsg != "" {
-				nullErrMsg = &errMsg
-			}
-			_, err = q.db.Exec(
-				`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, error_msg, created_at, updated_at) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), 'legacy', ?, ?, 'webhook', ?, ?, ?)`,
-				jobID, tag, status, nullErrMsg, createdAt, updatedAt,
-			)
-			if err != nil {
-				return fmt.Errorf("deploy_queue: backfill legacy row: %w", err)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("deploy_queue: iterate legacy rows: %w", err)
-		}
-	}
-
 	q.InvalidateActiveJobsCache()
 	return nil
+}
+
+// legacyQueueRow is one row of the pre-multi-app deploy_queue table.
+type legacyQueueRow struct {
+	tag, status, errMsg  string
+	createdAt, updatedAt time.Time
+}
+
+// backfillLegacyQueue copies the legacy deploy_queue rows into deploy_jobs (app
+// "legacy") in ONE transaction: all rows or none. The legacy rows are read fully,
+// and the cursor closed, before the first write.
+func (q *DeployQueue) backfillLegacyQueue() error {
+	legacy, err := q.readLegacyQueue()
+	if err != nil {
+		return err
+	}
+	tx, err := q.db.Begin()
+	if err != nil {
+		return fmt.Errorf("deploy_queue: begin legacy backfill: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+	for _, row := range legacy {
+		jobID, err := generateJobID()
+		if err != nil {
+			return err
+		}
+		var nullErrMsg *string
+		if row.errMsg != "" {
+			msg := row.errMsg
+			nullErrMsg = &msg
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, error_msg, created_at, updated_at) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), 'legacy', ?, ?, 'webhook', ?, ?, ?)`,
+			jobID, row.tag, row.status, nullErrMsg, row.createdAt, row.updatedAt,
+		); err != nil {
+			return fmt.Errorf("deploy_queue: backfill legacy row: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("deploy_queue: commit legacy backfill: %w", err)
+	}
+	return nil
+}
+
+func (q *DeployQueue) readLegacyQueue() ([]legacyQueueRow, error) {
+	rows, err := q.db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("deploy_queue: read legacy rows: %w", err)
+	}
+	defer rows.Close()
+	var out []legacyQueueRow
+	for rows.Next() {
+		var r legacyQueueRow
+		if err := rows.Scan(&r.tag, &r.status, &r.errMsg, &r.createdAt, &r.updatedAt); err != nil {
+			return nil, fmt.Errorf("deploy_queue: scan legacy row: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("deploy_queue: iterate legacy rows: %w", err)
+	}
+	return out, nil
 }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
@@ -284,6 +329,16 @@ func scanJobRecord(sc rowScanner) (JobRecord, error) {
 	return item, err
 }
 
+// SetEnqueueHook registers fn, called (without holding any lock) after a job was
+// inserted, so the coordinator can start it at once instead of polling (FR-048).
+func (q *DeployQueue) SetEnqueueHook(fn func()) { q.onEnqueue.Store(&fn) }
+
+func (q *DeployQueue) enqueued() {
+	if fn := q.onEnqueue.Load(); fn != nil && *fn != nil {
+		(*fn)()
+	}
+}
+
 func (q *DeployQueue) DB() *sql.DB {
 	return q.db
 }
@@ -293,6 +348,17 @@ func (q *DeployQueue) Close() error {
 }
 
 func (q *DeployQueue) Enqueue(appID, tag string) error {
+	return q.enqueue(appID, tag, "webhook")
+}
+
+func (q *DeployQueue) EnqueueManual(appID, tag string) error {
+	return q.enqueue(appID, tag, "manual_deploy")
+}
+
+// enqueue inserts a pending job. The per-app quota is part of the INSERT itself (one
+// statement, atomic in SQLite): a count-then-insert in two statements let concurrent
+// callers all pass the count (B24, FR-049).
+func (q *DeployQueue) enqueue(appID, tag, trigger string) error {
 	if err := validateTag(tag); err != nil {
 		return err
 	}
@@ -304,22 +370,16 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 		return ErrDuplicate
 	}
 
-	count, err := q.PendingCount(appID)
-	if err != nil {
-		return err
-	}
-	if count >= q.maxPending {
-		return ErrQueueFull
-	}
-
 	jobID, err := generateJobID()
 	if err != nil {
 		return err
 	}
 
-	_, err = q.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'webhook')`,
-		jobID, appID, tag,
+	res, err := q.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type)
+		 SELECT ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', ?
+		 WHERE (SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND status = 'pending') < ?`,
+		jobID, appID, tag, trigger, appID, q.maxPending,
 	)
 	q.InvalidateActiveJobsCache()
 	// The partial UNIQUE index is the backstop for the check-then-insert race:
@@ -327,43 +387,16 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 	if isUniqueViolation(err) {
 		return ErrDuplicate
 	}
-	return err
-}
-
-func (q *DeployQueue) EnqueueManual(appID, tag string) error {
-	if err := validateTag(tag); err != nil {
-		return err
-	}
-	dup, err := q.IsDuplicate(appID, tag)
 	if err != nil {
 		return err
 	}
-	if dup {
-		return ErrDuplicate
-	}
-
-	count, err := q.PendingCount(appID)
-	if err != nil {
-		return err
-	}
-	if count >= q.maxPending {
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n == 0 {
 		return ErrQueueFull
 	}
-
-	jobID, err := generateJobID()
-	if err != nil {
-		return err
-	}
-
-	_, err = q.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'manual_deploy')`,
-		jobID, appID, tag,
-	)
-	q.InvalidateActiveJobsCache()
-	if isUniqueViolation(err) {
-		return ErrDuplicate
-	}
-	return err
+	q.enqueued()
+	return nil
 }
 
 func (q *DeployQueue) DequeueNext(appID string) (id, tag string, err error) {
@@ -426,10 +459,34 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 	return err
 }
 
+// MarkArtifactVerification records the artifact hash and whether it was verified
+// against a release digest (deploy_jobs.artifact_sha256 / artifact_verified, FR-045).
+func (q *DeployQueue) MarkArtifactVerification(id, sha256 string, verified bool) error {
+	v := 0
+	if verified {
+		v = 1
+	}
+	_, err := q.db.Exec(`UPDATE deploy_jobs SET artifact_sha256 = ?, artifact_verified = ? WHERE id = ?`, sha256, v, id)
+	return err
+}
+
+// ErrRolledBack is wrapped by the error a deploy returns when it failed AFTER
+// installing the new binary and then restored and restarted the previous one
+// (B9). The coordinator turns it into deploy_jobs.rolled_back = 1.
+var ErrRolledBack = errors.New("rolled back to the previous binary")
+
+// MarkRolledBack flags job id as rolled back (deploy_jobs.rolled_back = 1). It
+// is idempotent and a no-op for unknown ids.
+func (q *DeployQueue) MarkRolledBack(id string) error {
+	_, err := q.db.Exec(`UPDATE deploy_jobs SET rolled_back = 1 WHERE id = ?`, id)
+	return err
+}
+
 // SaveJobLog stores captured service logs (e.g. journalctl output) for a job,
 // so a failed deploy's health-check logs can be reviewed later. It is a
 // best-effort UPDATE keyed by job id; unknown ids are a no-op.
 func (q *DeployQueue) SaveJobLog(id, log string) error {
+	log, _ = CapLogTail(log, MaxJobLogBytes) // FR-050: a job row never holds an unbounded log
 	_, err := q.db.Exec(
 		`UPDATE deploy_jobs SET deploy_log = ? WHERE id = ?`,
 		log, id,
@@ -456,6 +513,14 @@ func (q *DeployQueue) GetJobLog(id string) (string, error) {
 	return log, nil
 }
 
+// ErrSelfDeployInFlight is returned by a deploy of auto-deploy's own service once the
+// restart was requested: the process is about to die and the NEXT process settles the
+// job (FR-144). The coordinator must leave the job in_progress.
+var ErrSelfDeployInFlight = errors.New("self-deploy in flight: the restarted process settles the job")
+
+// RecoverStale fails every job a dead process left in_progress / cancel_requested, so
+// none stays active forever (FR-044, NFR-007). It runs at startup, after a
+// self-deploy has been settled.
 func (q *DeployQueue) RecoverStale() error {
 	_, err := q.db.Exec(
 		`UPDATE deploy_jobs SET status = 'failed', error_msg = 'recovered: process crashed', updated_at = CURRENT_TIMESTAMP WHERE status IN ('in_progress', 'cancel_requested')`,
@@ -610,6 +675,7 @@ func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("create retry job: insert: %w", err)
 	}
+	q.enqueued()
 	return jobID, nil
 }
 
@@ -646,4 +712,25 @@ func (q *DeployQueue) ListByStatus(status string) ([]JobRecord, error) {
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// PruneHistory deletes, per app, the finished jobs (succeeded, failed, canceled) beyond
+// the newest keep (Q-16: 200). Pending and active jobs are never touched. It returns the
+// number of rows removed.
+func (q *DeployQueue) PruneHistory(keep int) (int, error) {
+	if keep < 1 {
+		keep = 1
+	}
+	res, err := q.db.Exec(
+		`DELETE FROM deploy_jobs WHERE id IN (
+		   SELECT id FROM (
+		     SELECT id, ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY seq DESC) AS rn
+		     FROM deploy_jobs WHERE status IN ('succeeded', 'failed', 'canceled')
+		   ) WHERE rn > ?
+		 )`, keep)
+	if err != nil {
+		return 0, fmt.Errorf("deploy_queue: prune history: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }

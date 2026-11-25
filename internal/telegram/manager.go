@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/session"
@@ -98,6 +99,10 @@ type Manager struct {
 	done   chan struct{}
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// pending counts messages accepted by Notify and not yet delivered (or abandoned), so
+	// Stop can wait for the queue to drain (FR-052).
+	pending atomic.Int64
 }
 
 // NewManager creates a Manager for cfg. Call Start to bring up the
@@ -181,7 +186,9 @@ func (m *Manager) loop(ctx context.Context, sender messageSender) error {
 			if !ok {
 				return nil
 			}
-			if err := sender.Send(ctx, m.cfg.ChatUsername, text); err != nil {
+			err := sender.Send(ctx, m.cfg.ChatUsername, text)
+			m.pending.Add(-1)
+			if err != nil {
 				slog.Error("telegram: send failed", "err", err)
 			}
 		}
@@ -192,9 +199,11 @@ func (m *Manager) loop(ctx context.Context, sender messageSender) error {
 // internal queue is full, the message is dropped and logged rather than
 // blocking — a deploy-finished hook must never stall on a notifier.
 func (m *Manager) Notify(text string) {
+	m.pending.Add(1)
 	select {
 	case m.jobs <- text:
 	default:
+		m.pending.Add(-1)
 		slog.Warn("telegram: notify queue full, dropping message", "text", text)
 	}
 }
@@ -202,9 +211,27 @@ func (m *Manager) Notify(text string) {
 // Stop cancels the run context and waits for the background goroutine
 // launched by Start to exit. It is safe to call only after Start.
 func (m *Manager) Stop() {
+	// FR-052: a reload must not drop what is already queued. Wait (bounded) until the
+	// loop has delivered it, then cancel the connection.
+	m.drain()
 	if m.cancel != nil {
 		m.cancel()
 	}
 	<-m.done
 	m.wg.Wait()
+}
+
+// drainTimeout bounds how long Stop waits for queued messages to be delivered; with the
+// connection down they never will be.
+var drainTimeout = 5 * time.Second
+
+func (m *Manager) drain() {
+	deadline := time.Now().Add(drainTimeout)
+	for m.pending.Load() > 0 {
+		if time.Now().After(deadline) {
+			slog.Warn("telegram: stopping with undelivered messages", "pending", m.pending.Load())
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

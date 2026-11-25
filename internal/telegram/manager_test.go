@@ -190,3 +190,62 @@ func TestManagerLoopLogsAndContinuesOnSendError(t *testing.T) {
 		t.Fatal("loop did not exit after jobs channel closed")
 	}
 }
+
+// slowSender takes a while per message, so a Stop that cancels at once drops the rest.
+type slowSender struct {
+	fakeSender
+	delay time.Duration
+}
+
+func (s *slowSender) Send(ctx context.Context, chat, text string) error {
+	time.Sleep(s.delay)
+	return s.fakeSender.Send(ctx, chat, text)
+}
+
+// B27 / FR-052: stopping the manager (a config reload) first delivers what is queued.
+func TestManagerStopDeliversQueuedMessagesFirst(t *testing.T) {
+	t.Parallel()
+	m := NewManager(Config{ChatUsername: "@ops"})
+	sender := &slowSender{delay: 60 * time.Millisecond}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m.cancel = cancel
+	m.done = make(chan struct{})
+	go func() {
+		defer close(m.done)
+		_ = m.loop(ctx, sender)
+	}()
+
+	for _, text := range []string{"one", "two", "three"} {
+		m.Notify(text)
+	}
+	m.Stop()
+
+	if got := sender.snapshot(); len(got) != 3 {
+		t.Fatalf("B27: %d of 3 queued messages were delivered before Stop returned: %v", len(got), got)
+	}
+}
+
+// A queue that cannot drain (no connection) must not make Stop hang forever.
+func TestManagerStopGivesUpDrainingAfterTheTimeout(t *testing.T) {
+	old := drainTimeout
+	drainTimeout = 100 * time.Millisecond
+	defer func() { drainTimeout = old }()
+
+	m := NewManager(Config{ChatUsername: "@ops"})
+	ctx, cancel := context.WithCancel(t.Context())
+	m.cancel = cancel
+	m.done = make(chan struct{})
+	go func() { // no loop consuming: the connection is down
+		defer close(m.done)
+		<-ctx.Done()
+	}()
+	m.Notify("never delivered")
+
+	start := time.Now()
+	m.Stop()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Stop blocked for %v", d)
+	}
+}

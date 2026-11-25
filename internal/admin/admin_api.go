@@ -3,11 +3,16 @@ package admin
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/deploy"
+	"github.com/izzamoe/auto-deploy/internal/httpx"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
@@ -21,17 +26,17 @@ type AdminAPIHandler struct {
 	queue   *store.DeployQueue
 	tracker *progress.ProgressTracker
 	cancel  *cancel.CancelService
+	// now is the clock of /stats; tests freeze it.
+	now func() time.Time
 }
 
 func NewAdminAPIHandler(store *store.AppStore, queue *store.DeployQueue, tracker *progress.ProgressTracker, cancel *cancel.CancelService) *AdminAPIHandler {
-	return &AdminAPIHandler{store: store, queue: queue, tracker: tracker, cancel: cancel}
+	return &AdminAPIHandler{store: store, queue: queue, tracker: tracker, cancel: cancel, now: time.Now}
 }
 
-type adminAPIErrorResponse struct {
-	Status string   `json:"status"`
-	Error  string   `json:"error"`
-	Errors []string `json:"errors,omitempty"`
-}
+// adminAPIErrorResponse is the one error envelope of the admin API (FR-021):
+// {status:"error", code, error, errors:[{field?, code, message}], requestId}.
+type adminAPIErrorResponse = httpx.APIError
 
 type adminAPIStatusResponse struct {
 	Status  string `json:"status"`
@@ -47,6 +52,21 @@ type adminAPIAppRequest struct {
 	GithubRepo    string `json:"githubRepo"`
 	ArtifactName  string `json:"artifactName"`
 	Enabled       *bool  `json:"enabled"`
+	// Per-app deploy settings (FR-042, FR-045, FR-047). On update an absent field keeps
+	// the stored value; on create an absent field takes the default.
+	RunAsUser     *string `json:"runAsUser"`
+	Hardening     *bool   `json:"hardening"`
+	HealthURL     *string `json:"healthUrl"`
+	RequireDigest *bool   `json:"requireDigest"`
+	// EnvVars and Args are accepted by create only (FR-028): the app, its env and its
+	// args are written in one transaction. update ignores them (own endpoints).
+	EnvVars []adminAPIEnvVarRequest `json:"envVars"`
+	Args    []string                `json:"args"`
+}
+
+type adminAPIEnvVarRequest struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 func (r adminAPIAppRequest) webhookSecret() string {
@@ -72,6 +92,10 @@ type adminAPIAppResponse struct {
 	GithubRepo           string                    `json:"githubRepo"`
 	ArtifactName         string                    `json:"artifactName"`
 	Enabled              bool                      `json:"enabled"`
+	RunAsUser            string                    `json:"runAsUser"`
+	Hardening            bool                      `json:"hardening"`
+	HealthURL            string                    `json:"healthUrl"`
+	RequireDigest        bool                      `json:"requireDigest"`
 	CreatedAt            time.Time                 `json:"createdAt"`
 	UpdatedAt            time.Time                 `json:"updatedAt"`
 	LastDeployTag        string                    `json:"lastDeployTag,omitempty"`
@@ -112,6 +136,8 @@ type adminAPIJobResponse struct {
 	CreatedAt          time.Time                 `json:"createdAt"`
 	UpdatedAt          time.Time                 `json:"updatedAt"`
 	LiveProgress       *adminAPIProgressResponse `json:"liveProgress,omitempty"`
+	// RolledBack is set only where it is known (the recent jobs of /stats).
+	RolledBack *bool `json:"rolledBack,omitempty"`
 }
 
 type adminAPICancelJobResponse struct {
@@ -163,27 +189,119 @@ func isAdminAPINotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
-func validateAdminAPIAppRequest(body adminAPIAppRequest, requireSecret bool) []string {
-	var errs []string
-	if body.Name == "" {
-		errs = append(errs, "Name is required")
+// validateAdminAPIAppRequest checks an app create/update body and returns one
+// field-level error per problem (errors[].field = the JSON name): required fields,
+// then the FR-040 formats (binaryPath, serviceName, githubRepo, artifactName) and the
+// Q-11 rule that an app must not point at the auto-deploy binary itself.
+// minWebhookSecretLength is the shortest webhook secret a client may choose (FR-055).
+const minWebhookSecretLength = 32
+
+func validateAdminAPIAppRequest(body adminAPIAppRequest, requireSecret bool) []httpx.FieldError {
+	var errs []httpx.FieldError
+	required := func(field, value, message string) {
+		if value == "" {
+			errs = append(errs, httpx.FieldError{Field: field, Code: httpx.CodeValidationFailed, Message: message})
+		}
 	}
-	if body.BinaryPath == "" {
-		errs = append(errs, "Binary Path is required")
+	required("name", body.Name, "Name is required")
+	required("binaryPath", body.BinaryPath, "Binary Path is required")
+	required("serviceName", body.ServiceName, "Service Name is required")
+	required("githubRepo", body.GithubRepo, "GitHub Repo is required")
+	required("artifactName", body.ArtifactName, "Artifact Name is required")
+	// FR-055: a secret chosen by the client must have at least minWebhookSecretLength
+	// characters; an omitted one is generated by the server (32 random bytes).
+	if s := body.webhookSecret(); s != "" && utf8.RuneCountInString(s) < minWebhookSecretLength {
+		errs = append(errs, httpx.FieldError{Field: "webhookSecret", Message: "Webhook Secret must be at least 32 characters (leave it empty to have one generated)"})
 	}
-	if body.ServiceName == "" {
-		errs = append(errs, "Service Name is required")
+	if requireSecret {
+		required("webhookSecret", body.webhookSecret(), "Webhook Secret is required")
 	}
-	if body.GithubRepo == "" {
-		errs = append(errs, "GitHub Repo is required")
+	for _, fe := range deploy.ValidateAppInput(deploy.AppInput{
+		BinaryPath: body.BinaryPath, ServiceName: body.ServiceName, GithubRepo: body.GithubRepo, ArtifactName: body.ArtifactName,
+	}) {
+		errs = append(errs, httpx.FieldError{Field: fe.Field, Code: httpx.CodeValidationFailed, Message: fe.Message})
 	}
-	if body.ArtifactName == "" {
-		errs = append(errs, "Artifact Name is required")
-	}
-	if requireSecret && body.webhookSecret() == "" {
-		errs = append(errs, "Webhook Secret is required")
+	if body.BinaryPath != "" && !hasFieldError(errs, "binaryPath") {
+		// No app is marked self-deploy yet (Q-19), so pointing at the manager's own
+		// binary is always refused.
+		if err := deploy.ValidateBinaryPathNotSelf(body.BinaryPath, deploy.OwnExecutable(), false); err != nil {
+			errs = append(errs, httpx.FieldError{Field: "binaryPath", Code: httpx.CodeValidationFailed, Message: err.Error()})
+		}
 	}
 	return errs
+}
+
+// validateAdminAPIAppConfig checks the env vars and args of a create request and
+// returns field errors (envVars[i].name, args[i], args). Nothing is written before
+// this passes.
+// validateAdminAPIAppSettings checks the optional per-app deploy settings.
+func validateAdminAPIAppSettings(body adminAPIAppRequest) []httpx.FieldError {
+	var errs []httpx.FieldError
+	if body.RunAsUser != nil {
+		if err := deploy.ValidateRunAsUser(*body.RunAsUser); err != nil {
+			errs = append(errs, httpx.FieldError{Field: "runAsUser", Message: "Run-as user " + err.Error()})
+		}
+	}
+	if body.HealthURL != nil {
+		if err := deploy.ValidateHealthURL(*body.HealthURL); err != nil {
+			errs = append(errs, httpx.FieldError{Field: "healthUrl", Message: "Health URL " + err.Error()})
+		}
+	}
+	return errs
+}
+
+// settingsFrom merges the request over base (update) or the defaults (create).
+func settingsFrom(body adminAPIAppRequest, base store.AppSettings) store.AppSettings {
+	if body.RunAsUser != nil {
+		base.RunAsUser = *body.RunAsUser
+	}
+	if body.Hardening != nil {
+		base.Hardening = *body.Hardening
+	}
+	if body.HealthURL != nil {
+		base.HealthURL = *body.HealthURL
+	}
+	if body.RequireDigest != nil {
+		base.RequireDigest = *body.RequireDigest
+	}
+	return base
+}
+
+func validateAdminAPIAppConfig(body adminAPIAppRequest) []httpx.FieldError {
+	var errs []httpx.FieldError
+	add := func(field, msg string) {
+		errs = append(errs, httpx.FieldError{Field: field, Code: httpx.CodeValidationFailed, Message: msg})
+	}
+	seen := map[string]bool{}
+	for i, v := range body.EnvVars {
+		if err := store.ValidateEnvVarName(v.Name); err != nil {
+			add("envVars["+strconv.Itoa(i)+"].name", err.Error())
+			continue
+		}
+		if seen[v.Name] {
+			add("envVars["+strconv.Itoa(i)+"].name", "duplicate environment variable name")
+		}
+		seen[v.Name] = true
+	}
+	if len(body.Args) > store.MaxServiceArgs {
+		add("args", "too many arguments: "+strconv.Itoa(len(body.Args))+", max "+strconv.Itoa(store.MaxServiceArgs))
+	} else {
+		for i, a := range body.Args {
+			if err := store.ValidateServiceArg(a); err != nil {
+				add("args["+strconv.Itoa(i)+"]", err.Error())
+			}
+		}
+	}
+	return errs
+}
+
+func hasFieldError(errs []httpx.FieldError, field string) bool {
+	for _, e := range errs {
+		if e.Field == field {
+			return true
+		}
+	}
+	return false
 }
 
 func appWithLastDeployResponse(app store.AppWithLastDeploy) adminAPIAppResponse {
@@ -201,15 +319,19 @@ func appWithLastDeployResponse(app store.AppWithLastDeploy) adminAPIAppResponse 
 
 func appResponse(app store.App) adminAPIAppResponse {
 	return adminAPIAppResponse{
-		ID:           app.ID,
-		Name:         app.Name,
-		BinaryPath:   app.BinaryPath,
-		ServiceName:  app.ServiceName,
-		GithubRepo:   app.GithubRepo,
-		ArtifactName: app.ArtifactName,
-		Enabled:      app.Enabled,
-		CreatedAt:    app.CreatedAt,
-		UpdatedAt:    app.UpdatedAt,
+		ID:            app.ID,
+		Name:          app.Name,
+		BinaryPath:    app.BinaryPath,
+		ServiceName:   app.ServiceName,
+		GithubRepo:    app.GithubRepo,
+		ArtifactName:  app.ArtifactName,
+		Enabled:       app.Enabled,
+		RunAsUser:     app.RunAsUser,
+		Hardening:     app.Hardening,
+		HealthURL:     app.HealthURL,
+		RequireDigest: app.RequireDigest,
+		CreatedAt:     app.CreatedAt,
+		UpdatedAt:     app.UpdatedAt,
 	}
 }
 
@@ -306,6 +428,10 @@ func (h *AdminAPIHandler) ListAppsHertz(ctx context.Context, c *app.RequestConte
 	c.JSON(consts.StatusOK, map[string]any{"apps": resp})
 }
 
+// CreateAppHertz creates the app with its env vars and args in ONE transaction
+// (FR-028). The webhook secret is optional: when the client sends none the server
+// generates 32 random bytes (FR-055). Either way the secret is returned in the 201 and
+// nowhere else, ever again (FR-076); only its hash is stored.
 func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestContext) {
 	if !requireAdminAPIJSONRequestHertz(c) {
 		return
@@ -316,22 +442,84 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 
-	if errs := validateAdminAPIAppRequest(body, true); len(errs) > 0 {
-		writeAdminAPIValidationErrorHertz(c, errs)
+	errs := validateAdminAPIAppRequest(body, false)
+	errs = append(errs, validateAdminAPIAppConfig(body)...)
+	errs = append(errs, validateAdminAPIAppSettings(body)...)
+	if len(errs) > 0 {
+		writeAdminAPIFieldErrorsHertz(c, errs)
 		return
 	}
 
-	app, err := h.store.Create(body.Name, body.webhookSecret(), body.BinaryPath, body.ServiceName, body.GithubRepo, body.ArtifactName)
-	if err != nil {
-		if errors.Is(err, store.ErrDuplicateApp) {
-			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
+	secret := body.webhookSecret()
+	if secret == "" {
+		generated, err := store.GenerateWebhookSecret()
+		if err != nil {
+			logHandlerError(c, "generate webhook secret failed", err)
+			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error creating app")
 			return
 		}
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error creating app")
+		secret = generated
+	}
+	envVars := make([]store.EnvVar, 0, len(body.EnvVars))
+	for _, v := range body.EnvVars {
+		envVars = append(envVars, store.EnvVar{Name: v.Name, Value: v.Value})
+	}
+
+	app, err := h.store.CreateWithConfig(store.CreateAppInput{
+		Name: body.Name, Secret: secret,
+		BinaryPath: body.BinaryPath, ServiceName: body.ServiceName, GithubRepo: body.GithubRepo, ArtifactName: body.ArtifactName,
+		EnvVars: envVars, Args: body.Args,
+		Settings: createSettings(body),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrInvalidAppInput), errors.Is(err, store.ErrInvalidAppConfig):
+			writeAdminAPIValidationErrorHertz(c, []string{"App fields are invalid"})
+		case errors.Is(err, store.ErrDuplicateApp):
+			// One message for every cause: it must not say WHICH of binary path,
+			// service name or secret collided (FR-055).
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "An app with this binary path, service name, or webhook secret already exists")
+		default:
+			logHandlerError(c, "create app failed", err)
+			writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error creating app")
+		}
 		return
 	}
 
-	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app)})
+	auth.AuditRequest(c, auth.EventAppCreated, "", "appId", app.ID, "name", app.Name, "serviceName", app.ServiceName)
+	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app), "webhookSecret": secret})
+}
+
+// createSettings are the settings of a new app: the request over the defaults.
+func createSettings(body adminAPIAppRequest) *store.AppSettings {
+	set := settingsFrom(body, store.AppSettings{RequireDigest: true}) // Q-14: true for NEW apps
+	return &set
+}
+
+// RotateWebhookSecretHertz replaces the app's webhook secret with 32 fresh random
+// bytes and returns it once (FR-055). The previous secret stops working at once.
+func (h *AdminAPIHandler) RotateWebhookSecretHertz(ctx context.Context, c *app.RequestContext) {
+	id := c.Param("id")
+	if _, ok := h.getAppOr404(c, id); !ok {
+		return
+	}
+	secret, err := store.GenerateWebhookSecret()
+	if err != nil {
+		logHandlerError(c, "generate webhook secret failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error rotating secret")
+		return
+	}
+	if err := h.store.RotateSecret(id, secret); err != nil {
+		if isAdminAPINotFoundError(err) {
+			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
+			return
+		}
+		logHandlerError(c, "rotate webhook secret failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error rotating secret")
+		return
+	}
+	auth.AuditRequest(c, auth.EventAppSecretRotated, "", "appId", id)
+	c.JSON(consts.StatusOK, map[string]any{"secret": secret})
 }
 
 func (h *AdminAPIHandler) GetAppHertz(ctx context.Context, c *app.RequestContext) {
@@ -358,8 +546,10 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 
-	if errs := validateAdminAPIAppRequest(body, false); len(errs) > 0 {
-		writeAdminAPIValidationErrorHertz(c, errs)
+	errs := validateAdminAPIAppRequest(body, false)
+	errs = append(errs, validateAdminAPIAppSettings(body)...)
+	if len(errs) > 0 {
+		writeAdminAPIFieldErrorsHertz(c, errs)
 		return
 	}
 
@@ -369,10 +559,21 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	if err := h.updateAppWithOptionalSecret(id, body, enabled); err != nil {
-		if errors.Is(err, store.ErrDuplicateApp) {
-			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
+		if errors.Is(err, store.ErrInvalidAppInput) {
+			writeAdminAPIValidationErrorHertz(c, []string{"App fields are invalid"})
 			return
 		}
+		if errors.Is(err, store.ErrDuplicateApp) {
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "An app with this binary path, service name, or webhook secret already exists")
+			return
+		}
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error updating app")
+		return
+	}
+
+	current := store.AppSettings{RunAsUser: app.RunAsUser, Hardening: app.Hardening, HealthURL: app.HealthURL, RequireDigest: app.RequireDigest}
+	if err := h.store.UpdateSettings(id, settingsFrom(body, current)); err != nil {
+		logHandlerError(c, "update app settings failed", err)
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error updating app")
 		return
 	}
@@ -382,11 +583,34 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load updated app")
 		return
 	}
+	auth.AuditRequest(c, auth.EventAppUpdated, "", "appId", id)
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
 }
 
+// DeleteAppHertz removes the app with its env vars, args and jobs in ONE
+// transaction (B14, FR-035). ?removeUnitFile=true (Q-10, default false) also removes
+// the unit file auto-deploy generated for it; a hand-written unit file is never
+// removed, and a failure to remove the unit does not undo the deletion.
 func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestContext) {
-	if err := h.store.Delete(c.Param("id")); err != nil {
+	id := c.Param("id")
+	removeUnitFile := false
+	if raw := string(c.Query("removeUnitFile")); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeAdminAPIValidationErrorHertz(c, []string{"removeUnitFile must be true or false"})
+			return
+		}
+		removeUnitFile = v
+	}
+	// The service name must be read before the row is gone.
+	serviceName := ""
+	if removeUnitFile {
+		if existing, err := h.store.Get(id); err == nil && existing != nil {
+			serviceName = existing.ServiceName
+		}
+	}
+
+	if err := h.store.Delete(id); err != nil {
 		if errors.Is(err, store.ErrActiveDeployExists) {
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Cannot delete app with active deploy")
 			return
@@ -395,10 +619,24 @@ func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestCont
 			writeAdminAPIErrorHertz(c, consts.StatusNotFound, "App not found")
 			return
 		}
+		logHandlerError(c, "delete app failed", err)
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to delete app")
 		return
 	}
-	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: "App deleted successfully"})
+
+	message := "App deleted successfully"
+	if removeUnitFile && serviceName != "" {
+		removed, err := deploy.RemoveServiceUnit(serviceName)
+		switch {
+		case err != nil:
+			logHandlerError(c, "remove unit file after app delete failed", err)
+			message += "; the unit file could not be removed"
+		case removed:
+			message += "; unit file removed"
+		}
+	}
+	auth.AuditRequest(c, auth.EventAppDeleted, "", "appId", id)
+	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: message})
 }
 
 func (h *AdminAPIHandler) ToggleAppHertz(ctx context.Context, c *app.RequestContext) {
@@ -460,6 +698,12 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 	}
 
 	if err := h.queue.EnqueueManual(id, body.Tag); err != nil {
+		if errors.Is(err, store.ErrInvalidTag) {
+			// B15: a malformed tag is the caller's mistake (400 invalid_tag), never a 500,
+			// and the validation detail is not echoed back.
+			writeError(c, consts.StatusBadRequest, httpx.CodeInvalidTag, "Invalid tag")
+			return
+		}
 		if errors.Is(err, store.ErrDuplicate) {
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Deploy already queued for this tag")
 			return
@@ -468,10 +712,12 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 			writeAdminAPIErrorHertz(c, consts.StatusServiceUnavailable, "Queue is full")
 			return
 		}
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to queue deploy: "+err.Error())
+		logHandlerError(c, "queue manual deploy failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to queue deploy")
 		return
 	}
 
+	auth.AuditRequest(c, auth.EventDeployManual, "", "appId", c.Param("id"), "tag", body.Tag)
 	c.JSON(consts.StatusAccepted, map[string]string{"status": "queued", "tag": body.Tag})
 }
 
@@ -586,10 +832,12 @@ func (h *AdminAPIHandler) RetryHistoryJobHertz(ctx context.Context, c *app.Reque
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Deploy already pending for this tag")
 			return
 		}
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to create retry job: "+err.Error())
+		logHandlerError(c, "create retry job failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to create retry job")
 		return
 	}
 
+	auth.AuditRequest(c, auth.EventDeployManual, "", "retryJobId", retryJobID, "retryOf", c.Param("id"))
 	c.JSON(consts.StatusAccepted, map[string]string{"status": "queued", "jobId": retryJobID})
 }
 
@@ -600,9 +848,11 @@ func (h *AdminAPIHandler) CancelJobHertz(ctx context.Context, c *app.RequestCont
 
 	result, err := h.cancel.RequestJobCancel(c.Param("job_id"))
 	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, err.Error())
+		logHandlerError(c, "request job cancel failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to request cancel")
 		return
 	}
+	auth.AuditRequest(c, auth.EventDeployCancel, "", "jobId", c.Param("job_id"), "outcome", string(result.Outcome))
 	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelJobResponse(result)})
 }
 
@@ -617,14 +867,22 @@ func (h *AdminAPIHandler) CancelAppHertz(ctx context.Context, c *app.RequestCont
 	}
 	result, err := h.cancel.RequestAppCancel(appID)
 	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, err.Error())
+		logHandlerError(c, "request app cancel failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to request cancel")
 		return
 	}
+	auth.AuditRequest(c, auth.EventDeployCancel, "", "appId", appID)
 	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelAppResponse(result)})
 }
 
 func (h *AdminAPIHandler) NotFoundHertz(ctx context.Context, c *app.RequestContext) {
-	writeAdminAPIErrorHertz(c, consts.StatusNotFound, "Not found")
+	writeError(c, consts.StatusNotFound, httpx.CodeNotFound, "Not found")
+}
+
+// logHandlerError records an internal failure with the request ID so the operator can
+// correlate it with the generic error the client received.
+func logHandlerError(c *app.RequestContext, what string, err error) {
+	slog.Error(what, "err", err, "request_id", httpx.FromContext(c))
 }
 
 func requireAdminAPIJSONRequestHertz(c *app.RequestContext) bool {
@@ -638,18 +896,66 @@ func requireAdminAPIJSONRequestHertz(c *app.RequestContext) bool {
 
 func decodeAdminAPIJSONHertz(c *app.RequestContext, dst any) bool {
 	if err := c.BindJSON(dst); err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "Invalid JSON body")
+		writeError(c, consts.StatusBadRequest, httpx.CodeInvalidJSON, "Invalid JSON body")
 		return false
 	}
 	return true
 }
 
-func writeAdminAPIValidationErrorHertz(c *app.RequestContext, errs []string) {
-	c.JSON(consts.StatusBadRequest, adminAPIErrorResponse{Status: "error", Error: "Validation failed", Errors: errs})
+// writeError writes the contract error envelope. msg must be a safe, fixed message:
+// never the text of an internal error (FR-022); log the detail with the request ID
+// instead (TestNoRawErrorInResponses enforces this on the whole package).
+func writeError(c *app.RequestContext, status int, code, msg string, fields ...httpx.FieldError) {
+	httpx.WriteError(c, status, code, msg, fields...)
+}
+
+// codeForStatus is the default contract code of an HTTP status.
+func codeForStatus(status int) string {
+	switch status {
+	case consts.StatusBadRequest:
+		return httpx.CodeValidationFailed
+	case consts.StatusUnauthorized:
+		return httpx.CodeUnauthorized
+	case consts.StatusForbidden:
+		return httpx.CodeForbidden
+	case consts.StatusNotFound:
+		return httpx.CodeNotFound
+	case consts.StatusMethodNotAllowed:
+		return httpx.CodeMethodNotAllowed
+	case consts.StatusConflict:
+		return httpx.CodeDuplicate
+	case consts.StatusRequestEntityTooLarge:
+		return httpx.CodePayloadTooLarge
+	case consts.StatusUnsupportedMediaType:
+		return httpx.CodeUnsupportedMediaType
+	case consts.StatusTooManyRequests:
+		return httpx.CodeRateLimited
+	case consts.StatusBadGateway:
+		return httpx.CodeUpstreamError
+	case consts.StatusServiceUnavailable:
+		return httpx.CodeQueueFull
+	}
+	return httpx.CodeInternalError
 }
 
 func writeAdminAPIErrorHertz(c *app.RequestContext, status int, msg string) {
-	c.JSON(status, adminAPIErrorResponse{Status: "error", Error: msg})
+	writeError(c, status, codeForStatus(status), msg)
+}
+
+// writeAdminAPIFieldErrorsHertz answers 400 validation_failed with field-level
+// entries (errors[].field names the invalid JSON field).
+func writeAdminAPIFieldErrorsHertz(c *app.RequestContext, fields []httpx.FieldError) {
+	writeError(c, consts.StatusBadRequest, httpx.CodeValidationFailed, "Validation failed", fields...)
+}
+
+// writeAdminAPIValidationErrorHertz answers 400 validation_failed; each message
+// becomes one entry of errors[].
+func writeAdminAPIValidationErrorHertz(c *app.RequestContext, errs []string) {
+	fields := make([]httpx.FieldError, 0, len(errs))
+	for _, e := range errs {
+		fields = append(fields, httpx.FieldError{Code: httpx.CodeValidationFailed, Message: e})
+	}
+	writeError(c, consts.StatusBadRequest, httpx.CodeValidationFailed, "Validation failed", fields...)
 }
 
 // JobLogsHertz returns the service logs captured for a job when its deploy
@@ -661,17 +967,19 @@ func (h *AdminAPIHandler) JobLogsHertz(ctx context.Context, c *app.RequestContex
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load job logs")
 		return
 	}
-	c.JSON(consts.StatusOK, map[string]any{"log": logText})
+	c.JSON(consts.StatusOK, map[string]any{"log": logText, "truncated": store.IsTruncatedJobLog(logText)})
 }
 
 func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/apps", handler.ListAppsHertz)
+	api.GET("/stats", handler.GetStatsHertz)
 	api.POST("/apps", handler.CreateAppHertz)
 	api.GET("/apps/:id", handler.GetAppHertz)
 	api.PUT("/apps/:id", handler.UpdateAppHertz)
 	api.DELETE("/apps/:id", handler.DeleteAppHertz)
 	api.POST("/apps/:id/toggle", handler.ToggleAppHertz)
+	api.POST("/apps/:id/webhook-secret/rotate", handler.RotateWebhookSecretHertz)
 	api.POST("/apps/:id/deploy", handler.ManualDeployAppHertz)
 	api.GET("/history", handler.ListHistoryHertz)
 	api.POST("/history/:id/retry", handler.RetryHistoryJobHertz)
@@ -679,15 +987,46 @@ func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth
 	api.GET("/jobs/:job_id/logs", handler.JobLogsHertz)
 	api.POST("/apps/:app_id/cancel", handler.CancelAppHertz)
 
+	// Anything else under the API prefix is a JSON 404 (code not_found), never the SPA
+	// HTML. The bare /admin/api prefix is the pre-v1 alias namespace (Q-7).
 	notFound := handler.NotFoundHertz
-	h.GET("/admin/api", auth, notFound)
-	h.POST("/admin/api", auth, notFound)
-	h.PUT("/admin/api", auth, notFound)
-	h.PATCH("/admin/api", auth, notFound)
-	h.DELETE("/admin/api", auth, notFound)
-	h.GET("/admin/api/*path", auth, notFound)
-	h.POST("/admin/api/*path", auth, notFound)
-	h.PUT("/admin/api/*path", auth, notFound)
-	h.PATCH("/admin/api/*path", auth, notFound)
-	h.DELETE("/admin/api/*path", auth, notFound)
+	for _, prefix := range []string{"/admin/api/v1", "/admin/api"} {
+		h.GET(prefix, auth, notFound)
+		h.POST(prefix, auth, notFound)
+		h.PUT(prefix, auth, notFound)
+		h.PATCH(prefix, auth, notFound)
+		h.DELETE(prefix, auth, notFound)
+		h.GET(prefix+"/*path", auth, notFound)
+		h.POST(prefix+"/*path", auth, notFound)
+		h.PUT(prefix+"/*path", auth, notFound)
+		h.PATCH(prefix+"/*path", auth, notFound)
+		h.DELETE(prefix+"/*path", auth, notFound)
+	}
+}
+
+// isActiveDeployStatus reports whether a job status still has a live tracker entry.
+func isActiveDeployStatus(status string) bool {
+	return status == "pending" || status == "in_progress" || status == "cancel_requested"
+}
+
+func activeSnapshotForApp(tracker *progress.ProgressTracker, app store.AppWithLastDeploy) (*progress.ProgressSnapshot, bool) {
+	if tracker == nil || !isActiveDeployStatus(app.LastDeployStatus) || app.LastJobID == "" {
+		return nil, false
+	}
+	snapshot, ok := tracker.Snapshot(app.ID)
+	if !ok || snapshot.JobID != app.LastJobID {
+		return nil, false
+	}
+	return snapshot, true
+}
+
+func activeSnapshotForHistoryJob(tracker *progress.ProgressTracker, appID string, job store.JobRecord) (*progress.ProgressSnapshot, bool) {
+	if tracker == nil || !isActiveDeployStatus(job.Status) {
+		return nil, false
+	}
+	snapshot, ok := tracker.Snapshot(appID)
+	if !ok || snapshot.JobID != job.ID {
+		return nil, false
+	}
+	return snapshot, true
 }

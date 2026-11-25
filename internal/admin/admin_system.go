@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/izzamoe/auto-deploy/internal/deploy"
+	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -60,14 +61,16 @@ func NewSystemLogsHandler(selfServiceName string) *SystemLogsHandler {
 // optional "lines" query parameter behaves as documented on parseLogLinesParam.
 func (h *SystemLogsHandler) SelfLogsHertz(ctx context.Context, c *app.RequestContext) {
 	lines := parseLogLinesParam(c)
+	logText, truncated := deploy.CaptureServiceLogsBounded(h.selfServiceName, lines, store.MaxLiveLogBytes)
 	c.JSON(consts.StatusOK, map[string]any{
-		"service": h.selfServiceName,
-		"log":     deploy.CaptureServiceLogsLines(h.selfServiceName, lines),
+		"service":   h.selfServiceName,
+		"log":       logText,
+		"truncated": truncated,
 	})
 }
 
 // RegisterSystemRoutesHertz registers the system (self) log route under auth.
 func RegisterSystemRoutesHertz(h *server.Hertz, handler *SystemLogsHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/system/logs", handler.SelfLogsHertz)
 }

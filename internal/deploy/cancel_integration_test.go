@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,9 +15,6 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
-
-	"github.com/cloudwego/hertz/pkg/app/client"
-	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
 func TestQueueCancelPendingBeforeDequeue(t *testing.T) {
@@ -50,21 +48,15 @@ func TestWorkerCancelDuringDownloadCleansTempAndMarksCanceled(t *testing.T) {
 	tmpPath := binaryPath + ".tmp"
 	started := make(chan struct{})
 
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
-	dlClient.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(1024)
-			resp.SetBodyStream(&blockingBody{ctx: ctx, started: started}, 1024)
-			return nil
-		}
+	dlClient := fakeBodyClient(func(req *http.Request) (io.ReadCloser, int64) {
+		return &blockingBody{ctx: req.Context(), started: started}, 1024
 	})
 	tracker := progress.NewProgressTracker()
 	app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := DeployWithControl(app, jobID, "v-download", tracker, dlClient, control)
+		_, err := DeployArtifact(app, jobID, "v-download", tracker, dlClient, control, nil)
 		done <- err
 	}()
 
@@ -102,19 +94,19 @@ func TestWorkerCancelAfterBackupRestoresBackupAndMarksCanceled(t *testing.T) {
 	}
 	restoreGlobals := stubDeployGlobals(t)
 	defer restoreGlobals()
-	originalRename := renameFile
-	renameFile = func(oldpath, newpath string) error {
-		err := originalRename(oldpath, newpath)
+	// FR-043: the backup is a hard link now; cancel right after it is made.
+	stubLink(t, func(oldpath, newpath string) error {
+		err := os.Link(oldpath, newpath)
 		if err == nil && oldpath == binaryPath && newpath == binaryPath+".bak" {
 			if _, cancelErr := control.RequestJobCancel(jobID); cancelErr != nil {
 				return cancelErr
 			}
 		}
 		return err
-	}
+	})
 
 	app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
-	_, err := DeployWithControl(app, jobID, "v-backup", progress.NewProgressTracker(), staticELFClient(), control)
+	_, err := DeployArtifact(app, jobID, "v-backup", progress.NewProgressTracker(), staticELFClient(), control, nil)
 	if !errors.Is(err, errDeployCanceled) {
 		t.Fatalf("deploy error = %v, want errDeployCanceled", err)
 	}
@@ -154,7 +146,7 @@ func TestWorkerCancelDuringHealthcheckRollbackFailureMarksFailed(t *testing.T) {
 	}
 
 	app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
-	_, err := DeployWithControl(app, jobID, "v-health", progress.NewProgressTracker(), staticELFClient(), control)
+	_, err := DeployArtifact(app, jobID, "v-health", progress.NewProgressTracker(), staticELFClient(), control, nil)
 	if err == nil || errors.Is(err, errDeployCanceled) {
 		t.Fatalf("deploy error = %v, want rollback failure", err)
 	}
@@ -255,18 +247,11 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 
 func (b *blockingBody) Close() error { return nil }
 
-func staticELFClient() *client.Client {
-	c, _ := client.NewClient(client.WithResponseBodyStream(true))
-	c.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			body := []byte{0x7f, 'E', 'L', 'F', 1, 2, 3, 4}
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(len(body))
-			resp.SetBodyStream(bytes.NewReader(body), len(body))
-			return nil
-		}
+func staticELFClient() *http.Client {
+	body := elfBinary("\x01\x02\x03\x04")
+	return fakeBodyClient(func(*http.Request) (io.ReadCloser, int64) {
+		return io.NopCloser(bytes.NewReader(body)), int64(len(body))
 	})
-	return c
 }
 
 func stubDeployGlobals(t *testing.T) func() {

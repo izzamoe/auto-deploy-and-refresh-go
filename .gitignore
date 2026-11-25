@@ -21,6 +21,7 @@ skills-lock.json
 # Playwright local harness artifacts
 node_modules/
 test-results/
+playwright/.auth/
 playwright-report/
 
 # QA/test screenshots
@@ -29,9 +30,20 @@ playwright-report/
 # Environment files (keep .example)
 .env
 auto-deploy.env
-web/admin/dist/*
-!web/admin/dist/.keep
+
+# Next static export. Build output is NOT committed (Q-12); the tracked .keep keeps
+# `//go:embed all:web/admin/dist` compilable on a clean checkout.
+/internal/admin/web/admin/dist/*
+!/internal/admin/web/admin/dist/.keep
+/web/admin/out/
+/web/admin/.next/
+next-env.d.ts
+*.tsbuildinfo
+/.local-run/
 
 # Installed agent skills / local agent tooling
 .agents/
 .claude/
+
+# Visual baseline stays local (Q-25: created by Hermes on the runner)
+tests/*-snapshots/

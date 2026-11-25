@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"debug/elf"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,8 +22,6 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/app/client"
-	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
 type response struct {
@@ -76,6 +76,7 @@ func newTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	db.SetMaxOpenConns(1) // ":memory:" is per connection; production also uses a single connection
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -344,12 +345,12 @@ func TestDeployDownloadProgress(t *testing.T) {
 
 	tracker := progress.NewProgressTracker()
 	tracker.Start(app.ID, "job-1", "v1.0.0")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
+	summary, err := downloadBinaryContext(context.Background(), srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient, nil, maxArtifactBytes)
 	if err != nil {
-		t.Fatalf("downloadBinary: %v", err)
+		t.Fatalf("downloadBinaryContext: %v", err)
 	}
 
 	if summary.Bytes != int64(len(body)) {
@@ -395,12 +396,12 @@ func TestDeployDownloadRetry(t *testing.T) {
 
 	tracker := progress.NewProgressTracker()
 	tracker.Start(app.ID, "job-retry", "v1.0.0")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
+	summary, err := downloadBinaryContext(context.Background(), srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient, nil, maxArtifactBytes)
 	if err != nil {
-		t.Fatalf("downloadBinary after retries: %v", err)
+		t.Fatalf("downloadBinaryContext after retries: %v", err)
 	}
 
 	if summary.Bytes != 5 {
@@ -423,10 +424,10 @@ func TestDeployDownloadFailure(t *testing.T) {
 
 	tracker := progress.NewProgressTracker()
 	tracker.Start(app.ID, "job-fail", "v1.0.0")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	_, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
+	_, err := downloadBinaryContext(context.Background(), srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient, nil, maxArtifactBytes)
 	if err == nil {
 		t.Fatal("expected error from 404 server")
 	}
@@ -439,36 +440,21 @@ func TestDeployDownloadFailure(t *testing.T) {
 	}
 }
 
-func deployClientWithBody(body []byte) *client.Client {
-	c, _ := client.NewClient(client.WithResponseBodyStream(true))
-	c.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(len(body))
-			resp.SetBodyStream(bytes.NewReader(body), len(body))
-			return nil
-		}
+func deployClientWithBody(body []byte) *http.Client {
+	return fakeBodyClient(func(*http.Request) (io.ReadCloser, int64) {
+		return io.NopCloser(bytes.NewReader(body)), int64(len(body))
 	})
-	return c
 }
 
 func TestDeployCleanupOnValidationFailure(t *testing.T) {
 	body := []byte("not-an-elf-binary")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
-	dlClient.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(len(body))
-			resp.SetBodyStream(bytes.NewReader(body), len(body))
-			return nil
-		}
-	})
+	dlClient := deployClientWithBody(body)
 
 	tmpDir := t.TempDir()
 	app := testApp(tmpDir)
 	tracker := progress.NewProgressTracker()
 
-	_, err := DeployWithControl(app, "job-elf-fail", "v1.0.0", tracker, dlClient, nil)
+	_, err := DeployArtifact(app, "job-elf-fail", "v1.0.0", tracker, dlClient, nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on ELF validation")
 	}
@@ -559,7 +545,7 @@ func TestDeployInvalidELFLeavesOriginalBinaryUntouched(t *testing.T) {
 		return nil, nil
 	})
 
-	_, err := DeployWithControl(app, "job-invalid-elf", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte("not-an-elf")), nil)
+	_, err := DeployArtifact(app, "job-invalid-elf", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte("not-an-elf")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on invalid ELF")
 	}
@@ -588,7 +574,7 @@ func TestDeployShortArtifactLeavesOriginalBinaryUntouched(t *testing.T) {
 		return nil
 	})
 
-	_, err := DeployWithControl(app, "job-short-artifact", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte{0x7f, 'E', 'L'}), nil)
+	_, err := DeployArtifact(app, "job-short-artifact", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte{0x7f, 'E', 'L'}), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on short artifact")
 	}
@@ -619,7 +605,7 @@ func TestDeployReplaceFailureAfterBackupRestoresOriginalBinary(t *testing.T) {
 		return os.Rename(oldpath, newpath)
 	})
 
-	_, err := DeployWithControl(app, "job-replace-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-replace-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on replacement")
 	}
@@ -651,7 +637,7 @@ func TestDeployHealthFailureWithBackupRestoresPreviousBinary(t *testing.T) {
 		}
 	})
 
-	_, err := DeployWithControl(app, "job-health-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-health-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail health checks")
 	}
@@ -680,7 +666,7 @@ func TestDeployHealthFailureNoBackupReturnsExplicitFailureWithoutRollbackClaim(t
 		}
 	})
 
-	_, err := DeployWithControl(app, "job-health-no-backup", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(deployed), nil)
+	_, err := DeployArtifact(app, "job-health-no-backup", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(deployed), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail health checks without backup")
 	}
@@ -718,10 +704,15 @@ func TestDeploySuccessStageLifecycle(t *testing.T) {
 		recordStage("validating")
 		return os.Chmod(path, mode)
 	})
+	// FR-043: the backup is a hard link now (the binary path never disappears).
+	stubLink(t, func(oldpath, newpath string) error {
+		if oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak" {
+			recordStage("backup")
+		}
+		return os.Link(oldpath, newpath)
+	})
 	stubRename(t, func(oldpath, newpath string) error {
 		switch {
-		case oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak":
-			recordStage("backup")
 		case oldpath == app.BinaryPath+".tmp" && newpath == app.BinaryPath:
 			recordStage("install")
 		}
@@ -740,7 +731,7 @@ func TestDeploySuccessStageLifecycle(t *testing.T) {
 		}
 	})
 
-	if _, err := DeployWithControl(app, "job-success", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-success", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy: %v", err)
 	}
 
@@ -752,7 +743,8 @@ func TestDeploySuccessStageLifecycle(t *testing.T) {
 		t.Fatalf("terminal phase = %q, want %q", snap.Phase, progress.ProgressStageSucceeded)
 	}
 
-	want := []string{progress.ProgressStageValidating, progress.ProgressStageBackingUp, progress.ProgressStageInstalling, progress.ProgressStageRestarting, progress.ProgressStageHealthcheck}
+	// FR-042 (Q-13): a healthy deploy takes 3 consecutive "active" samples (was 1).
+	want := []string{progress.ProgressStageValidating, progress.ProgressStageBackingUp, progress.ProgressStageInstalling, progress.ProgressStageRestarting, progress.ProgressStageHealthcheck, progress.ProgressStageHealthcheck, progress.ProgressStageHealthcheck}
 	if !equalStrings(stages, want) {
 		t.Fatalf("stages = %v, want %v", stages, want)
 	}
@@ -779,7 +771,7 @@ func TestDeployCreatesMissingBinaryDirectory(t *testing.T) {
 		}
 	})
 
-	if _, err := DeployWithControl(app, "job-first-deploy", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-first-deploy", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy into missing directory: %v", err)
 	}
 
@@ -811,10 +803,14 @@ func TestDeployFailureStageLifecycle(t *testing.T) {
 		recordStage("validating")
 		return os.Chmod(path, mode)
 	})
+	stubLink(t, func(oldpath, newpath string) error {
+		if oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak" {
+			recordStage("backup")
+		}
+		return os.Link(oldpath, newpath)
+	})
 	stubRename(t, func(oldpath, newpath string) error {
 		switch {
-		case oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak":
-			recordStage("backup")
 		case oldpath == app.BinaryPath+".tmp" && newpath == app.BinaryPath:
 			recordStage("install")
 		case oldpath == app.BinaryPath+".bak" && newpath == app.BinaryPath:
@@ -839,7 +835,7 @@ func TestDeployFailureStageLifecycle(t *testing.T) {
 		}
 	})
 
-	_, err := DeployWithControl(app, "job-failed", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-failed", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail health checks")
 	}
@@ -852,19 +848,18 @@ func TestDeployFailureStageLifecycle(t *testing.T) {
 		t.Fatalf("terminal phase = %q, want %q", snap.Phase, progress.ProgressStageFailed)
 	}
 
+	// FR-042 (Q-13): an unhealthy service is sampled every 2 s for 30 s = 15 samples
+	// (was 5) before the rollback.
 	want := []string{
 		progress.ProgressStageValidating,
 		progress.ProgressStageBackingUp,
 		progress.ProgressStageInstalling,
 		progress.ProgressStageRestarting,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageHealthcheck,
-		progress.ProgressStageRollback,
-		progress.ProgressStageRollback,
 	}
+	for i := 0; i < int(healthMaxWait/healthInterval); i++ {
+		want = append(want, progress.ProgressStageHealthcheck)
+	}
+	want = append(want, progress.ProgressStageRollback, progress.ProgressStageRollback)
 	if !equalStrings(stages, want) {
 		t.Fatalf("stages = %v, want %v", stages, want)
 	}
@@ -885,7 +880,7 @@ func TestDeployChmodFailureSetsFailedAfterValidating(t *testing.T) {
 		return fmt.Errorf("forced chmod failure")
 	})
 
-	_, err := DeployWithControl(app, "job-chmod-fail", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-chmod-fail", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail chmod")
 	}
@@ -919,8 +914,10 @@ func equalStrings(got, want []string) bool {
 	return true
 }
 
+// elfBinary is a minimal ELF executable for THIS host (FR-045 verifies the header)
+// followed by payload; the payload is what tests compare.
 func elfBinary(payload string) []byte {
-	return append([]byte{0x7f, 'E', 'L', 'F'}, []byte(payload)...)
+	return buildELF(hostELFMachine(), elf.ET_EXEC, payload)
 }
 
 func stubSystemctl(t *testing.T, fn func(string, ...string) ([]byte, error)) {
@@ -928,6 +925,13 @@ func stubSystemctl(t *testing.T, fn func(string, ...string) ([]byte, error)) {
 	original := runSystemctl
 	runSystemctl = fn
 	t.Cleanup(func() { runSystemctl = original })
+}
+
+func stubLink(t *testing.T, fn func(string, string) error) {
+	t.Helper()
+	original := linkFile
+	linkFile = fn
+	t.Cleanup(func() { linkFile = original })
 }
 
 func stubRename(t *testing.T, fn func(string, string) error) {

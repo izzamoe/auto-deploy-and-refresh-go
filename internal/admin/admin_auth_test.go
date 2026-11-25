@@ -1,13 +1,9 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"net/http"
-	"strings"
 	"testing"
-
-	"github.com/izzamoe/auto-deploy/internal/config"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -15,28 +11,33 @@ import (
 func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
 	t.Parallel()
 	middleware := testHertzSessionAuth(t)
-	c := newHertzTestContext(http.MethodGet, "/admin/api/apps", nil, nil)
+	c := newHertzTestContext(http.MethodGet, "/admin/api/v1/apps", nil, nil)
 
 	middleware(context.Background(), c)
 
 	if c.Response.StatusCode() != http.StatusUnauthorized {
 		t.Errorf("Expected 401 Unauthorized, got %d", c.Response.StatusCode())
 	}
-	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != `Basic realm="auto-deploy admin"` {
-		t.Errorf("Expected WWW-Authenticate header %q, got %q", `Basic realm="auto-deploy admin"`, got)
+	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != "" {
+		t.Errorf("K1: a request without Authorization must not get a WWW-Authenticate challenge, got %q", got)
 	}
 }
 
-func TestHertzAdminAuthRejectsWrongPassword(t *testing.T) {
+// A script client that talks Basic still gets the standard challenge, but the admin
+// password is never a valid Basic credential (only API tokens are, FR-014).
+func TestHertzAdminAuthRejectsAdminPasswordViaBasic(t *testing.T) {
 	t.Parallel()
 	middleware := testHertzSessionAuth(t)
-	c := newHertzTestContext(http.MethodGet, "/admin/api/apps", nil, nil)
-	c.Request.SetBasicAuth("admin", "wrong")
+	c := newHertzTestContext(http.MethodGet, "/admin/api/v1/apps", nil, nil)
+	c.Request.SetBasicAuth("admin", "secret")
 
 	middleware(context.Background(), c)
 
 	if c.Response.StatusCode() != http.StatusUnauthorized {
-		t.Errorf("Expected 401 Unauthorized for wrong password, got %d", c.Response.StatusCode())
+		t.Errorf("Expected 401 Unauthorized for the admin password via Basic, got %d", c.Response.StatusCode())
+	}
+	if got := string(c.Response.Header.Peek("WWW-Authenticate")); got != `Basic realm="auto-deploy api"` {
+		t.Errorf("Expected the Basic challenge for a Basic client, got %q", got)
 	}
 }
 
@@ -57,47 +58,6 @@ func TestHertzAdminAuthAcceptsCorrectCredentials(t *testing.T) {
 	}
 	if body := string(c.Response.Body()); body != "success" {
 		t.Errorf("Expected body 'success', got %q", body)
-	}
-}
-
-func TestAdminLayoutRendersAppsTableSelector(t *testing.T) {
-	t.Parallel()
-	cfg := &config.ServiceConfig{}
-	adminHandler, err := NewAdminHandler(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create admin handler: %v", err)
-	}
-
-	var buf bytes.Buffer
-	data := map[string]any{}
-	err = adminHandler.templates["apps_list.html"].ExecuteTemplate(&buf, "base.html", data)
-	if err != nil {
-		t.Fatalf("Failed to execute template: %v", err)
-	}
-
-	output := buf.String()
-	if !strings.Contains(output, `id="apps-table"`) {
-		t.Errorf("Expected template output to contain 'id=\"apps-table\"', got %s", output)
-	}
-}
-
-func TestAdminLayoutRendersNavigationLinks(t *testing.T) {
-	t.Parallel()
-	cfg := &config.ServiceConfig{}
-	adminHandler, err := NewAdminHandler(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create admin handler: %v", err)
-	}
-
-	var buf bytes.Buffer
-	err = adminHandler.templates["apps_list.html"].ExecuteTemplate(&buf, "base.html", nil)
-	if err != nil {
-		t.Fatalf("Failed to execute base template: %v", err)
-	}
-
-	output := buf.String()
-	if !strings.Contains(output, `href="/admin/apps"`) {
-		t.Errorf("Expected template output to contain navigation link 'href=\"/admin/apps\"', got %s", output)
 	}
 }
 

@@ -89,6 +89,15 @@ func cleanSystemdValue(s string) string {
 // rather than expanded.
 var systemdArgEscaper = strings.NewReplacer("%", "%%", "$", "$$")
 
+// systemdSpecifierEscaper doubles "%" only. It is for every unit value in which
+// systemd expands specifiers but NOT $VARIABLES: Description=, WorkingDirectory= and
+// Environment= (man systemd.exec on Environment=: "Variable expansion is not
+// performed inside the strings and the "$" character has no special meaning.
+// Specifier expansion is performed"). Doubling "$" there would put a literal "$$"
+// into the value, so it is deliberately left alone (FR-041 asks for "$" -> "$$" in
+// Environment=; that contradicts the systemd documentation, see phase-3.md T048).
+var systemdSpecifierEscaper = strings.NewReplacer("%", "%%")
+
 // renderExecArgs formats args as the tail of an ExecStart= line: each argument
 // is sanitised, escaped, and double-quoted so that whitespace never splits one
 // argument into two. strconv.Quote's C-style escaping of "\" and '"' is exactly
@@ -110,12 +119,25 @@ func renderExecArgs(args []string) string {
 // before interpolation to prevent newline injection of arbitrary systemd
 // directives.
 func RenderServiceUnit(app store.App) string {
-	workingDir := filepath.Dir(app.BinaryPath)
+	// B7: WorkingDirectory is derived from the binary path, so it gets the same
+	// control-character stripping as ExecStart; a newline in the path can never start
+	// a new directive line.
+	workingDir := systemdSpecifierEscaper.Replace(cleanSystemdValue(filepath.Dir(cleanSystemdValue(app.BinaryPath))))
 	var b strings.Builder
 	b.WriteString(generatedUnitMarker)
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "[Unit]\nDescription=%s (managed by auto-deploy)\nAfter=network.target\n\n", cleanSystemdValue(app.Name))
-	fmt.Fprintf(&b, "[Service]\nExecStart=%s%s\nWorkingDirectory=%s\nRestart=on-failure\nRestartSec=5\n", cleanSystemdValue(app.BinaryPath), renderExecArgs(app.Args), workingDir)
+	fmt.Fprintf(&b, "[Unit]\nDescription=%s (managed by auto-deploy)\nAfter=network.target\n\n", systemdSpecifierEscaper.Replace(cleanSystemdValue(app.Name)))
+	// ExecStart= expands both %specifiers and $VARIABLES, so the path gets the same
+	// "%" -> "%%" and "$" -> "$$" as the arguments (B8, FR-041).
+	fmt.Fprintf(&b, "[Service]\nExecStart=%s%s\nWorkingDirectory=%s\nRestart=on-failure\nRestartSec=5\n", systemdArgEscaper.Replace(cleanSystemdValue(app.BinaryPath)), renderExecArgs(app.Args), workingDir)
+	// FR-047, Q-15: root and no hardening unless the app asks for them. The user name is
+	// validated; a value that fails validation is never written (Preview/Apply refuse it).
+	if app.RunAsUser != "" && ValidateRunAsUser(app.RunAsUser) == nil {
+		fmt.Fprintf(&b, "User=%s\n", app.RunAsUser)
+	}
+	if app.Hardening {
+		b.WriteString("NoNewPrivileges=yes\nProtectSystem=full\nPrivateTmp=yes\n")
+	}
 	for _, env := range app.EnvVars {
 		name := cleanSystemdValue(env.Name)
 		if name == "" {
@@ -123,7 +145,7 @@ func RenderServiceUnit(app store.App) string {
 		}
 		// systemd Environment= quotes the value; cleanSystemdValue strips any
 		// newline/control chars so the value cannot inject further directives.
-		fmt.Fprintf(&b, "Environment=%s=%q\n", name, cleanSystemdValue(env.Value))
+		fmt.Fprintf(&b, "Environment=%s=%q\n", systemdSpecifierEscaper.Replace(name), systemdSpecifierEscaper.Replace(cleanSystemdValue(env.Value)))
 	}
 	b.WriteString("\n")
 	b.WriteString("[Install]\nWantedBy=multi-user.target\n")
@@ -137,6 +159,9 @@ func RenderServiceUnit(app store.App) string {
 func PreviewServiceUnit(app store.App) (string, error) {
 	if _, _, err := serviceUnitBaseAndFile(app.ServiceName); err != nil {
 		return "", err
+	}
+	if err := ValidateRunAsUser(app.RunAsUser); err != nil {
+		return "", fmt.Errorf("service_unit: runAsUser %w", err)
 	}
 	return RenderServiceUnit(app), nil
 }
@@ -163,6 +188,9 @@ func ApplyServiceUnit(app store.App) error {
 	base, fileName, err := serviceUnitBaseAndFile(app.ServiceName)
 	if err != nil {
 		return err
+	}
+	if err := ValidateRunAsUser(app.RunAsUser); err != nil {
+		return fmt.Errorf("service_unit: runAsUser %w", err)
 	}
 	// Defense in depth: validate the base name a second time before any I/O.
 	if err := ValidateServiceUnitName(base); err != nil {
@@ -192,7 +220,7 @@ func ApplyServiceUnit(app store.App) error {
 	if out, err := runSystemctl("daemon-reload"); err != nil {
 		return fmt.Errorf("service_unit: daemon-reload: %w: %s", err, string(out))
 	}
-	if out, err := runSystemctl("enable", base); err != nil {
+	if out, err := systemctlUnit("enable", base); err != nil {
 		return fmt.Errorf("service_unit: enable: %w: %s", err, string(out))
 	}
 	return nil

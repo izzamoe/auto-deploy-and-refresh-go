@@ -2,11 +2,15 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/izzamoe/auto-deploy/internal/auth"
+	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 	"github.com/izzamoe/auto-deploy/internal/telegram"
@@ -23,85 +27,31 @@ func sleepOrDone(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// DeployRunner is the legacy runner kept for backward compatibility with main.go.
-type DeployRunner func(tag string) error
+// pollFallback is how often an idle coordinator re-checks the queue when no
+// notification arrived (FR-048): a safety net, not the primary mechanism.
+var pollFallback = 2 * time.Second
 
-// Worker is the legacy single-app worker kept for backward compatibility with main.go.
-type Worker struct {
-	q      *store.DeployQueue
-	runner DeployRunner
-	appID  string
-	wg     sync.WaitGroup
-}
-
-func NewWorker(q *store.DeployQueue, runner DeployRunner) *Worker {
-	return &Worker{q: q, runner: runner, appID: "legacy"}
-}
-
-func (w *Worker) Start(ctx context.Context) {
-	w.wg.Go(func() {
-		w.loop(ctx)
-	})
-}
-
-func (w *Worker) Wait() {
-	w.wg.Wait()
-}
-
-func (w *Worker) loop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		id, tag, err := w.q.DequeueNext(w.appID)
-		if err != nil {
-			slog.Error("dequeue failed", "err", err)
-			if !sleepOrDone(ctx, 100*time.Millisecond) {
-				return
-			}
-			continue
-		}
-
-		if id == "" {
-			if !sleepOrDone(ctx, 100*time.Millisecond) {
-				return
-			}
-			continue
-		}
-
-		err = w.runner(tag)
-		success := err == nil
-
-		var errMsg string
-		if err != nil {
-			errMsg = err.Error()
-		}
-
-		if markErr := w.q.MarkDone(id, success, errMsg, nil); markErr != nil {
-			slog.Error("mark done failed", "id", id, "err", markErr)
-		}
-
-		if success {
-			slog.Info("deploy succeeded", "tag", tag)
-		} else {
-			slog.Error("deploy failed", "tag", tag, "err", err)
-		}
-	}
-}
+// Job-history retention (Q-16, FR-050): the newest 200 finished jobs per app are kept;
+// the cleanup runs at start and every 6 hours.
+var (
+	retainJobsPerApp  = 200
+	retentionInterval = 6 * time.Hour
+)
 
 type CoordinatorRunner func(app *store.App, jobID, tag string) (store.DownloadSummary, error)
 
 type Coordinator struct {
 	apps        *store.AppStore
+	listApps    func() ([]store.App, error)                                                        // seam: tests count the idle queries (B23)
+	markDone    func(id string, success bool, errMsg string, summary *store.DownloadSummary) error // seam: tests inject failures (B26)
 	q           *store.DeployQueue
 	runner      CoordinatorRunner
 	tracker     *progress.ProgressTracker
 	notifier    telegram.Notifier
 	logCapturer func(serviceName string, since time.Time) string
+	events      cancel.EventSink
 	wg          sync.WaitGroup
+	wake        chan struct{} // buffered(1): "look at the queue now" (FR-048)
 
 	mu         sync.Mutex
 	activeApps map[string]bool
@@ -110,12 +60,32 @@ type Coordinator struct {
 func NewCoordinator(apps *store.AppStore, q *store.DeployQueue, runner CoordinatorRunner, tracker *progress.ProgressTracker) *Coordinator {
 	return &Coordinator{
 		apps:       apps,
+		listApps:   apps.List,
+		markDone:   q.MarkDone,
 		q:          q,
 		runner:     runner,
 		tracker:    tracker,
 		notifier:   telegram.NopNotifier{},
 		activeApps: make(map[string]bool),
+		wake:       make(chan struct{}, 1),
 	}
+}
+
+// Wake asks the scheduler to look at the queue now; it never blocks and coalesces.
+func (c *Coordinator) Wake() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// SetEventSink attaches the sink that receives a job_status event after every job
+// the coordinator itself moves to a terminal status (events-ws.md 3.4). Safe to
+// call before Start; nil disables the announcements.
+func (c *Coordinator) SetEventSink(s cancel.EventSink) {
+	c.mu.Lock()
+	c.events = s
+	c.mu.Unlock()
 }
 
 // SetNotifier attaches a Telegram (or other) notifier used to announce
@@ -143,8 +113,32 @@ func (c *Coordinator) SetLogCapturer(fn func(serviceName string, since time.Time
 }
 
 func (c *Coordinator) Start(ctx context.Context) {
+	// FR-048: a new job wakes the scheduler; the fallback ticker only covers lost wakes
+	// and out-of-process changes (an app enabled, a restored database).
+	c.q.SetEnqueueHook(c.Wake)
 	c.wg.Go(func() {
 		c.schedule(ctx)
+	})
+
+	c.wg.Go(func() {
+		run := func() {
+			if n, err := c.q.PruneHistory(retainJobsPerApp); err != nil {
+				slog.Warn("coordinator: history retention failed", "err", err)
+			} else if n > 0 {
+				slog.Info("coordinator: pruned old deploy jobs", "deleted", n, "keep_per_app", retainJobsPerApp)
+			}
+		}
+		run()
+		ticker := time.NewTicker(retentionInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
 	})
 
 	if c.tracker != nil {
@@ -175,10 +169,10 @@ func (c *Coordinator) schedule(ctx context.Context) {
 		default:
 		}
 
-		apps, err := c.apps.List()
+		apps, err := c.listApps()
 		if err != nil {
 			slog.Error("coordinator: list apps failed", "err", err)
-			if !sleepOrDone(ctx, 100*time.Millisecond) {
+			if !sleepOrDone(ctx, time.Second) {
 				return
 			}
 			continue
@@ -217,10 +211,25 @@ func (c *Coordinator) schedule(ctx context.Context) {
 		}
 
 		if !dispatched {
-			if !sleepOrDone(ctx, 100*time.Millisecond) {
+			if !c.waitForWork(ctx) {
 				return
 			}
 		}
+	}
+}
+
+// waitForWork blocks until a wake notification, the fallback interval or shutdown;
+// it reports false on shutdown.
+func (c *Coordinator) waitForWork(ctx context.Context) bool {
+	timer := time.NewTimer(pollFallback)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-c.wake:
+		return true
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -230,13 +239,26 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		c.mu.Lock()
 		delete(c.activeApps, app.ID)
 		c.mu.Unlock()
+		c.Wake() // jobs queued behind this one can start now
 	}()
 
 	// Timestamp before the deploy runs so the job's stored log can be scoped to
 	// exactly this deploy's window (download, restart, health check) rather than
 	// an arbitrary tail of the service's journal.
 	deployStart := time.Now()
-	summary, err := c.runner(&app, jobID, tag)
+	summary, err := c.safeRun(&app, jobID, tag)
+	if errors.Is(err, store.ErrSelfDeployInFlight) {
+		// FR-144: auto-deploy is replacing itself; the restarted process settles this job.
+		slog.Info("coordinator: self-deploy in flight; the next process settles the job", "app", app.ID, "job", jobID)
+		return
+	}
+	// The status just BEFORE MarkDone tells whether MarkDone ends the job: a job the
+	// cancel service already ended (canceled/failed at a checkpoint) was announced
+	// by it, MarkDone is then a no-op and nothing is announced twice.
+	var statusBefore string
+	if job, jobErr := c.q.GetJob(jobID); jobErr == nil && job != nil {
+		statusBefore = job.Status
+	}
 	success := err == nil
 
 	var errMsg string
@@ -249,8 +271,23 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		summaryPtr = &summary
 	}
 
-	if markErr := c.q.MarkDone(jobID, success, errMsg, summaryPtr); markErr != nil {
+	if markErr := c.markDoneWithRetry(jobID, success, errMsg, summaryPtr); markErr != nil {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
+	}
+	if summary.SHA256 != "" {
+		if vErr := c.q.MarkArtifactVerification(jobID, summary.SHA256, summary.Verified); vErr != nil {
+			slog.Warn("coordinator: recording artifact verification failed", "id", jobID, "err", vErr)
+		}
+	}
+	rolledBack := errors.Is(err, store.ErrRolledBack)
+	if rolledBack {
+		if rbErr := c.q.MarkRolledBack(jobID); rbErr != nil {
+			slog.Error("coordinator: mark rolled back failed", "id", jobID, "err", rbErr)
+		}
+		auth.AuditBackground(auth.EventDeployRollback, "appId", app.ID, "jobId", jobID, "tag", tag)
+	}
+	if statusBefore == "in_progress" || statusBefore == "cancel_requested" {
+		c.publishJobStatus(app, jobID, tag, statusBefore, success, rolledBack)
 	}
 
 	c.captureJobLog(app.ServiceName, jobID, deployStart)
@@ -262,6 +299,68 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		slog.Error("coordinator: deploy failed", "app", app.ID, "tag", tag, "err", err)
 		c.notify(fmt.Sprintf("❌ %s: deploy of %s failed: %s", app.Name, tag, errMsg))
 	}
+}
+
+// errRunnerPanic is the (generic) error stored for a job whose runner panicked. The
+// panic value and stack go to the log only: they may contain secrets.
+var errRunnerPanic = errors.New("internal error: the deploy crashed unexpectedly")
+
+// safeRun calls the runner and turns a panic into a failed deploy (B26, FR-051), so one
+// bad deploy cannot take the whole process, and with it every other app, down.
+func (c *Coordinator) safeRun(app *store.App, jobID, tag string) (summary store.DownloadSummary, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("coordinator: the deploy runner panicked", "app", app.ID, "job", jobID, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			summary, err = store.DownloadSummary{}, errRunnerPanic
+		}
+	}()
+	return c.runner(app, jobID, tag)
+}
+
+// markDoneBackoff are the waits between MarkDone attempts (FR-051: a transient database
+// error must not leave a finished job in_progress).
+var markDoneBackoff = []time.Duration{200 * time.Millisecond, time.Second, 3 * time.Second}
+
+func (c *Coordinator) markDoneWithRetry(jobID string, success bool, errMsg string, summary *store.DownloadSummary) error {
+	err := c.markDone(jobID, success, errMsg, summary)
+	for _, wait := range markDoneBackoff {
+		if err == nil {
+			return nil
+		}
+		slog.Warn("coordinator: mark done failed; retrying", "id", jobID, "err", err, "wait", wait)
+		time.Sleep(wait)
+		err = c.markDone(jobID, success, errMsg, summary)
+	}
+	return err
+}
+
+// publishJobStatus announces the terminal status of a job this coordinator just
+// finished (events-ws.md 3.4). jobId is top-level AND in the payload (one release).
+// errorCode is a stable machine code, never the raw error text.
+func (c *Coordinator) publishJobStatus(app store.App, jobID, tag, previousStatus string, success, rolledBack bool) {
+	c.mu.Lock()
+	sink := c.events
+	c.mu.Unlock()
+	if sink == nil {
+		return
+	}
+	status := cancel.JobStatusSucceeded
+	payload := map[string]any{
+		"jobId":          jobID,
+		"previousStatus": previousStatus,
+		"tag":            tag,
+		"rolledBack":     rolledBack,
+		"finishedAt":     time.Now().UTC().Format(time.RFC3339),
+	}
+	if !success {
+		status = cancel.JobStatusFailed
+		payload["errorCode"] = "deploy_failed"
+		if rolledBack {
+			payload["errorCode"] = "rolled_back"
+		}
+	}
+	payload["status"] = status
+	sink.BroadcastCancelEvent(cancel.CancelEvent{Type: cancel.CancelEventTypeJobStatus, AppID: app.ID, JobID: jobID, Payload: payload})
 }
 
 // captureJobLog snapshots the service's logs for this deploy's window — from

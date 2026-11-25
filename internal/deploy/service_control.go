@@ -14,7 +14,14 @@ var allowedServiceActions = map[string]bool{
 	"restart": true,
 }
 
-// ControlService runs "systemctl <action> <serviceName>" for a whitelisted
+// systemctlUnit runs "systemctl <verb> [flags...] -- <unit>": "--" ends option parsing,
+// so a unit name can never be read as a systemctl option (B22, FR-047).
+func systemctlUnit(verb, unit string, flags ...string) ([]byte, error) {
+	args := append(append([]string{}, flags...), "--", unit)
+	return runSystemctl(verb, args...)
+}
+
+// ControlService runs "systemctl <action> -- <serviceName>" for a whitelisted
 // action (start, stop, restart) and returns the combined command output. The
 // serviceName is passed as a distinct exec argument (never a shell string), so
 // no quoting/injection is possible; it is only checked for emptiness.
@@ -25,7 +32,7 @@ func ControlService(serviceName, action string) (string, error) {
 	if !allowedServiceActions[action] {
 		return "", fmt.Errorf("service control: unsupported action %q", action)
 	}
-	out, err := runSystemctl(action, serviceName)
+	out, err := systemctlUnit(action, serviceName)
 	if err != nil {
 		return string(out), fmt.Errorf("service control: %s %s: %w: %s", action, serviceName, err, string(out))
 	}
@@ -40,7 +47,7 @@ func ServiceStatus(serviceName string) string {
 	if strings.TrimSpace(serviceName) == "" {
 		return "unknown"
 	}
-	out, _ := runSystemctl("is-active", serviceName)
+	out, _ := systemctlUnit("is-active", serviceName)
 	state := strings.TrimSpace(string(out))
 	if state == "" {
 		return "unknown"

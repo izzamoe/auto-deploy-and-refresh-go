@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -18,6 +20,18 @@ import (
 
 var ErrDuplicateApp = errors.New("duplicate app: uniqueness constraint violated")
 var ErrActiveDeployExists = errors.New("active deploy in progress")
+
+// ErrInvalidAppInput is returned by Create/Update when the configured input validator
+// (SetInputValidator) rejects binaryPath, serviceName, githubRepo or artifactName.
+var ErrInvalidAppInput = errors.New("invalid app input")
+
+// ErrInvalidAppConfig is returned by CreateWithConfig when an environment variable or a
+// command-line argument is invalid; nothing was written.
+var ErrInvalidAppConfig = errors.New("invalid app configuration")
+
+// AppInputValidator judges the deployment-critical fields of an app (FR-040). It is
+// injected by main (deploy.ValidateAppInput) because package deploy imports store.
+type AppInputValidator func(binaryPath, serviceName, githubRepo, artifactName string) error
 
 const sqliteConstraintUnique = 2067 // SQLITE_CONSTRAINT_UNIQUE
 
@@ -44,6 +58,12 @@ type App struct {
 	Enabled           bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// Per-app deploy settings (FR-042, FR-045, FR-047); the zero values are the
+	// pre-hardening behavior (root, no hardening, no HTTP health URL, digest optional).
+	RunAsUser     string
+	Hardening     bool
+	HealthURL     string
+	RequireDigest bool
 	// EnvVars holds environment variables injected into the generated systemd
 	// unit for this app. It is NOT persisted by AppStore — it is stored
 	// separately (AppEnvStore) and populated on demand by callers that render
@@ -80,6 +100,10 @@ type AppStore struct {
 	// deploy_jobs rows so the DeployQueue can drop its active-jobs cache.
 	// Wired in main via SetJobsDeletedHook; nil in tests that don't need it.
 	onJobsDeleted func()
+	// inputValidator, when set, is the store-level backstop of FR-040: Create and
+	// Update refuse invalid binaryPath/serviceName/githubRepo/artifactName even when a
+	// caller skipped the API validation. nil (tests) = no check.
+	inputValidator AppInputValidator
 	// testHookAfterQuery, when set, is invoked inside loadSecretHashCache after
 	// the DB query but before the snapshot is published. Test-only seam to
 	// deterministically drive the rebuild-vs-invalidate interleaving; nil (and
@@ -92,6 +116,19 @@ type AppStore struct {
 // IsDuplicate cache must be invalidated through this hook).
 func (s *AppStore) SetJobsDeletedHook(hook func()) {
 	s.onJobsDeleted = hook
+}
+
+// SetInputValidator installs the FR-040 backstop used by Create and Update.
+func (s *AppStore) SetInputValidator(v AppInputValidator) { s.inputValidator = v }
+
+func (s *AppStore) checkInput(binaryPath, serviceName, githubRepo, artifactName string) error {
+	if s.inputValidator == nil {
+		return nil
+	}
+	if err := s.inputValidator(binaryPath, serviceName, githubRepo, artifactName); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidAppInput, err)
+	}
+	return nil
 }
 
 func (s *AppStore) DB() *sql.DB {
@@ -110,7 +147,7 @@ func (s *AppStore) loadSecretHashCache() (map[string]App, error) {
 		return *m, nil
 	}
 	rows, err := s.db.Query(
-		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 		 FROM apps WHERE enabled = 1`,
 	)
 	if err != nil {
@@ -161,7 +198,42 @@ func NewAppStore(db *sql.DB) (*AppStore, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("app_store: create table: %w", err)
 	}
+	// The per-app settings columns are added by migration v1 too (same definitions);
+	// adding them here keeps the store usable before Migrate has run. Idempotent.
+	if err := ensureAppSettingsColumns(db); err != nil {
+		return nil, fmt.Errorf("app_store: %w", err)
+	}
 	return &AppStore{db: db}, nil
+}
+
+func ensureAppSettingsColumns(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, col := range v1Columns {
+		switch col.column {
+		case "run_as_user", "hardening", "health_url", "require_digest":
+		default:
+			continue
+		}
+		if err := addColumnIfMissing(tx, col.table, col.column, col.definition); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GenerateWebhookSecret returns a fresh webhook secret: 32 random bytes, base64url
+// without padding (43 characters, ~256 bits). Used when the admin does not supply one
+// and when a secret is rotated (FR-055).
+func GenerateWebhookSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("app_store: generate webhook secret: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func HashSecret(secret string) string {
@@ -178,6 +250,9 @@ func generateID() (string, error) {
 }
 
 func (s *AppStore) Create(name, secret, binaryPath, serviceName, githubRepo, artifactName string) (*App, error) {
+	if err := s.checkInput(binaryPath, serviceName, githubRepo, artifactName); err != nil {
+		return nil, err
+	}
 	id, err := generateID()
 	if err != nil {
 		return nil, err
@@ -201,9 +276,136 @@ func (s *AppStore) Create(name, secret, binaryPath, serviceName, githubRepo, art
 	return s.Get(id)
 }
 
+// CreateAppInput is everything one app needs at creation (FR-028).
+type CreateAppInput struct {
+	Name, Secret                                      string
+	BinaryPath, ServiceName, GithubRepo, ArtifactName string
+	EnvVars                                           []EnvVar
+	Args                                              []string
+	// Settings is written with the row; nil keeps the column defaults.
+	Settings *AppSettings
+}
+
+// AppSettings are the per-app deploy settings stored beside the core app fields.
+type AppSettings struct {
+	RunAsUser     string
+	Hardening     bool
+	HealthURL     string
+	RequireDigest bool
+}
+
+// UpdateSettings replaces the per-app deploy settings (FR-042, FR-045, FR-047).
+func (s *AppStore) UpdateSettings(id string, set AppSettings) error {
+	result, err := s.db.Exec(
+		`UPDATE apps SET run_as_user = ?, hardening = ?, health_url = ?, require_digest = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		set.RunAsUser, boolToInt(set.Hardening), set.HealthURL, boolToInt(set.RequireDigest), id,
+	)
+	if err != nil {
+		return fmt.Errorf("app_store: update settings: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("app_store: update settings rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("app_store: app %q not found", id)
+	}
+	s.invalidateSecretHashCache()
+	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// CreateWithConfig creates the app together with its environment variables and
+// arguments in ONE transaction (B55, FR-028): either every row exists afterwards or
+// none does. Env names and arguments are validated before anything is written
+// (ErrInvalidAppConfig). A duplicate binary path, service name or secret is
+// ErrDuplicateApp.
+func (s *AppStore) CreateWithConfig(in CreateAppInput) (*App, error) {
+	if err := s.checkInput(in.BinaryPath, in.ServiceName, in.GithubRepo, in.ArtifactName); err != nil {
+		return nil, err
+	}
+	for _, v := range in.EnvVars {
+		if err := ValidateEnvVarName(v.Name); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidAppConfig, err)
+		}
+	}
+	if len(in.Args) > maxServiceArgs {
+		return nil, fmt.Errorf("%w: too many arguments: %d, max %d", ErrInvalidAppConfig, len(in.Args), maxServiceArgs)
+	}
+	for _, a := range in.Args {
+		if err := ValidateServiceArg(a); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidAppConfig, err)
+		}
+	}
+	envJSON, err := json.Marshal(in.EnvVars)
+	if err != nil {
+		return nil, fmt.Errorf("app_store: encode env: %w", err)
+	}
+	argsJSON, err := json.Marshal(in.Args)
+	if err != nil {
+		return nil, fmt.Errorf("app_store: encode args: %w", err)
+	}
+	id, err := generateID()
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("app_store: begin create: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	if _, err := tx.Exec(
+		`INSERT INTO apps (id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, in.Name, HashSecret(in.Secret), in.BinaryPath, in.ServiceName, in.GithubRepo, in.ArtifactName,
+	); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrDuplicateApp
+		}
+		return nil, fmt.Errorf("app_store: insert: %w", err)
+	}
+	if in.Settings != nil {
+		if _, err := tx.Exec(
+			`UPDATE apps SET run_as_user = ?, hardening = ?, health_url = ?, require_digest = ? WHERE id = ?`,
+			in.Settings.RunAsUser, boolToInt(in.Settings.Hardening), in.Settings.HealthURL, boolToInt(in.Settings.RequireDigest), id,
+		); err != nil {
+			return nil, fmt.Errorf("app_store: insert settings: %w", err)
+		}
+	}
+	if len(in.EnvVars) > 0 {
+		if _, err := tx.Exec(appEnvDDL); err != nil {
+			return nil, fmt.Errorf("app_store: create app_env table: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO app_env (app_id, vars, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, id, string(envJSON)); err != nil {
+			return nil, fmt.Errorf("app_store: insert env: %w", err)
+		}
+	}
+	if len(in.Args) > 0 {
+		if _, err := tx.Exec(appArgsDDL); err != nil {
+			return nil, fmt.Errorf("app_store: create app_args table: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO app_args (app_id, args, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, id, string(argsJSON)); err != nil {
+			return nil, fmt.Errorf("app_store: insert args: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("app_store: commit create: %w", err)
+	}
+	s.invalidateSecretHashCache()
+	return s.Get(id)
+}
+
 func (s *AppStore) List() ([]App, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 		 FROM apps ORDER BY created_at ASC`,
 	)
 	if err != nil {
@@ -224,7 +426,7 @@ func (s *AppStore) List() ([]App, error) {
 
 func (s *AppStore) Get(id string) (*App, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+		`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 		 FROM apps WHERE id = ?`,
 		id,
 	)
@@ -260,6 +462,9 @@ func (s *AppStore) Update(id, name, binaryPath, serviceName, githubRepo, artifac
 }
 
 func (s *AppStore) UpdateWithOptionalSecret(id, name, secret, binaryPath, serviceName, githubRepo, artifactName string, enabled bool) error {
+	if err := s.checkInput(binaryPath, serviceName, githubRepo, artifactName); err != nil {
+		return err
+	}
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
@@ -356,7 +561,7 @@ func (s *AppStore) BootstrapIfEmpty(legacy *config.LegacyBootstrapConfig) (*App,
 	}
 	if count > 0 {
 		row := s.db.QueryRow(
-			`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at
+			`SELECT id, name, webhook_secret_hash, binary_path, service_name, github_repo, artifact_name, enabled, created_at, updated_at, run_as_user, hardening, health_url, require_digest
 			 FROM apps ORDER BY created_at ASC LIMIT 1`,
 		)
 		app, err := scanAppRow(row)
@@ -382,6 +587,24 @@ func (s *AppStore) Delete(id string) error {
 	}
 	if activeCount > 0 {
 		return ErrActiveDeployExists
+	}
+
+	// B14/FR-035: everything that belongs to the app goes in the SAME transaction —
+	// its env vars (secrets) and args as much as its jobs — so a failure in any child
+	// delete leaves the app and all its data intact. The tables belong to other stores
+	// that may not have been constructed on this database, hence the existence check
+	// (the names are constants, never request data).
+	for _, table := range []string{"app_env", "app_args"} {
+		var exists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&exists); err != nil {
+			return fmt.Errorf("app_store: check %s table: %w", table, err)
+		}
+		if exists == 0 {
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE app_id = ?`, id); err != nil {
+			return fmt.Errorf("app_store: delete %s: %w", table, err)
+		}
 	}
 
 	if _, err := tx.Exec(`DELETE FROM deploy_jobs WHERE app_id = ?`, id); err != nil {
@@ -411,6 +634,7 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 	rows, err := s.db.Query(`
 		SELECT a.id, a.name, a.webhook_secret_hash, a.binary_path, a.service_name,
 		       a.github_repo, a.artifact_name, a.enabled, a.created_at, a.updated_at,
+		       a.run_as_user, a.hardening, a.health_url, a.require_digest,
 		       j.id, j.tag, j.status, j.download_bytes, j.download_speed_bps, j.created_at
 		FROM apps a
 		LEFT JOIN (
@@ -428,7 +652,7 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 	var apps []AppWithLastDeploy
 	for rows.Next() {
 		var a AppWithLastDeploy
-		var enabled int
+		var enabled, hardening, requireDigest int
 		var jobID, tag, status sql.NullString
 		var downloadBytes sql.NullInt64
 		var downloadSpeed sql.NullFloat64
@@ -437,11 +661,14 @@ func (s *AppStore) ListWithLastDeploy() ([]AppWithLastDeploy, error) {
 			&a.ID, &a.Name, &a.WebhookSecretHash, &a.BinaryPath,
 			&a.ServiceName, &a.GithubRepo, &a.ArtifactName,
 			&enabled, &a.CreatedAt, &a.UpdatedAt,
+			&a.RunAsUser, &hardening, &a.HealthURL, &requireDigest,
 			&jobID, &tag, &status, &downloadBytes, &downloadSpeed, &deployedAt,
 		); err != nil {
 			return nil, fmt.Errorf("app_store: scan with last deploy: %w", err)
 		}
 		a.Enabled = enabled == 1
+		a.Hardening = hardening == 1
+		a.RequireDigest = requireDigest == 1
 		if jobID.Valid {
 			a.LastJobID = jobID.String
 		}
@@ -474,28 +701,34 @@ func isUniqueViolation(err error) bool {
 
 func scanApp(rows *sql.Rows) (App, error) {
 	var app App
-	var enabled int
+	var enabled, hardening, requireDigest int
 	if err := rows.Scan(
 		&app.ID, &app.Name, &app.WebhookSecretHash, &app.BinaryPath,
 		&app.ServiceName, &app.GithubRepo, &app.ArtifactName,
 		&enabled, &app.CreatedAt, &app.UpdatedAt,
+		&app.RunAsUser, &hardening, &app.HealthURL, &requireDigest,
 	); err != nil {
 		return App{}, fmt.Errorf("app_store: scan: %w", err)
 	}
 	app.Enabled = enabled == 1
+	app.Hardening = hardening == 1
+	app.RequireDigest = requireDigest == 1
 	return app, nil
 }
 
 func scanAppRow(row *sql.Row) (App, error) {
 	var app App
-	var enabled int
+	var enabled, hardening, requireDigest int
 	if err := row.Scan(
 		&app.ID, &app.Name, &app.WebhookSecretHash, &app.BinaryPath,
 		&app.ServiceName, &app.GithubRepo, &app.ArtifactName,
 		&enabled, &app.CreatedAt, &app.UpdatedAt,
+		&app.RunAsUser, &hardening, &app.HealthURL, &requireDigest,
 	); err != nil {
 		return App{}, err
 	}
 	app.Enabled = enabled == 1
+	app.Hardening = hardening == 1
+	app.RequireDigest = requireDigest == 1
 	return app, nil
 }

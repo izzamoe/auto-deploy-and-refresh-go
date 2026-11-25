@@ -31,7 +31,7 @@ func TestSelfLogsHertzReturnsServiceJournal(t *testing.T) {
 	defer restore()
 
 	engine := newTestSystemEngine(t, NewSystemLogsHandler("auto-deploy.service"))
-	w := ut.PerformRequest(engine, "GET", "/admin/api/system/logs", nil)
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/system/logs", nil)
 	resp := w.Result()
 
 	if resp.StatusCode() != http.StatusOK {
@@ -78,7 +78,7 @@ func TestSelfLogsHertzLinesParam(t *testing.T) {
 			defer restore()
 
 			engine := newTestSystemEngine(t, NewSystemLogsHandler("svc"))
-			w := ut.PerformRequest(engine, "GET", "/admin/api/system/logs"+tc.query, nil)
+			w := ut.PerformRequest(engine, "GET", "/admin/api/v1/system/logs"+tc.query, nil)
 			if w.Result().StatusCode() != http.StatusOK {
 				t.Fatalf("status = %d", w.Result().StatusCode())
 			}
@@ -89,5 +89,47 @@ func TestSelfLogsHertzLinesParam(t *testing.T) {
 				t.Errorf("args = %q, want substring %q", gotArgs, tc.wantArgs)
 			}
 		})
+	}
+}
+
+// B25 / FR-058: a live log response is bounded in bytes (2 MiB) and says so.
+func TestSelfLogsHertzLogCapTruncated(t *testing.T) {
+	huge := strings.Repeat("0123456789abcdef\n", (3<<20)/17+1)
+	restore := deploy.SetRunJournalctlForTest(func(args ...string) ([]byte, error) { return []byte(huge), nil })
+	defer restore()
+
+	engine := newTestSystemEngine(t, NewSystemLogsHandler("auto-deploy.service"))
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/system/logs?lines=all", nil)
+	resp := w.Result()
+	var parsed struct {
+		Log       string `json:"log"`
+		Truncated bool   `json:"truncated"`
+	}
+	if err := json.Unmarshal(resp.Body(), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Log) > 2<<20+256 {
+		t.Fatalf("B25: the response carries %d bytes of log, want at most 2 MiB (+ marker)", len(parsed.Log))
+	}
+	if !parsed.Truncated {
+		t.Error("a truncated live log must set truncated=true")
+	}
+	if !strings.HasSuffix(parsed.Log, huge[len(huge)-500:]) {
+		t.Error("the newest lines (the tail) must be kept")
+	}
+}
+
+func TestSelfLogsHertzSmallLogIsNotTruncated(t *testing.T) {
+	restore := deploy.SetRunJournalctlForTest(func(args ...string) ([]byte, error) { return []byte("boot\n"), nil })
+	defer restore()
+	engine := newTestSystemEngine(t, NewSystemLogsHandler("auto-deploy.service"))
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/system/logs", nil)
+	var parsed struct {
+		Log       string `json:"log"`
+		Truncated bool   `json:"truncated"`
+	}
+	_ = json.Unmarshal(w.Result().Body(), &parsed)
+	if parsed.Truncated || parsed.Log != "boot\n" {
+		t.Errorf("response = %+v", parsed)
 	}
 }

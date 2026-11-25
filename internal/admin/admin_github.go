@@ -99,6 +99,10 @@ func (h *GitHubConfigHandler) responseFor(storedToken string) githubConfigRespon
 
 type githubConfigRequest struct {
 	Token string `json:"token"`
+	// Clear (OpenAPI) / ClearToken (FR-029) remove the stored token; the environment
+	// token, if any, becomes the effective one again.
+	Clear      bool `json:"clear"`
+	ClearToken bool `json:"clearToken"`
 }
 
 // GetGitHubConfigHertz returns the current GitHub token, masked.
@@ -136,6 +140,9 @@ func (h *GitHubConfigHandler) SaveGitHubConfigHertz(ctx context.Context, c *app.
 	if token == "" || token == maskBotToken(current.Token) || token == maskBotToken(h.envToken) {
 		token = current.Token
 	}
+	if body.Clear || body.ClearToken {
+		token = ""
+	}
 
 	if err := h.store.Save(store.GitHubConfig{Token: token}); err != nil {
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to save GitHub config")
@@ -151,7 +158,7 @@ func (h *GitHubConfigHandler) SaveGitHubConfigHertz(ctx context.Context, c *app.
 // Must be registered before RegisterAdminAPIRoutesHertz, whose
 // /admin/api/*path catch-all would otherwise shadow these specific routes.
 func RegisterGitHubRoutesHertz(h *server.Hertz, handler *GitHubConfigHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/github", handler.GetGitHubConfigHertz)
 	api.POST("/github", handler.SaveGitHubConfigHertz)
 }
