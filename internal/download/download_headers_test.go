@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
-
-	"github.com/cloudwego/hertz/pkg/app/client"
 )
 
 // TestDownloadSendsHeaders verifies caller-supplied headers reach the origin.
@@ -27,7 +25,7 @@ func TestDownloadSendsHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	c := &http.Client{}
 	headers := map[string]string{"Authorization": "Bearer tok", "Accept": "application/octet-stream"}
 	resp, err := DownloadWithRetryContext(context.Background(), c, srv.URL, headers, noSleep)
 	if err != nil {
@@ -72,7 +70,7 @@ func TestDownloadStripsAuthOnCrossHostRedirect(t *testing.T) {
 	}))
 	defer api.Close()
 
-	c, _ := client.NewClient(client.WithResponseBodyStream(true))
+	c := &http.Client{}
 	headers := map[string]string{"Authorization": "Bearer tok", "Accept": "application/octet-stream"}
 	resp, err := DownloadWithRetryContext(context.Background(), c, api.URL+"/asset", headers, noSleep)
 	if err != nil {

@@ -152,14 +152,18 @@ func redirectLeak(t *testing.T, relative bool, id string) {
 	for i := 0; i < 15; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		resp, err := download.DownloadWithRetryContext(ctx, c, srv.URL+"/r", nil, func(time.Duration) {})
-		cancel()
 		if err != nil {
+			cancel()
 			failures++
 			t.Logf("iter %d err=%v", i, err)
 			continue
 		}
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		// net/http contract (T041): the request context must outlive the body read;
+		// cancelling it first aborts the transfer and burns the connection, which is a
+		// harness mistake, not the leak B1/B2 describe. Assertions below are unchanged.
+		cancel()
 	}
 	t.Logf("15 redirected downloads: new TCP conns=%d failures=%d", newConns.Load(), failures)
 	if !testing.Short() {

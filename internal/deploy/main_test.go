@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,8 +21,6 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/app/client"
-	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
 type response struct {
@@ -344,7 +343,7 @@ func TestDeployDownloadProgress(t *testing.T) {
 
 	tracker := progress.NewProgressTracker()
 	tracker.Start(app.ID, "job-1", "v1.0.0")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
 	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
@@ -395,7 +394,7 @@ func TestDeployDownloadRetry(t *testing.T) {
 
 	tracker := progress.NewProgressTracker()
 	tracker.Start(app.ID, "job-retry", "v1.0.0")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
 	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
@@ -423,7 +422,7 @@ func TestDeployDownloadFailure(t *testing.T) {
 
 	tracker := progress.NewProgressTracker()
 	tracker.Start(app.ID, "job-fail", "v1.0.0")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
+	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
 	_, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
@@ -439,30 +438,15 @@ func TestDeployDownloadFailure(t *testing.T) {
 	}
 }
 
-func deployClientWithBody(body []byte) *client.Client {
-	c, _ := client.NewClient(client.WithResponseBodyStream(true))
-	c.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(len(body))
-			resp.SetBodyStream(bytes.NewReader(body), len(body))
-			return nil
-		}
+func deployClientWithBody(body []byte) *http.Client {
+	return fakeBodyClient(func(*http.Request) (io.ReadCloser, int64) {
+		return io.NopCloser(bytes.NewReader(body)), int64(len(body))
 	})
-	return c
 }
 
 func TestDeployCleanupOnValidationFailure(t *testing.T) {
 	body := []byte("not-an-elf-binary")
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
-	dlClient.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(len(body))
-			resp.SetBodyStream(bytes.NewReader(body), len(body))
-			return nil
-		}
-	})
+	dlClient := deployClientWithBody(body)
 
 	tmpDir := t.TempDir()
 	app := testApp(tmpDir)

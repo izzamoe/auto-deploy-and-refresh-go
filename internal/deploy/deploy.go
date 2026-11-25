@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/hertz/pkg/app/client"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/download"
 	"github.com/izzamoe/auto-deploy/internal/progress"
@@ -134,11 +134,11 @@ func resolveArtifactDownload(ctx context.Context, resolver ArtifactResolver, rep
 	return resolver.ArtifactDownload(ctx, repo, tag, artifact)
 }
 
-func downloadBinary(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client) (store.DownloadSummary, error) {
+func downloadBinary(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *http.Client) (store.DownloadSummary, error) {
 	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, nil, maxArtifactBytes)
 }
 
-func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *client.Client, headers map[string]string, maxBytes int64) (store.DownloadSummary, error) {
+func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *http.Client, headers map[string]string, maxBytes int64) (store.DownloadSummary, error) {
 	slog.Info("downloading", "url", url)
 	resp, err := download.DownloadWithRetryContext(ctx, client, url, headers, nil)
 	if err != nil {
@@ -241,14 +241,14 @@ func validateDownloadedArtifact(path string) error {
 // DeployWithControl deploys app's release from the public GitHub download URL
 // (no authentication). Kept for callers that do not need private-repo support;
 // it delegates to DeployArtifact with a nil resolver.
-func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client, control *cancel.CancelService) (store.DownloadSummary, error) {
+func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService) (store.DownloadSummary, error) {
 	return DeployArtifact(app, jobID, tag, tracker, client, control, nil)
 }
 
 // DeployArtifact is DeployWithControl with an ArtifactResolver, which lets the
 // download authenticate against the GitHub API (required for assets in private
 // repositories). A nil resolver reproduces DeployWithControl's public-URL path.
-func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *client.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
+func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
 	tracker.Start(app.ID, jobID, tag)
 
 	tmpPath := app.BinaryPath + ".tmp"

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,9 +15,6 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
-
-	"github.com/cloudwego/hertz/pkg/app/client"
-	"github.com/cloudwego/hertz/pkg/protocol"
 )
 
 func TestQueueCancelPendingBeforeDequeue(t *testing.T) {
@@ -50,14 +48,8 @@ func TestWorkerCancelDuringDownloadCleansTempAndMarksCanceled(t *testing.T) {
 	tmpPath := binaryPath + ".tmp"
 	started := make(chan struct{})
 
-	dlClient, _ := client.NewClient(client.WithResponseBodyStream(true))
-	dlClient.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(1024)
-			resp.SetBodyStream(&blockingBody{ctx: ctx, started: started}, 1024)
-			return nil
-		}
+	dlClient := fakeBodyClient(func(req *http.Request) (io.ReadCloser, int64) {
+		return &blockingBody{ctx: req.Context(), started: started}, 1024
 	})
 	tracker := progress.NewProgressTracker()
 	app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
@@ -255,18 +247,11 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 
 func (b *blockingBody) Close() error { return nil }
 
-func staticELFClient() *client.Client {
-	c, _ := client.NewClient(client.WithResponseBodyStream(true))
-	c.Use(func(next client.Endpoint) client.Endpoint {
-		return func(ctx context.Context, req *protocol.Request, resp *protocol.Response) error {
-			body := []byte{0x7f, 'E', 'L', 'F', 1, 2, 3, 4}
-			resp.SetStatusCode(http.StatusOK)
-			resp.Header.SetContentLength(len(body))
-			resp.SetBodyStream(bytes.NewReader(body), len(body))
-			return nil
-		}
+func staticELFClient() *http.Client {
+	body := []byte{0x7f, 'E', 'L', 'F', 1, 2, 3, 4}
+	return fakeBodyClient(func(*http.Request) (io.ReadCloser, int64) {
+		return io.NopCloser(bytes.NewReader(body)), int64(len(body))
 	})
-	return c
 }
 
 func stubDeployGlobals(t *testing.T) func() {
