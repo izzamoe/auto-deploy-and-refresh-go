@@ -199,6 +199,7 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
+	adminEventHub.SetSessionChecker(sessionMgr) // 4401 when a socket's session ends (B12, FR-025)
 	if !serviceCfg.CookieSecure {
 		slog.Warn("COOKIE_SECURE=false: the session cookie is sent over plain HTTP; use this only for local development")
 	}

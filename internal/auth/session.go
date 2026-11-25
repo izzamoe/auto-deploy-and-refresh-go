@@ -65,6 +65,8 @@ type Verified struct {
 	AbsoluteExpiresAt time.Time
 	// Renewed is non-nil when the sliding window moved and a new cookie must be set.
 	Renewed *Issued
+	// TokenVersion is the token_version the verified cookie was signed with.
+	TokenVersion int
 }
 
 // claims is the JWT payload (D5). sub is the stable user ID, never the username.
@@ -92,6 +94,9 @@ type Manager struct {
 
 	touchMu sync.Mutex
 	touched map[string]time.Time
+
+	subMu sync.Mutex
+	subs  map[chan struct{}]struct{}
 }
 
 // NewManager builds a Manager. Idle/Absolute default to Q-2 values.
@@ -111,6 +116,7 @@ func NewManager(cfg SessionConfig, users UserSource, sessions SessionSource) (*M
 		users:    users,
 		sessions: sessions,
 		touched:  map[string]time.Time{},
+		subs:     map[chan struct{}]struct{}{},
 	}
 	if m.idle <= 0 {
 		m.idle = DefaultIdle
@@ -177,6 +183,7 @@ func (m *Manager) Reissue(sessionID string, user *store.AdminUser) (*Issued, err
 	if err := m.sessions.Renew(sessionID, exp, now); err != nil {
 		return nil, fmt.Errorf("auth: reissue: %w", err)
 	}
+	m.notify() // token_version moved: sockets of the older cookies must re-check
 	return m.sign(user, row, now, exp)
 }
 
@@ -220,7 +227,7 @@ func (m *Manager) Verify(token string) (*Verified, error) {
 		return nil, ErrSessionRevoked
 	}
 
-	v := &Verified{User: user, SessionID: row.ID, ExpiresAt: row.ExpiresAt, AbsoluteExpiresAt: row.AbsoluteExpiresAt}
+	v := &Verified{User: user, SessionID: row.ID, ExpiresAt: row.ExpiresAt, AbsoluteExpiresAt: row.AbsoluteExpiresAt, TokenVersion: c.Ver}
 
 	// Sliding renewal: less than half of the idle window left -> push it forward.
 	if row.ExpiresAt.Sub(now) < m.idle/2 {
@@ -252,7 +259,69 @@ func (m *Manager) Revoke(sessionID string) error {
 	m.touchMu.Lock()
 	delete(m.touched, sessionID)
 	m.touchMu.Unlock()
+	m.notify()
 	return nil
+}
+
+// Recheck re-validates a session that is already in use (an open WebSocket): the row
+// must exist, not be revoked and not be past its idle/absolute expiry, and the user's
+// token_version must still be the one the connection was authenticated with. Errors
+// are ErrSessionExpired / ErrSessionRevoked; a backing-store failure fails closed.
+func (m *Manager) Recheck(sessionID, userID string, tokenVersion int) error {
+	now := m.now().UTC()
+	row, err := m.sessions.Get(sessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrAdminSessionNotFound) {
+			return ErrSessionExpired
+		}
+		slog.Error("auth: session recheck failed; closing", "err", err)
+		return fmt.Errorf("%w: backend error", ErrSessionExpired)
+	}
+	if row.RevokedAt != nil || row.UserID != userID {
+		return ErrSessionRevoked
+	}
+	if !now.Before(row.ExpiresAt) || !now.Before(row.AbsoluteExpiresAt) {
+		return ErrSessionExpired
+	}
+	user, err := m.users.GetByID(userID)
+	if err != nil {
+		if errors.Is(err, store.ErrAdminUserNotFound) {
+			return ErrSessionRevoked
+		}
+		slog.Error("auth: user recheck failed; closing", "err", err)
+		return fmt.Errorf("%w: backend error", ErrSessionExpired)
+	}
+	if user.TokenVersion != tokenVersion {
+		return ErrSessionRevoked
+	}
+	return nil
+}
+
+// Subscribe returns a channel that receives a (coalesced) signal whenever sessions may
+// have been invalidated in this process: logout/Revoke and Reissue (password or username
+// change, "revoke all"). Holders then call Recheck. The returned func must be called
+// when the holder is done.
+func (m *Manager) Subscribe() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	m.subMu.Lock()
+	m.subs[ch] = struct{}{}
+	m.subMu.Unlock()
+	return ch, func() {
+		m.subMu.Lock()
+		delete(m.subs, ch)
+		m.subMu.Unlock()
+	}
+}
+
+func (m *Manager) notify() {
+	m.subMu.Lock()
+	defer m.subMu.Unlock()
+	for ch := range m.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // SetCookie writes the session cookie (HttpOnly, SameSite=Strict, Path=/, Secure by default).

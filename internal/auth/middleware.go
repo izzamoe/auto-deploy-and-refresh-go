@@ -34,6 +34,7 @@ type Principal struct {
 	SessionID          string
 	ExpiresAt          time.Time
 	AbsoluteExpiresAt  time.Time
+	TokenVersion       int // session principals: token_version of the verified cookie
 }
 
 // Principal kinds.
@@ -130,6 +131,7 @@ func (m *middleware) serveSession(ctx context.Context, c *app.RequestContext, v 
 		SessionID:          v.SessionID,
 		ExpiresAt:          v.ExpiresAt,
 		AbsoluteExpiresAt:  v.AbsoluteExpiresAt,
+		TokenVersion:       v.TokenVersion,
 	})
 	if v.Renewed != nil {
 		m.cfg.Sessions.SetCookie(c, v.Renewed)

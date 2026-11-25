@@ -77,6 +77,7 @@ type AdminEventHub struct {
 	now           func() time.Time
 	nextID        atomic.Uint64
 	serverVersion string
+	sessions      SessionChecker
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -102,6 +103,20 @@ func (h *AdminEventHub) SetServerVersion(v string) { h.serverVersion = v }
 
 const adminEventHeartbeatInterval = 30 * time.Second
 
+// adminEventSessionCheckInterval is how often an open socket re-checks its session row
+// (events-ws.md close codes: every 60 s plus the in-process revocation signal).
+var adminEventSessionCheckInterval = 60 * time.Second
+
+// SessionChecker is what an open socket needs from the session manager to notice
+// that its session ended: a re-check of the session row and a revocation signal.
+type SessionChecker interface {
+	Recheck(sessionID, userID string, tokenVersion int) error
+	Subscribe() (<-chan struct{}, func())
+}
+
+// SetSessionChecker enables 4401 closes for session-authenticated sockets (B12).
+func (h *AdminEventHub) SetSessionChecker(sc SessionChecker) { h.sessions = sc }
+
 // EventsWebSocket upgrades the request. The origin is verified by the default of
 // coder/websocket (no OriginPatterns, no InsecureSkipVerify): a browser page on
 // another origin cannot open this socket with the admin's cookie (K4, FR-012).
@@ -109,10 +124,30 @@ func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) 
 	h.serveEvents(w, r, nil, nil)
 }
 
+// Close codes of events-ws.md section 5.
+const (
+	closeSessionEnded        websocket.StatusCode = 4401
+	closeProtocolUnsupported websocket.StatusCode = 4409
+)
+
+// eventSession identifies the session a socket was opened with, so the hub can notice
+// when it ends. Nil for API-token principals (no session to expire).
+type eventSession struct {
+	sessionID    string
+	userID       string
+	tokenVersion int
+	expiresAt    time.Time
+}
+
 // serveEvents is EventsWebSocket plus what only the caller knows: when the signed-in
 // session ends (hello.sessionExpiresAt) and any extra response headers for the
 // handshake (the deprecation notice of the pre-v1 path).
-func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sessionExpiresAt *time.Time, extra http.Header) {
+func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess *eventSession, extra http.Header) {
+	var sessionExpiresAt *time.Time
+	if sess != nil && !sess.expiresAt.IsZero() {
+		t := sess.expiresAt.UTC()
+		sessionExpiresAt = &t
+	}
 	for k, vs := range extra {
 		for _, v := range vs {
 			w.Header().Add(k, v)
@@ -123,6 +158,12 @@ func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 	defer c.CloseNow()
+
+	// FR-025 / RV-14: a client asking for another protocol gets 4409 (reload banner).
+	if q, ok := r.URL.Query()["protocol"]; ok && (len(q) != 1 || q[0] != adminEventProtocolVersion) {
+		_ = c.Close(closeProtocolUnsupported, "unsupported protocol")
+		return
+	}
 
 	client := h.addClient()
 	defer h.removeClient(client)
@@ -135,10 +176,36 @@ func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess
 	heartbeat := time.NewTicker(adminEventHeartbeatInterval)
 	defer heartbeat.Stop()
 
+	// B12 / FR-025: a socket must not outlive its session. Re-check the session row
+	// periodically and on the in-process revocation signal.
+	var recheck <-chan time.Time
+	var revoked <-chan struct{}
+	if sess != nil && h.sessions != nil {
+		t := time.NewTicker(adminEventSessionCheckInterval)
+		defer t.Stop()
+		recheck = t.C
+		ch, unsubscribe := h.sessions.Subscribe()
+		defer unsubscribe()
+		revoked = ch
+	}
+	sessionOK := func() bool {
+		return h.sessions.Recheck(sess.sessionID, sess.userID, sess.tokenVersion) == nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-recheck:
+			if !sessionOK() {
+				_ = c.Close(closeSessionEnded, "session ended")
+				return
+			}
+		case <-revoked:
+			if !sessionOK() {
+				_ = c.Close(closeSessionEnded, "session ended")
+				return
+			}
 		case <-heartbeat.C:
 			hb, encErr := h.encodeEvent(AdminEvent{Type: adminEventTypeHeartbeat})
 			if encErr != nil {
@@ -377,10 +444,9 @@ func writeAdminEventPayload(ctx context.Context, c *websocket.Conn, payload []by
 // EventsWebSocketHertz runs behind the auth middleware. A session principal tells
 // the hello event when the session ends; an API-token principal has no session.
 func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.RequestContext) {
-	var expires *time.Time
-	if p, ok := auth.PrincipalFrom(c); ok && p.Kind == auth.KindSession && !p.ExpiresAt.IsZero() {
-		t := p.ExpiresAt.UTC()
-		expires = &t
+	var sess *eventSession
+	if p, ok := auth.PrincipalFrom(c); ok && p.Kind == auth.KindSession {
+		sess = &eventSession{sessionID: p.SessionID, userID: p.UserID, tokenVersion: p.TokenVersion, expiresAt: p.ExpiresAt}
 	}
 	var extra http.Header
 	if path := string(c.Request.URI().Path()); path == adminEventsLegacyPath {
@@ -390,7 +456,7 @@ func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.Request
 		}
 	}
 	adaptor.HertzHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.serveEvents(w, r, expires, extra)
+		h.serveEvents(w, r, sess, extra)
 	}))(ctx, c)
 }
 
