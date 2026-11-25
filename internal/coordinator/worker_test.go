@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -545,4 +546,86 @@ func TestCoordinator_NextJobOfTheSameAppStartsWhenTheRunningOneEnds(t *testing.T
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("the second job never started")
+}
+
+// B26 / FR-051: a panic inside the deploy runner must not take the process down: the job
+// is marked failed and the coordinator keeps serving the queue.
+func TestCoordinator_PanicInRunnerFailsTheJobAndKeepsRunning(t *testing.T) {
+	var calls atomic.Int32
+	c, apps, q := newTestCoordinator(t, func(_ *store.App, _ string, tag string) (store.DownloadSummary, error) {
+		calls.Add(1)
+		if tag == "v-boom" {
+			panic("runner exploded: token=hunter2")
+		}
+		return store.DownloadSummary{}, nil
+	})
+	app, err := apps.Create("pan", "sec-pan-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/opt/pan/pan", "pan.service", "o/r", "art")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); c.Wait() }()
+	c.Start(ctx)
+	if err := q.Enqueue(app.ID, "v-boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Enqueue(app.ID, "v-after"); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		failed, _ := q.ListByStatus("failed")
+		done, _ := q.ListByStatus("succeeded")
+		if len(failed) == 1 && len(done) == 1 {
+			if msg := failed[0].ErrorMsg; strings.Contains(msg, "hunter2") {
+				t.Errorf("the panic value leaked into the job error: %q", msg)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	failed, _ := q.ListByStatus("failed")
+	done, _ := q.ListByStatus("succeeded")
+	t.Fatalf("after a runner panic: %d failed, %d succeeded jobs; want 1 failed (the panic) and 1 succeeded (the next job)", len(failed), len(done))
+}
+
+// FR-051: MarkDone is retried; a transient failure does not leave the job in_progress.
+func TestCoordinator_MarkDoneIsRetried(t *testing.T) {
+	old := markDoneBackoff
+	markDoneBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	defer func() { markDoneBackoff = old }()
+
+	c, apps, q := newTestCoordinator(t, func(*store.App, string, string) (store.DownloadSummary, error) {
+		return store.DownloadSummary{}, nil
+	})
+	var attempts atomic.Int32
+	inner := c.markDone
+	c.markDone = func(id string, ok bool, msg string, sum *store.DownloadSummary) error {
+		if attempts.Add(1) <= 2 {
+			return fmt.Errorf("database is locked")
+		}
+		return inner(id, ok, msg, sum)
+	}
+	app, err := apps.Create("ret", "sec-ret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/opt/ret/ret", "ret.service", "o/r", "art")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); c.Wait() }()
+	c.Start(ctx)
+	if err := q.Enqueue(app.ID, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if done, _ := q.ListByStatus("succeeded"); len(done) == 1 {
+			if attempts.Load() != 3 {
+				t.Errorf("MarkDone attempts = %d, want 3 (two failures, then success)", attempts.Load())
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the job never reached succeeded (MarkDone attempts: %d)", attempts.Load())
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -109,7 +110,8 @@ type CoordinatorRunner func(app *store.App, jobID, tag string) (store.DownloadSu
 
 type Coordinator struct {
 	apps        *store.AppStore
-	listApps    func() ([]store.App, error) // seam: tests count the idle queries (B23)
+	listApps    func() ([]store.App, error)                                                        // seam: tests count the idle queries (B23)
+	markDone    func(id string, success bool, errMsg string, summary *store.DownloadSummary) error // seam: tests inject failures (B26)
 	q           *store.DeployQueue
 	runner      CoordinatorRunner
 	tracker     *progress.ProgressTracker
@@ -127,6 +129,7 @@ func NewCoordinator(apps *store.AppStore, q *store.DeployQueue, runner Coordinat
 	return &Coordinator{
 		apps:       apps,
 		listApps:   apps.List,
+		markDone:   q.MarkDone,
 		q:          q,
 		runner:     runner,
 		tracker:    tracker,
@@ -311,7 +314,7 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 	// exactly this deploy's window (download, restart, health check) rather than
 	// an arbitrary tail of the service's journal.
 	deployStart := time.Now()
-	summary, err := c.runner(&app, jobID, tag)
+	summary, err := c.safeRun(&app, jobID, tag)
 	if errors.Is(err, store.ErrSelfDeployInFlight) {
 		// FR-144: auto-deploy is replacing itself; the restarted process settles this job.
 		slog.Info("coordinator: self-deploy in flight; the next process settles the job", "app", app.ID, "job", jobID)
@@ -336,7 +339,7 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		summaryPtr = &summary
 	}
 
-	if markErr := c.q.MarkDone(jobID, success, errMsg, summaryPtr); markErr != nil {
+	if markErr := c.markDoneWithRetry(jobID, success, errMsg, summaryPtr); markErr != nil {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
 	}
 	if summary.SHA256 != "" {
@@ -363,6 +366,39 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		slog.Error("coordinator: deploy failed", "app", app.ID, "tag", tag, "err", err)
 		c.notify(fmt.Sprintf("❌ %s: deploy of %s failed: %s", app.Name, tag, errMsg))
 	}
+}
+
+// errRunnerPanic is the (generic) error stored for a job whose runner panicked. The
+// panic value and stack go to the log only: they may contain secrets.
+var errRunnerPanic = errors.New("internal error: the deploy crashed unexpectedly")
+
+// safeRun calls the runner and turns a panic into a failed deploy (B26, FR-051), so one
+// bad deploy cannot take the whole process, and with it every other app, down.
+func (c *Coordinator) safeRun(app *store.App, jobID, tag string) (summary store.DownloadSummary, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("coordinator: the deploy runner panicked", "app", app.ID, "job", jobID, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			summary, err = store.DownloadSummary{}, errRunnerPanic
+		}
+	}()
+	return c.runner(app, jobID, tag)
+}
+
+// markDoneBackoff are the waits between MarkDone attempts (FR-051: a transient database
+// error must not leave a finished job in_progress).
+var markDoneBackoff = []time.Duration{200 * time.Millisecond, time.Second, 3 * time.Second}
+
+func (c *Coordinator) markDoneWithRetry(jobID string, success bool, errMsg string, summary *store.DownloadSummary) error {
+	err := c.markDone(jobID, success, errMsg, summary)
+	for _, wait := range markDoneBackoff {
+		if err == nil {
+			return nil
+		}
+		slog.Warn("coordinator: mark done failed; retrying", "id", jobID, "err", err, "wait", wait)
+		time.Sleep(wait)
+		err = c.markDone(jobID, success, errMsg, summary)
+	}
+	return err
 }
 
 // publishJobStatus announces the terminal status of a job this coordinator just
