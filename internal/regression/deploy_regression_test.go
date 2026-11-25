@@ -2,6 +2,7 @@ package regression
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,13 +26,13 @@ import (
 
 // B9 (proof P10): when "systemctl restart" fails the previous binary must be restored.
 func TestRegression_B9_RestartFailureNoRollback(t *testing.T) {
-	newBin := append([]byte{0x7f, 'E', 'L', 'F'}, []byte("NEW-BINARY")...)
+	newBin := append(regressionELFHeader(), []byte("NEW-BINARY")...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(newBin) }))
 	defer srv.Close()
 
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "app")
-	os.WriteFile(bin, append([]byte{0x7f, 'E', 'L', 'F'}, []byte("OLD-BINARY")...), 0755)
+	os.WriteFile(bin, append(regressionELFHeader(), []byte("OLD-BINARY")...), 0755)
 
 	var calls []string
 	restore := deploy.SetRunSystemctlForTest(func(name string, args ...string) ([]byte, error) {
@@ -47,8 +49,8 @@ func TestRegression_B9_RestartFailureNoRollback(t *testing.T) {
 	_, err := deploy.DeployArtifact(app, "job1", "v1", tr, download.NewDownloadClient(""), nil, fixedResolver{srv.URL})
 	cur, _ := os.ReadFile(bin)
 	_, bakErr := os.Stat(bin + ".bak")
-	t.Logf("err=%v systemctl calls=%v installed=%q bak_exists=%v", err, calls, cur[4:], bakErr == nil)
-	if string(cur[4:]) == "NEW-BINARY" {
+	t.Logf("err=%v systemctl calls=%v installed=%q bak_exists=%v", err, calls, cur[len(regressionELFHeader()):], bakErr == nil)
+	if string(cur[len(regressionELFHeader()):]) == "NEW-BINARY" {
 		t.Error("B9: restart failed but the NEW binary is left installed (no rollback, only 1 restart call)")
 	}
 }
@@ -184,4 +186,17 @@ func TestRegression_B1_RedirectConnLeak(t *testing.T) {
 // B2: same leak with a RELATIVE Location (PROOF_REL=1 variant of the proof, as its own test).
 func TestRegression_B2_RelativeRedirectNotResolved(t *testing.T) {
 	redirectLeak(t, true, "B2")
+}
+
+// regressionELFHeader is a minimal ELF64 executable header for THIS host: deploys now
+// verify the ELF type and architecture (FR-045), so fixtures must be real ELF files.
+func regressionELFHeader() []byte {
+	machine := map[string]uint16{"amd64": 62, "arm64": 183, "386": 3, "arm": 40, "riscv64": 243}[runtime.GOARCH]
+	h := make([]byte, 64)
+	copy(h, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1})
+	binary.LittleEndian.PutUint16(h[16:], 2) // ET_EXEC
+	binary.LittleEndian.PutUint16(h[18:], machine)
+	binary.LittleEndian.PutUint32(h[20:], 1)
+	binary.LittleEndian.PutUint16(h[52:], 64)
+	return h
 }

@@ -476,7 +476,7 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 
 // createSettings are the settings of a new app: the request over the defaults.
 func createSettings(body adminAPIAppRequest) *store.AppSettings {
-	set := settingsFrom(body, store.AppSettings{})
+	set := settingsFrom(body, store.AppSettings{RequireDigest: true}) // Q-14: true for NEW apps
 	return &set
 }
 

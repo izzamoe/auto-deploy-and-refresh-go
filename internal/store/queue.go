@@ -65,6 +65,11 @@ type DownloadSummary struct {
 	Bytes      int64
 	DurationMs int64
 	SpeedBPS   float64
+	// SHA256 of the downloaded artifact and whether it was checked against a digest
+	// published by the release (FR-045, Q-14); empty/false when the deploy failed
+	// before verification.
+	SHA256   string
+	Verified bool
 }
 
 type DeployQueue struct {
@@ -462,6 +467,17 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 		status, nullMsg, downloadBytes, downloadDurationMs, downloadSpeedBPS, id,
 	)
 	q.InvalidateActiveJobsCache()
+	return err
+}
+
+// MarkArtifactVerification records the artifact hash and whether it was verified
+// against a release digest (deploy_jobs.artifact_sha256 / artifact_verified, FR-045).
+func (q *DeployQueue) MarkArtifactVerification(id, sha256 string, verified bool) error {
+	v := 0
+	if verified {
+		v = 1
+	}
+	_, err := q.db.Exec(`UPDATE deploy_jobs SET artifact_sha256 = ?, artifact_verified = ? WHERE id = ?`, sha256, v, id)
 	return err
 }
 

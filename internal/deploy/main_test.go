@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"debug/elf"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -912,8 +913,10 @@ func equalStrings(got, want []string) bool {
 	return true
 }
 
+// elfBinary is a minimal ELF executable for THIS host (FR-045 verifies the header)
+// followed by payload; the payload is what tests compare.
 func elfBinary(payload string) []byte {
-	return append([]byte{0x7f, 'E', 'L', 'F'}, []byte(payload)...)
+	return buildELF(hostELFMachine(), elf.ET_EXEC, payload)
 }
 
 func stubSystemctl(t *testing.T, fn func(string, ...string) ([]byte, error)) {

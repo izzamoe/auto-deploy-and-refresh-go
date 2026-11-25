@@ -328,6 +328,13 @@ func DeployArtifactContext(parent context.Context, app *store.App, jobID, tag st
 		tracker.Fail(app.ID)
 		return summary, err
 	}
+	// FR-045: ELF type + architecture, then the release digest (Q-14).
+	sum, verified, verifyErr := verifyArtifact(downloadCtx, app, resolver, tag, tmpPath)
+	summary.SHA256, summary.Verified = sum, verified
+	if verifyErr != nil {
+		tracker.Fail(app.ID)
+		return summary, verifyErr
+	}
 
 	if err := chmodFile(tmpPath, 0755); err != nil {
 		tracker.Fail(app.ID)

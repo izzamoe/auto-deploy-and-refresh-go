@@ -276,6 +276,11 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 	if markErr := c.q.MarkDone(jobID, success, errMsg, summaryPtr); markErr != nil {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
 	}
+	if summary.SHA256 != "" {
+		if vErr := c.q.MarkArtifactVerification(jobID, summary.SHA256, summary.Verified); vErr != nil {
+			slog.Warn("coordinator: recording artifact verification failed", "id", jobID, "err", vErr)
+		}
+	}
 	rolledBack := errors.Is(err, store.ErrRolledBack)
 	if rolledBack {
 		if rbErr := c.q.MarkRolledBack(jobID); rbErr != nil {

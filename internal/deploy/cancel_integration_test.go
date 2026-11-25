@@ -248,7 +248,7 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 func (b *blockingBody) Close() error { return nil }
 
 func staticELFClient() *http.Client {
-	body := []byte{0x7f, 'E', 'L', 'F', 1, 2, 3, 4}
+	body := elfBinary("\x01\x02\x03\x04")
 	return fakeBodyClient(func(*http.Request) (io.ReadCloser, int64) {
 		return io.NopCloser(bytes.NewReader(body)), int64(len(body))
 	})

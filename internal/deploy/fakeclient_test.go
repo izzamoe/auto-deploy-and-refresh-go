@@ -1,9 +1,9 @@
 package deploy
 
 import (
+	"bytes"
 	"io"
 	"net/http"
-	"strings"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -14,7 +14,8 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func fakeBodyClientCounting(n *int) *http.Client {
 	return fakeBodyClient(func(*http.Request) (io.ReadCloser, int64) {
 		*n++
-		return io.NopCloser(strings.NewReader("\x7fELF")), 4
+		body := elfBinary("")
+		return io.NopCloser(bytes.NewReader(body)), int64(len(body))
 	})
 }
 

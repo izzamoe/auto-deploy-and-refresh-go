@@ -72,3 +72,23 @@ func TestAppSettings_InvalidHealthURLIs400WithField(t *testing.T) {
 		t.Errorf("%d apps created by invalid requests", len(apps))
 	}
 }
+
+// Q-14: a NEW app requires a digest by default; the request can opt out.
+func TestAppSettings_NewAppsRequireDigestByDefault(t *testing.T) {
+	t.Parallel()
+	h, _, _, jwt := newTestAdminAPIHertz(t)
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps", appJSONWith(nil)))
+	var created appSettingsResp
+	_ = json.Unmarshal(rr.Response.Body(), &created)
+	if rr.Response.StatusCode() != http.StatusCreated || !created.App.RequireDigest {
+		t.Fatalf("default requireDigest = %v (%d %s), want true", created.App.RequireDigest, rr.Response.StatusCode(), rr.Response.Body())
+	}
+	rr = serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps", appJSONWith(map[string]any{
+		"name": "second", "binaryPath": "/opt/second/second", "serviceName": "second.service", "requireDigest": false,
+	})))
+	var second appSettingsResp
+	_ = json.Unmarshal(rr.Response.Body(), &second)
+	if rr.Response.StatusCode() != http.StatusCreated || second.App.RequireDigest {
+		t.Fatalf("explicit requireDigest=false = %v (%d %s)", second.App.RequireDigest, rr.Response.StatusCode(), rr.Response.Body())
+	}
+}
