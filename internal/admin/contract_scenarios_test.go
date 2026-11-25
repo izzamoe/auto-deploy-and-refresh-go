@@ -75,6 +75,11 @@ func TestContract(t *testing.T) {
 		e.do(contractCall{op: "listApps", method: "GET", path: "/admin/api/v1/apps", status: 200})
 		e.do(contractCall{op: "listApps", method: "GET", path: "/admin/api/v1/apps", noCookie: true, status: 401})
 
+		e.do(contractCall{op: "getStats", method: "GET", path: "/admin/api/v1/stats", status: 200})
+		e.do(contractCall{op: "getStats", method: "GET", path: "/admin/api/v1/stats?range=30d&tz=Asia/Jakarta", status: 200})
+		e.do(contractCall{op: "getStats", method: "GET", path: "/admin/api/v1/stats?range=14d", status: 400, invalid: true})
+		e.do(contractCall{op: "getStats", method: "GET", path: "/admin/api/v1/stats", noCookie: true, status: 401})
+
 		create := map[string]any{
 			"name": "contract-app", "binaryPath": "/opt/contract/app", "serviceName": "contract.service",
 			"githubRepo": "owner/contract", "artifactName": "contract-linux",

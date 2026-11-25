@@ -24,10 +24,12 @@ type AdminAPIHandler struct {
 	queue   *store.DeployQueue
 	tracker *progress.ProgressTracker
 	cancel  *cancel.CancelService
+	// now is the clock of /stats; tests freeze it.
+	now func() time.Time
 }
 
 func NewAdminAPIHandler(store *store.AppStore, queue *store.DeployQueue, tracker *progress.ProgressTracker, cancel *cancel.CancelService) *AdminAPIHandler {
-	return &AdminAPIHandler{store: store, queue: queue, tracker: tracker, cancel: cancel}
+	return &AdminAPIHandler{store: store, queue: queue, tracker: tracker, cancel: cancel, now: time.Now}
 }
 
 // adminAPIErrorResponse is the one error envelope of the admin API (FR-021):
@@ -122,6 +124,8 @@ type adminAPIJobResponse struct {
 	CreatedAt          time.Time                 `json:"createdAt"`
 	UpdatedAt          time.Time                 `json:"updatedAt"`
 	LiveProgress       *adminAPIProgressResponse `json:"liveProgress,omitempty"`
+	// RolledBack is set only where it is known (the recent jobs of /stats).
+	RolledBack *bool `json:"rolledBack,omitempty"`
 }
 
 type adminAPICancelJobResponse struct {
@@ -887,6 +891,7 @@ func (h *AdminAPIHandler) JobLogsHertz(ctx context.Context, c *app.RequestContex
 func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth app.HandlerFunc) {
 	api := h.Group("/admin/api/v1", auth)
 	api.GET("/apps", handler.ListAppsHertz)
+	api.GET("/stats", handler.GetStatsHertz)
 	api.POST("/apps", handler.CreateAppHertz)
 	api.GET("/apps/:id", handler.GetAppHertz)
 	api.PUT("/apps/:id", handler.UpdateAppHertz)

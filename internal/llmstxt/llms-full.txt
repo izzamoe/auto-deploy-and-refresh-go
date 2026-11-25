@@ -469,6 +469,7 @@ matches what the binary actually serves.
 | DELETE | `/admin/api/v1/session` | admin session |
 | GET | `/admin/api/v1/session` | admin session |
 | POST | `/admin/api/v1/session` | public |
+| GET | `/admin/api/v1/stats` | admin session |
 | GET | `/admin/api/v1/system/logs` | admin session |
 | GET | `/admin/api/v1/telegram` | admin session |
 | POST | `/admin/api/v1/telegram` | admin session |
