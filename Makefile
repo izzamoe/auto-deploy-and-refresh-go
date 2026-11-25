@@ -122,9 +122,15 @@ api-types-check: api-types-install
 	rm -rf "$$tmp"; \
 	echo "$(API_TYPES) is up to date."
 
-# Browser smoke tests (Playwright).
+# Browser tests (Playwright): the four gates run explicitly (RV3-13); the `visual` project
+# only when a local baseline exists (it is not committed, Q-25). `perf` (T104) is never run here.
 e2e:
-	npx playwright test
+	npx playwright test --project=smoke --project=routing --project=session --project=a11y
+	@if ls tests/visual.spec.ts-snapshots/*.png >/dev/null 2>&1; then \
+		npx playwright test --project=visual; \
+	else \
+		echo "visual: no local baseline in tests/visual.spec.ts-snapshots, skipped"; \
+	fi
 
 # Full local gate, same order as CI.
 ci: llms-check vet test vuln fe-install fe-typecheck fe-test api-types-check build e2e
