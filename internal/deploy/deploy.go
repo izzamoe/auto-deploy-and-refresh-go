@@ -255,6 +255,13 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 	// phases have no "canceled"); the job status itself is "canceled".
 	defer tracker.FailIfActive(app.ID, jobID)
 
+	// FR-040 defense in depth: an app row written before validation existed (or by a
+	// path that skipped it) must not reach the filesystem or systemctl with an unsafe
+	// binary path, service name, repo or artifact name.
+	if errs := ValidateAppInput(AppInput{BinaryPath: app.BinaryPath, ServiceName: app.ServiceName, GithubRepo: app.GithubRepo, ArtifactName: app.ArtifactName}); len(errs) > 0 {
+		return store.DownloadSummary{}, fmt.Errorf("invalid app configuration: %s: %s", errs[0].Field, errs[0].Message)
+	}
+
 	tmpPath := app.BinaryPath + ".tmp"
 
 	cleanup := true

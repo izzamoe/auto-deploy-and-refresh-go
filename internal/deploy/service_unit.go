@@ -110,7 +110,10 @@ func renderExecArgs(args []string) string {
 // before interpolation to prevent newline injection of arbitrary systemd
 // directives.
 func RenderServiceUnit(app store.App) string {
-	workingDir := filepath.Dir(app.BinaryPath)
+	// B7: WorkingDirectory is derived from the binary path, so it gets the same
+	// control-character stripping as ExecStart; a newline in the path can never start
+	// a new directive line.
+	workingDir := cleanSystemdValue(filepath.Dir(cleanSystemdValue(app.BinaryPath)))
 	var b strings.Builder
 	b.WriteString(generatedUnitMarker)
 	b.WriteString("\n")

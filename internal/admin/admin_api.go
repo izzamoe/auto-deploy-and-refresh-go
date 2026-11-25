@@ -164,27 +164,47 @@ func isAdminAPINotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
-func validateAdminAPIAppRequest(body adminAPIAppRequest, requireSecret bool) []string {
-	var errs []string
-	if body.Name == "" {
-		errs = append(errs, "Name is required")
+// validateAdminAPIAppRequest checks an app create/update body and returns one
+// field-level error per problem (errors[].field = the JSON name): required fields,
+// then the FR-040 formats (binaryPath, serviceName, githubRepo, artifactName) and the
+// Q-11 rule that an app must not point at the auto-deploy binary itself.
+func validateAdminAPIAppRequest(body adminAPIAppRequest, requireSecret bool) []httpx.FieldError {
+	var errs []httpx.FieldError
+	required := func(field, value, message string) {
+		if value == "" {
+			errs = append(errs, httpx.FieldError{Field: field, Code: httpx.CodeValidationFailed, Message: message})
+		}
 	}
-	if body.BinaryPath == "" {
-		errs = append(errs, "Binary Path is required")
+	required("name", body.Name, "Name is required")
+	required("binaryPath", body.BinaryPath, "Binary Path is required")
+	required("serviceName", body.ServiceName, "Service Name is required")
+	required("githubRepo", body.GithubRepo, "GitHub Repo is required")
+	required("artifactName", body.ArtifactName, "Artifact Name is required")
+	if requireSecret {
+		required("webhookSecret", body.webhookSecret(), "Webhook Secret is required")
 	}
-	if body.ServiceName == "" {
-		errs = append(errs, "Service Name is required")
+	for _, fe := range deploy.ValidateAppInput(deploy.AppInput{
+		BinaryPath: body.BinaryPath, ServiceName: body.ServiceName, GithubRepo: body.GithubRepo, ArtifactName: body.ArtifactName,
+	}) {
+		errs = append(errs, httpx.FieldError{Field: fe.Field, Code: httpx.CodeValidationFailed, Message: fe.Message})
 	}
-	if body.GithubRepo == "" {
-		errs = append(errs, "GitHub Repo is required")
-	}
-	if body.ArtifactName == "" {
-		errs = append(errs, "Artifact Name is required")
-	}
-	if requireSecret && body.webhookSecret() == "" {
-		errs = append(errs, "Webhook Secret is required")
+	if body.BinaryPath != "" && !hasFieldError(errs, "binaryPath") {
+		// No app is marked self-deploy yet (Q-19), so pointing at the manager's own
+		// binary is always refused.
+		if err := deploy.ValidateBinaryPathNotSelf(body.BinaryPath, deploy.OwnExecutable(), false); err != nil {
+			errs = append(errs, httpx.FieldError{Field: "binaryPath", Code: httpx.CodeValidationFailed, Message: err.Error()})
+		}
 	}
 	return errs
+}
+
+func hasFieldError(errs []httpx.FieldError, field string) bool {
+	for _, e := range errs {
+		if e.Field == field {
+			return true
+		}
+	}
+	return false
 }
 
 func appWithLastDeployResponse(app store.AppWithLastDeploy) adminAPIAppResponse {
@@ -318,12 +338,16 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	if errs := validateAdminAPIAppRequest(body, true); len(errs) > 0 {
-		writeAdminAPIValidationErrorHertz(c, errs)
+		writeAdminAPIFieldErrorsHertz(c, errs)
 		return
 	}
 
 	app, err := h.store.Create(body.Name, body.webhookSecret(), body.BinaryPath, body.ServiceName, body.GithubRepo, body.ArtifactName)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidAppInput) {
+			writeAdminAPIValidationErrorHertz(c, []string{"App fields are invalid"})
+			return
+		}
 		if errors.Is(err, store.ErrDuplicateApp) {
 			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
 			return
@@ -360,7 +384,7 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	if errs := validateAdminAPIAppRequest(body, false); len(errs) > 0 {
-		writeAdminAPIValidationErrorHertz(c, errs)
+		writeAdminAPIFieldErrorsHertz(c, errs)
 		return
 	}
 
@@ -370,6 +394,10 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	if err := h.updateAppWithOptionalSecret(id, body, enabled); err != nil {
+		if errors.Is(err, store.ErrInvalidAppInput) {
+			writeAdminAPIValidationErrorHertz(c, []string{"App fields are invalid"})
+			return
+		}
 		if errors.Is(err, store.ErrDuplicateApp) {
 			writeAdminAPIValidationErrorHertz(c, []string{"An app with this binary path, service name, or webhook secret already exists"})
 			return
@@ -728,6 +756,12 @@ func codeForStatus(status int) string {
 
 func writeAdminAPIErrorHertz(c *app.RequestContext, status int, msg string) {
 	writeError(c, status, codeForStatus(status), msg)
+}
+
+// writeAdminAPIFieldErrorsHertz answers 400 validation_failed with field-level
+// entries (errors[].field names the invalid JSON field).
+func writeAdminAPIFieldErrorsHertz(c *app.RequestContext, fields []httpx.FieldError) {
+	writeError(c, consts.StatusBadRequest, httpx.CodeValidationFailed, "Validation failed", fields...)
 }
 
 // writeAdminAPIValidationErrorHertz answers 400 validation_failed; each message

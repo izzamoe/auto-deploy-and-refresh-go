@@ -166,7 +166,7 @@ func TestAPIErrorEnvelopeIsComplete(t *testing.T) {
 	}
 	// validation errors are objects with field-level detail, not bare strings
 	w := do("POST", "/admin/api/v1/apps", browserHdr(t), `{"name":"x"}`)
-	if !strings.Contains(w.Body.String(), `"errors":[{"code":"validation_failed","message":`) {
-		t.Errorf("validation entries must be {code,message} objects: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), `"errors":[{"field":"binaryPath","code":"validation_failed","message":`) {
+		t.Errorf("validation entries must be {field,code,message} objects: %s", w.Body.String())
 	}
 }

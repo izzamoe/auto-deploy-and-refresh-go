@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"net/http"
 	_ "net/http/pprof" // registers /debug/pprof/* on the DefaultServeMux
@@ -129,6 +130,16 @@ func main() {
 		db.Close()
 		os.Exit(1)
 	}
+	// FR-040 backstop: from here on the store itself refuses an app whose binaryPath,
+	// serviceName, githubRepo or artifactName is unsafe (the API validates first). It is
+	// installed AFTER the legacy bootstrap above so an existing single-app install keeps
+	// starting.
+	appStore.SetInputValidator(func(binaryPath, serviceName, githubRepo, artifactName string) error {
+		if errs := deploy.ValidateAppInput(deploy.AppInput{BinaryPath: binaryPath, ServiceName: serviceName, GithubRepo: githubRepo, ArtifactName: artifactName}); len(errs) > 0 {
+			return fmt.Errorf("%s: %s", errs[0].Field, errs[0].Message)
+		}
+		return nil
+	})
 	admissionSvc := admission.NewAdmissionService(appStore, q)
 	tracker := progress.NewProgressTracker()
 	dlClient := download.NewDownloadClient(serviceCfg.DownloadDNS)

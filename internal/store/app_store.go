@@ -19,6 +19,14 @@ import (
 var ErrDuplicateApp = errors.New("duplicate app: uniqueness constraint violated")
 var ErrActiveDeployExists = errors.New("active deploy in progress")
 
+// ErrInvalidAppInput is returned by Create/Update when the configured input validator
+// (SetInputValidator) rejects binaryPath, serviceName, githubRepo or artifactName.
+var ErrInvalidAppInput = errors.New("invalid app input")
+
+// AppInputValidator judges the deployment-critical fields of an app (FR-040). It is
+// injected by main (deploy.ValidateAppInput) because package deploy imports store.
+type AppInputValidator func(binaryPath, serviceName, githubRepo, artifactName string) error
+
 const sqliteConstraintUnique = 2067 // SQLITE_CONSTRAINT_UNIQUE
 
 type AppWithLastDeploy struct {
@@ -80,6 +88,10 @@ type AppStore struct {
 	// deploy_jobs rows so the DeployQueue can drop its active-jobs cache.
 	// Wired in main via SetJobsDeletedHook; nil in tests that don't need it.
 	onJobsDeleted func()
+	// inputValidator, when set, is the store-level backstop of FR-040: Create and
+	// Update refuse invalid binaryPath/serviceName/githubRepo/artifactName even when a
+	// caller skipped the API validation. nil (tests) = no check.
+	inputValidator AppInputValidator
 	// testHookAfterQuery, when set, is invoked inside loadSecretHashCache after
 	// the DB query but before the snapshot is published. Test-only seam to
 	// deterministically drive the rebuild-vs-invalidate interleaving; nil (and
@@ -92,6 +104,19 @@ type AppStore struct {
 // IsDuplicate cache must be invalidated through this hook).
 func (s *AppStore) SetJobsDeletedHook(hook func()) {
 	s.onJobsDeleted = hook
+}
+
+// SetInputValidator installs the FR-040 backstop used by Create and Update.
+func (s *AppStore) SetInputValidator(v AppInputValidator) { s.inputValidator = v }
+
+func (s *AppStore) checkInput(binaryPath, serviceName, githubRepo, artifactName string) error {
+	if s.inputValidator == nil {
+		return nil
+	}
+	if err := s.inputValidator(binaryPath, serviceName, githubRepo, artifactName); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidAppInput, err)
+	}
+	return nil
 }
 
 func (s *AppStore) DB() *sql.DB {
@@ -178,6 +203,9 @@ func generateID() (string, error) {
 }
 
 func (s *AppStore) Create(name, secret, binaryPath, serviceName, githubRepo, artifactName string) (*App, error) {
+	if err := s.checkInput(binaryPath, serviceName, githubRepo, artifactName); err != nil {
+		return nil, err
+	}
 	id, err := generateID()
 	if err != nil {
 		return nil, err
@@ -260,6 +288,9 @@ func (s *AppStore) Update(id, name, binaryPath, serviceName, githubRepo, artifac
 }
 
 func (s *AppStore) UpdateWithOptionalSecret(id, name, secret, binaryPath, serviceName, githubRepo, artifactName string, enabled bool) error {
+	if err := s.checkInput(binaryPath, serviceName, githubRepo, artifactName); err != nil {
+		return err
+	}
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
