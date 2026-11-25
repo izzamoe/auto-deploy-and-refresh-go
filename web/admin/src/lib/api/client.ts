@@ -241,7 +241,8 @@ export const api = {
   getApp: (appId: string, o?: Sig) => apiFetch<Ok<"getApp">>(`/apps/${enc(appId)}`, o),
   createApp: (body: Body<"createApp">) => apiFetch<Ok<"createApp">>("/apps", { method: "POST", body }),
   updateApp: (appId: string, body: Body<"updateApp">) => apiFetch<Ok<"updateApp">>(`/apps/${enc(appId)}`, { method: "PUT", body }),
-  deleteApp: (appId: string) => apiFetch<Ok<"deleteApp">>(`/apps/${enc(appId)}`, { method: "DELETE" }),
+  deleteApp: (appId: string, removeUnitFile = false) =>
+    apiFetch<Ok<"deleteApp">>(`/apps/${enc(appId)}`, { method: "DELETE", query: removeUnitFile ? { removeUnitFile: true } : undefined }),
   toggleApp: (appId: string, enabled: boolean) => apiFetch<Ok<"toggleApp">>(`/apps/${enc(appId)}/toggle`, { method: "POST", body: { enabled } }),
   deployApp: (appId: string, body: Body<"deployApp">) => apiFetch<Ok<"deployApp">>(`/apps/${enc(appId)}/deploy`, { method: "POST", body }),
   cancelAppJobs: (appId: string) => apiFetch<Ok<"cancelAppJobs">>(`/apps/${enc(appId)}/cancel`, { method: "POST" }),

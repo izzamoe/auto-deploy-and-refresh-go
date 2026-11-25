@@ -26,3 +26,9 @@ if (typeof window !== "undefined" && !window.matchMedia) {
 			dispatchEvent: () => false,
 		}) as MediaQueryList;
 }
+
+// The English dictionary is a lazily loaded chunk in the app; tests register it up front so
+// locale switching stays synchronous under act().
+import { registerDictionary } from "@/i18n";
+import { en } from "@/i18n/en";
+registerDictionary("en", en);

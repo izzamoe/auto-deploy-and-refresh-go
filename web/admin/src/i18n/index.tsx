@@ -7,7 +7,6 @@
 // translated content (no flash of the wrong language).
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { PropsWithChildren } from "react";
-import { en } from "./en";
 import { id } from "./id";
 import type { MessageKey } from "./id";
 
@@ -18,7 +17,21 @@ export const LOCALES: readonly Locale[] = ["id", "en"];
 export const DEFAULT_LOCALE: Locale = "id";
 export const LOCALE_STORAGE_KEY = "ad.locale";
 
-export const DICTIONARIES: Record<Locale, Record<MessageKey, string>> = { id, en };
+type Dictionary = Record<MessageKey, string>;
+
+// `id` (the default) ships in the shared bundle; `en` is a separate chunk fetched only when
+// the English UI is needed, so the initial JS (Q-20) does not carry both languages.
+export const DICTIONARIES: Partial<Record<Locale, Dictionary>> = { id };
+
+export function registerDictionary(locale: Locale, dict: Dictionary) {
+  DICTIONARIES[locale] = dict;
+}
+
+/** Resolves once the dictionary of `locale` is available (no-op when already loaded). */
+export async function loadDictionary(locale: Locale): Promise<void> {
+  if (DICTIONARIES[locale]) return;
+  if (locale === "en") registerDictionary("en", (await import("./en")).en);
+}
 
 const INTL_TAG: Record<Locale, string> = { id: "id-ID", en: "en-GB" };
 
@@ -37,7 +50,7 @@ export function detectLocale(stored: string | null | undefined, languages: reado
 }
 
 export function translate(locale: Locale, key: MessageKey, params?: Params): string {
-  const template = DICTIONARIES[locale][key] ?? DICTIONARIES[DEFAULT_LOCALE][key] ?? key;
+  const template = DICTIONARIES[locale]?.[key] ?? id[key] ?? key;
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (whole, name: string) => (name in params ? String(params[name]) : whole));
 }
@@ -46,7 +59,7 @@ export function translate(locale: Locale, key: MessageKey, params?: Params): str
 // to the generic message instead of echoing server text.
 export function translateError(locale: Locale, code: string | undefined, status?: number): string {
   const key = `error.${code ?? ""}` as MessageKey;
-  if (code && key in DICTIONARIES[locale]) return translate(locale, key);
+  if (code && key in (DICTIONARIES[locale] ?? id)) return translate(locale, key);
   if (status !== undefined && status >= 400 && !code) return translate(locale, "error.http", { status });
   return translate(locale, "error.unknown");
 }
@@ -119,8 +132,23 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
-    setLocaleState(detectLocale(readStored(), languages));
-    setReady(true);
+    const target = detectLocale(readStored(), languages);
+    if (DICTIONARIES[target]) {
+      setLocaleState(target); // already loaded: apply in the same pass
+      setReady(true);
+      return;
+    }
+    let cancelled = false;
+    void loadDictionary(target)
+      .catch(() => undefined) // chunk failed to load: stay on the default language
+      .then(() => {
+        if (cancelled) return;
+        setLocaleState(DICTIONARIES[target] ? target : DEFAULT_LOCALE);
+        setReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -128,7 +156,8 @@ export function I18nProvider({ children }: PropsWithChildren) {
   }, [locale]);
 
   const setLocale = useCallback((next: Locale) => {
-    setLocaleState(next);
+    if (DICTIONARIES[next]) setLocaleState(next);
+    else void loadDictionary(next).then(() => setLocaleState(next)).catch(() => undefined);
     try {
       window.localStorage.setItem(LOCALE_STORAGE_KEY, next);
     } catch {

@@ -12,6 +12,7 @@ import {
   I18nProvider,
   LOCALE_STORAGE_KEY,
   detectLocale,
+  loadDictionary,
   translate,
   translateError,
   useI18n,
@@ -214,5 +215,20 @@ describe("no literal UI strings in components", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("lazy English dictionary (bundle budget Q-20)", () => {
+  it("the en dictionary is fetched on demand and then used; before that translate falls back to id", async () => {
+    const loaded = DICTIONARIES.en;
+    delete DICTIONARIES.en;
+    try {
+      expect(translate("en", "common.save")).toBe(id["common.save"]); // not loaded yet: default language
+      await loadDictionary("en");
+      expect(DICTIONARIES.en?.["common.save"]).toBe(en["common.save"]);
+      expect(translate("en", "common.save")).toBe(en["common.save"]);
+    } finally {
+      DICTIONARIES.en = loaded;
+    }
   });
 });
