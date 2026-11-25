@@ -1,9 +1,19 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+
+// Password the harness sets for the generated admin account (the first password is
+// random and only exists in <db dir>/initial-admin-password, Q-3).
+const ADMIN_USERNAME = 'admin';
+const ADMIN_PASSWORD = 'playwright-secret';
+const WEBHOOK_SECRET = 'bootstrap-secret';
+
+// Where the signed-in session is saved for the tests (see playwright.config.js).
+const STORAGE_STATE = path.resolve(__dirname, '.auth', 'admin.json');
 
 async function getFreePort() {
   return await new Promise((resolve, reject) => {
@@ -24,13 +34,66 @@ async function getFreePort() {
   });
 }
 
+// jsonRequest performs one HTTP request with node:http, so the harness controls every
+// header (a browser-like Sec-Fetch-Site included, which fetch would refuse to set).
+function jsonRequest(method, urlString, headers = {}, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlString);
+    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const req = http.request(
+      {
+        method,
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        headers: {
+          ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}),
+          ...headers
+        }
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () =>
+          resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') })
+        );
+      }
+    );
+    req.on('error', reject);
+    if (payload) {
+      req.write(payload);
+    }
+    req.end();
+  });
+}
+
+// browserHeaders are what the SPA's same-origin fetch sends; mutations without them are
+// refused with 403 csrf_rejected (FR-011).
+const browserHeaders = (baseURL) => ({
+  'X-Admin-Request': 'true',
+  'Sec-Fetch-Site': 'same-origin',
+  Origin: baseURL
+});
+
+// sessionCookie picks the admin session cookie out of a response's Set-Cookie headers.
+function sessionCookie(res) {
+  for (const line of [].concat(res.headers['set-cookie'] || [])) {
+    const [pair] = line.split(';');
+    const idx = pair.indexOf('=');
+    const name = pair.slice(0, idx);
+    if (name === 'admin_session' || name === '__Host-admin_session') {
+      return { name, value: pair.slice(idx + 1) };
+    }
+  }
+  return null;
+}
+
 async function waitForAdmin(baseURL, timeoutMs = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
-      const response = await fetch(`${baseURL}/admin/apps`, {
-        redirect: 'manual'
-      });
+      // Unauthenticated, the session endpoint answers 401 JSON once the server is up.
+      const response = await jsonRequest('GET', `${baseURL}/admin/api/v1/session`);
       if (response.status === 401) {
         return;
       }
@@ -40,7 +103,38 @@ async function waitForAdmin(baseURL, timeoutMs = 30000) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  throw new Error(`admin UI did not become ready at ${baseURL}`);
+  throw new Error(`admin API did not become ready at ${baseURL}`);
+}
+
+// signIn logs in with the generated password, replaces it (the account starts under
+// the must-change-password gate) and returns the cookie of the reissued session.
+async function signIn(baseURL, tempDir) {
+  const passwordFile = path.join(tempDir, 'initial-admin-password');
+  const initial = (await fsp.readFile(passwordFile, 'utf8')).trim();
+  if (!initial) {
+    throw new Error(`${passwordFile} is empty`);
+  }
+
+  const login = await jsonRequest('POST', `${baseURL}/admin/api/v1/session`, browserHeaders(baseURL), {
+    username: ADMIN_USERNAME,
+    password: initial
+  });
+  const first = sessionCookie(login);
+  if (login.status !== 200 || !first) {
+    throw new Error(`login failed: ${login.status} ${login.body}`);
+  }
+
+  const change = await jsonRequest(
+    'POST',
+    `${baseURL}/admin/api/v1/account/password`,
+    { ...browserHeaders(baseURL), Cookie: `${first.name}=${first.value}` },
+    { currentPassword: initial, newPassword: ADMIN_PASSWORD }
+  );
+  const second = sessionCookie(change);
+  if (change.status !== 200 || !second) {
+    throw new Error(`password change failed: ${change.status} ${change.body}`);
+  }
+  return second;
 }
 
 module.exports = async () => {
@@ -52,7 +146,7 @@ module.exports = async () => {
   const baseURL = `http://127.0.0.1:${port}`;
 
   await new Promise((resolve, reject) => {
-    const build = spawn('go', ['build', '-o', binPath, '.'], {
+    const build = spawn('go', ['build', '-o', binPath, './cmd/server'], {
       cwd: rootDir,
       stdio: 'inherit'
     });
@@ -70,14 +164,18 @@ module.exports = async () => {
     ...process.env,
     LISTEN_ADDR: `127.0.0.1:${port}`,
     DEPLOY_QUEUE_DB_PATH: dbPath,
-    ADMIN_USERNAME: 'playwright',
-    ADMIN_PASSWORD: 'playwright-secret',
-    WEBHOOK_SECRET: 'bootstrap-secret',
+    // The harness talks plain HTTP on 127.0.0.1; the secure default (Secure cookie with
+    // the __Host- prefix) would never be sent back.
+    COOKIE_SECURE: 'false',
+    WEBHOOK_SECRET,
     DEPLOY_BINARY_PATH: '/tmp/playwright-bootstrap-binary',
     DEPLOY_SERVICE_NAME: 'playwright-bootstrap.service',
     GITHUB_REPO: 'example/playwright',
     ARTIFACT_NAME: 'playwright-artifact'
   };
+  // None of the retired account variables may leak in from the developer's shell.
+  delete env.ADMIN_USERNAME;
+  delete env.ADMIN_PASSWORD;
 
   const logPath = path.join(tempDir, 'server.log');
   const logStream = fs.createWriteStream(logPath, { flags: 'a' });
@@ -128,6 +226,7 @@ module.exports = async () => {
 
     logStream.end();
     await fsp.rm(tempDir, { recursive: true, force: true });
+    await fsp.rm(STORAGE_STATE, { force: true });
   };
 
   server.on('error', (err) => {
@@ -152,12 +251,43 @@ module.exports = async () => {
 
   await readyPromise;
 
+  let cookie;
+  try {
+    cookie = await signIn(baseURL, tempDir);
+  } catch (err) {
+    await stopServer().catch(() => {});
+    throw err;
+  }
+
+  await fsp.mkdir(path.dirname(STORAGE_STATE), { recursive: true });
+  await fsp.writeFile(
+    STORAGE_STATE,
+    JSON.stringify({
+      cookies: [
+        {
+          name: cookie.name,
+          value: cookie.value,
+          domain: '127.0.0.1',
+          path: '/',
+          expires: -1,
+          httpOnly: true,
+          secure: false,
+          sameSite: 'Strict'
+        }
+      ],
+      origins: []
+    }),
+    { mode: 0o600 }
+  );
+
   process.env.PLAYWRIGHT_BASE_URL = baseURL;
-  process.env.PLAYWRIGHT_ADMIN_USERNAME = env.ADMIN_USERNAME;
-  process.env.PLAYWRIGHT_ADMIN_PASSWORD = env.ADMIN_PASSWORD;
-  process.env.PLAYWRIGHT_WEBHOOK_SECRET = env.WEBHOOK_SECRET;
+  process.env.PLAYWRIGHT_ADMIN_USERNAME = ADMIN_USERNAME;
+  process.env.PLAYWRIGHT_ADMIN_PASSWORD = ADMIN_PASSWORD;
+  process.env.PLAYWRIGHT_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
   return async () => {
     await stopServer();
   };
 };
+
+module.exports.STORAGE_STATE = STORAGE_STATE;

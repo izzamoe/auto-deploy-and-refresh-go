@@ -21,6 +21,7 @@ skills-lock.json
 # Playwright local harness artifacts
 node_modules/
 test-results/
+playwright/.auth/
 playwright-report/
 
 # QA/test screenshots

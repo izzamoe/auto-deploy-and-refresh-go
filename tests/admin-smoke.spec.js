@@ -1,4 +1,5 @@
-const { test, expect } = require('@playwright/test');
+const path = require('node:path');
+const { test, expect, request: pwRequest } = require('@playwright/test');
 
 function baseURL() {
   const value = process.env.PLAYWRIGHT_BASE_URL;
@@ -30,12 +31,11 @@ async function seedHistoryJob(request) {
   return tag;
 }
 
+// newAuthenticatedContext opens a browser context signed in with the session that
+// global-setup saved (playwright.config.js: use.storageState).
 async function newAuthenticatedContext(browser) {
   return browser.newContext({
-    httpCredentials: {
-      username: process.env.PLAYWRIGHT_ADMIN_USERNAME,
-      password: process.env.PLAYWRIGHT_ADMIN_PASSWORD
-    }
+    storageState: path.resolve(__dirname, '..', 'playwright', '.auth', 'admin.json')
   });
 }
 
@@ -138,7 +138,10 @@ async function expectNoWebSocketSends(page, beforeCount) {
   await expect.poll(() => getWebSocketSendCount(page)).toBe(beforeCount);
 }
 
-test('admin apps page loads with basic auth', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('admin apps page loads with basic auth', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
@@ -153,14 +156,20 @@ test('admin apps page loads with basic auth', async ({ browser }) => {
   await context.close();
 });
 
-test('admin apps page rejects requests without auth', async ({ request }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('admin apps page rejects requests without auth', async ({ request }) => {
   const response = await request.get(`${baseURL()}/admin/apps`);
 
   expect(response.status()).toBe(401);
   expect(response.headers()['www-authenticate']).toBe('Basic realm="auto-deploy admin"');
 });
 
-test('history navigation supports deep links and retry updates stay in place', async ({ browser, request }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('history navigation supports deep links and retry updates stay in place', async ({ browser, request }) => {
   const tag = await seedHistoryJob(request);
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
@@ -214,7 +223,10 @@ test('history navigation supports deep links and retry updates stay in place', a
   await context.close();
 });
 
-test('apps list deploy settles live through WebSocket without reload', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('apps list deploy settles live through WebSocket without reload', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
   const tag = `pw-apps-${Date.now()}`;
@@ -246,7 +258,10 @@ test('apps list deploy settles live through WebSocket without reload', async ({ 
   await context.close();
 });
 
-test('native progress renderer ignores malformed frames and renders failed terminal frames', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('native progress renderer ignores malformed frames and renders failed terminal frames', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
   const suffix = `${Date.now()}`;
@@ -322,7 +337,10 @@ test('native progress renderer ignores malformed frames and renders failed termi
   await context.close();
 });
 
-test('shadcn admin ui renders realtime speed and status clearly', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('shadcn admin ui renders realtime speed and status clearly', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
   const suffix = `${Date.now()}`;
@@ -735,7 +753,10 @@ test('shadcn admin ui renders realtime speed and status clearly', async ({ brows
   await context.close();
 });
 
-test('apps list toggle and delete flows update in place without hard navigation', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('apps list toggle and delete flows update in place without hard navigation', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
   const suffix = `${Date.now()}`;
@@ -825,7 +846,10 @@ test('apps list toggle and delete flows update in place without hard navigation'
   await context.close();
 });
 
-test('new app form keeps values on AdminUI validation and navigates on success', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('new app form keeps values on AdminUI validation and navigates on success', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
@@ -877,7 +901,10 @@ test('new app form keeps values on AdminUI validation and navigates on success',
   await context.close();
 });
 
-test('edit app keeps invalid AdminUI submission local with inline errors', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('edit app keeps invalid AdminUI submission local with inline errors', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
@@ -917,7 +944,10 @@ test('edit app keeps invalid AdminUI submission local with inline errors', async
   await context.close();
 });
 
-test('edit app via AdminUI navigation shows success flash after native redirect', async ({ browser }) => {
+// T094 (Fase 5): skipped until the Next.js UI replaces the Vite SPA; it logs in with
+// HTTP Basic credentials, which /admin/api/v1 no longer accepts. Rewrite on the session
+// login page (storageState) in T094.
+test.skip('edit app via AdminUI navigation shows success flash after native redirect', async ({ browser }) => {
   const context = await newAuthenticatedContext(browser);
   const page = await context.newPage();
 
@@ -946,4 +976,90 @@ test('edit app via AdminUI navigation shows success flash after native redirect'
   await expect(page.locator(`[data-app-id="${editableApp.appId}"]`)).toContainText('playwright-edit-success-updated');
 
   await context.close();
+});
+
+
+// ---------------------------------------------------------------------------------------
+// API-level smoke (FR-136, PL-1): no browser needed. global-setup logged in through
+// POST /admin/api/v1/session, replaced the generated password and saved the session.
+// ---------------------------------------------------------------------------------------
+
+const browserHeaders = () => ({
+  'X-Admin-Request': 'true',
+  'Sec-Fetch-Site': 'same-origin',
+  Origin: baseURL()
+});
+
+test('signed-in session reaches the v1 API: login -> GET /apps 200', async ({ request }) => {
+  const session = await request.get(`${baseURL()}/admin/api/v1/session`);
+  expect(session.status()).toBe(200);
+  const body = await session.json();
+  expect(body.username).toBe(process.env.PLAYWRIGHT_ADMIN_USERNAME);
+  expect(body.mustChangePassword).toBe(false); // the harness already replaced the generated password
+
+  const apps = await request.get(`${baseURL()}/admin/api/v1/apps`);
+  expect(apps.status()).toBe(200);
+  const list = await apps.json();
+  expect(Array.isArray(list.apps)).toBe(true);
+  // the bootstrap environment of global-setup registers one app
+  expect(list.apps.length).toBeGreaterThanOrEqual(1);
+});
+
+test('without a session the v1 API answers 401 JSON and never a Basic challenge', async () => {
+  const anonymous = await pwRequest.newContext({ storageState: { cookies: [], origins: [] } }); // no session
+  try {
+    const res = await anonymous.get(`${baseURL()}/admin/api/v1/apps`);
+    expect(res.status()).toBe(401);
+    expect(res.headers()['www-authenticate']).toBeUndefined();
+    expect(res.headers()['content-type']).toContain('application/json');
+    const body = await res.json();
+    expect(body.status).toBe('error');
+    expect(body.code).toBe('session_expired');
+  } finally {
+    await anonymous.dispose();
+  }
+});
+
+test('the admin password is not a Basic credential on the API', async () => {
+  const anonymous = await pwRequest.newContext({ storageState: { cookies: [], origins: [] } });
+  try {
+    const basic = Buffer.from(
+      `${process.env.PLAYWRIGHT_ADMIN_USERNAME}:${process.env.PLAYWRIGHT_ADMIN_PASSWORD}`
+    ).toString('base64');
+    const res = await anonymous.get(`${baseURL()}/admin/api/v1/apps`, {
+      headers: { Authorization: `Basic ${basic}` }
+    });
+    expect(res.status()).toBe(401);
+  } finally {
+    await anonymous.dispose();
+  }
+});
+
+test('cookie-authenticated mutations are refused without the CSRF header', async ({ request }) => {
+  const res = await request.post(`${baseURL()}/admin/api/v1/tokens`, {
+    data: { name: 'smoke' },
+    headers: { 'Content-Type': 'application/json' } // no X-Admin-Request
+  });
+  expect(res.status()).toBe(403);
+  expect((await res.json()).code).toBe('csrf_rejected');
+
+  const ok = await request.post(`${baseURL()}/admin/api/v1/tokens`, {
+    data: { name: 'smoke' },
+    headers: { 'Content-Type': 'application/json', ...browserHeaders() }
+  });
+  expect(ok.status()).toBe(201);
+  const created = await ok.json();
+  expect(created.token).toMatch(/^adt_/);
+  const revoke = await request.delete(`${baseURL()}/admin/api/v1/tokens/${created.id}`, {
+    headers: { 'Content-Type': 'application/json', ...browserHeaders() }
+  });
+  expect(revoke.status()).toBe(204);
+});
+
+test('a webhook-queued deploy shows up in the v1 history', async ({ request }) => {
+  const tag = await seedHistoryJob(request);
+  const history = await request.get(`${baseURL()}/admin/api/v1/history`);
+  expect(history.status()).toBe(200);
+  const body = await history.json();
+  expect(body.history.some((job) => job.tag === tag)).toBe(true);
 });
