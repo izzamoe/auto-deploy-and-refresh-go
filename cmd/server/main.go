@@ -224,6 +224,7 @@ func main() {
 		slog.Warn("COOKIE_SECURE=false: the session cookie is sent over plain HTTP; use this only for local development")
 	}
 	clientIPs := auth.NewClientIPResolver(serviceCfg.TrustedProxyCIDRs)
+	auth.SetAuditClientIP(clientIPs)
 	authMW := auth.Middleware(auth.MiddlewareConfig{
 		Sessions:     sessionMgr,
 		Tokens:       apiTokens,

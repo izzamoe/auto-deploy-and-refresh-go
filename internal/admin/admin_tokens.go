@@ -95,7 +95,7 @@ func (h *TokensHandler) CreateHertz(ctx context.Context, c *app.RequestContext) 
 		if id, err = store.NewAPITokenID(); err == nil {
 			row := store.APIToken{ID: id, UserID: p.UserID, Name: name, TokenHash: hash, Prefix: prefix, CreatedAt: time.Now().UTC()}
 			if err = h.tokens.Create(&row); err == nil {
-				slog.Info("api token created", "token_id", id, "user_id", p.UserID, "request_id", httpx.FromContext(c))
+				auth.AuditRequest(c, auth.EventTokenCreated, p.UserID, "tokenId", id, "tokenName", name)
 				c.JSON(201, apiTokenCreatedJSON{apiTokenJSON: toTokenJSON(row), Token: full})
 				return
 			}
@@ -122,7 +122,7 @@ func (h *TokensHandler) RevokeHertz(ctx context.Context, c *app.RequestContext) 
 		httpx.WriteError(c, 500, httpx.CodeInternalError, "Failed to revoke token")
 		return
 	}
-	slog.Info("api token revoked", "token_id", id, "user_id", p.UserID, "request_id", httpx.FromContext(c))
+	auth.AuditRequest(c, auth.EventTokenRevoked, p.UserID, "tokenId", id)
 	c.Status(204)
 }
 

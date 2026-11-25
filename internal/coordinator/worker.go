@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
@@ -352,6 +353,7 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		if rbErr := c.q.MarkRolledBack(jobID); rbErr != nil {
 			slog.Error("coordinator: mark rolled back failed", "id", jobID, "err", rbErr)
 		}
+		auth.AuditBackground(auth.EventDeployRollback, "appId", app.ID, "jobId", jobID, "tag", tag)
 	}
 	if statusBefore == "in_progress" || statusBefore == "cancel_requested" {
 		c.publishJobStatus(app, jobID, tag, statusBefore, success, rolledBack)

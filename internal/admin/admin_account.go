@@ -89,7 +89,7 @@ func (h *AccountHandler) ChangePasswordHertz(ctx context.Context, c *app.Request
 		httpx.WriteError(c, 500, httpx.CodeInternalError, "Failed to update password")
 		return
 	}
-	slog.Info("password changed", "user_id", user.ID, "request_id", httpx.FromContext(c))
+	auth.AuditRequest(c, auth.EventPasswordChanged, user.ID)
 	h.removeInitialPasswordFile()
 	h.reissue(c, p.SessionID, user.ID)
 	c.JSON(200, map[string]string{"status": "ok", "message": "Password updated"})
@@ -126,7 +126,7 @@ func (h *AccountHandler) ChangeUsernameHertz(ctx context.Context, c *app.Request
 		httpx.WriteError(c, 500, httpx.CodeInternalError, "Failed to update username")
 		return
 	}
-	slog.Info("username changed", "user_id", user.ID, "request_id", httpx.FromContext(c))
+	auth.AuditRequest(c, auth.EventUsernameChanged, user.ID)
 	h.reissue(c, p.SessionID, user.ID)
 	c.JSON(200, map[string]string{"status": "ok", "message": "Username updated"})
 }
@@ -144,7 +144,7 @@ func (h *AccountHandler) RevokeAllSessionsHertz(ctx context.Context, c *app.Requ
 		httpx.WriteError(c, 500, httpx.CodeInternalError, "Failed to revoke sessions")
 		return
 	}
-	slog.Info("all other sessions revoked", "user_id", p.UserID, "request_id", httpx.FromContext(c))
+	auth.AuditRequest(c, auth.EventSessionsRevoked, p.UserID)
 	h.reissue(c, p.SessionID, p.UserID)
 	c.JSON(200, map[string]string{"status": "ok", "message": "Other sessions revoked"})
 }

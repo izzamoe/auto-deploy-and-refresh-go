@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/deploy"
 	"github.com/izzamoe/auto-deploy/internal/httpx"
@@ -485,6 +486,7 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 
+	auth.AuditRequest(c, auth.EventAppCreated, "", "appId", app.ID, "name", app.Name, "serviceName", app.ServiceName)
 	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app), "webhookSecret": secret})
 }
 
@@ -516,6 +518,7 @@ func (h *AdminAPIHandler) RotateWebhookSecretHertz(ctx context.Context, c *app.R
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Internal error rotating secret")
 		return
 	}
+	auth.AuditRequest(c, auth.EventAppSecretRotated, "", "appId", id)
 	c.JSON(consts.StatusOK, map[string]any{"secret": secret})
 }
 
@@ -580,6 +583,7 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load updated app")
 		return
 	}
+	auth.AuditRequest(c, auth.EventAppUpdated, "", "appId", id)
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
 }
 
@@ -631,6 +635,7 @@ func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestCont
 			message += "; unit file removed"
 		}
 	}
+	auth.AuditRequest(c, auth.EventAppDeleted, "", "appId", id)
 	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: message})
 }
 
@@ -712,6 +717,7 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 		return
 	}
 
+	auth.AuditRequest(c, auth.EventDeployManual, "", "appId", c.Param("id"), "tag", body.Tag)
 	c.JSON(consts.StatusAccepted, map[string]string{"status": "queued", "tag": body.Tag})
 }
 
@@ -831,6 +837,7 @@ func (h *AdminAPIHandler) RetryHistoryJobHertz(ctx context.Context, c *app.Reque
 		return
 	}
 
+	auth.AuditRequest(c, auth.EventDeployManual, "", "retryJobId", retryJobID, "retryOf", c.Param("id"))
 	c.JSON(consts.StatusAccepted, map[string]string{"status": "queued", "jobId": retryJobID})
 }
 
@@ -845,6 +852,7 @@ func (h *AdminAPIHandler) CancelJobHertz(ctx context.Context, c *app.RequestCont
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to request cancel")
 		return
 	}
+	auth.AuditRequest(c, auth.EventDeployCancel, "", "jobId", c.Param("job_id"), "outcome", string(result.Outcome))
 	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelJobResponse(result)})
 }
 
@@ -863,6 +871,7 @@ func (h *AdminAPIHandler) CancelAppHertz(ctx context.Context, c *app.RequestCont
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to request cancel")
 		return
 	}
+	auth.AuditRequest(c, auth.EventDeployCancel, "", "appId", appID)
 	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelAppResponse(result)})
 }
 

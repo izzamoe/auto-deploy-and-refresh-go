@@ -87,7 +87,7 @@ func (h *SessionHandler) CreateHertz(ctx context.Context, c *app.RequestContext)
 
 	ip := h.cfg.ClientIP.FromContext(c)
 	if ok, retry := h.cfg.Limiter.Check(ip, username); !ok {
-		slog.Warn("login rate limited", "ip", ip, "username", clipForLog(username), "request_id", httpx.FromContext(c))
+		auth.AuditRequest(c, auth.EventRateLimited, "", "username", clipForLog(username))
 		auth.WriteRateLimited(c, retry)
 		return
 	}
@@ -101,7 +101,7 @@ func (h *SessionHandler) CreateHertz(ctx context.Context, c *app.RequestContext)
 	}
 	if !ok {
 		h.cfg.Limiter.RecordFailure(ip, username)
-		slog.Warn("login failed", "ip", ip, "username", clipForLog(username), "request_id", httpx.FromContext(c))
+		auth.AuditRequest(c, auth.EventLoginFailed, "", "username", clipForLog(username))
 		httpx.WriteError(c, 401, httpx.CodeUnauthorized, "Invalid username or password")
 		return
 	}
@@ -114,7 +114,7 @@ func (h *SessionHandler) CreateHertz(ctx context.Context, c *app.RequestContext)
 	}
 	h.cfg.Limiter.RecordSuccess(ip, username)
 	h.cfg.Sessions.SetCookie(c, iss)
-	slog.Info("login succeeded", "user_id", user.ID, "ip", ip, "request_id", httpx.FromContext(c))
+	auth.AuditRequest(c, auth.EventLoginSucceeded, user.ID)
 	c.JSON(200, sessionJSON{
 		Username:           user.Username,
 		MustChangePassword: user.MustChangePassword,
@@ -152,7 +152,7 @@ func (h *SessionHandler) DeleteHertz(ctx context.Context, c *app.RequestContext)
 		return
 	}
 	h.cfg.Sessions.ClearCookie(c)
-	slog.Info("logout", "user_id", p.UserID, "request_id", httpx.FromContext(c))
+	auth.AuditRequest(c, auth.EventLogout, p.UserID)
 	c.Status(204)
 }
 
