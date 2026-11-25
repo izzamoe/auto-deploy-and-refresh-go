@@ -99,6 +99,10 @@ func (h *GitHubConfigHandler) responseFor(storedToken string) githubConfigRespon
 
 type githubConfigRequest struct {
 	Token string `json:"token"`
+	// Clear (OpenAPI) / ClearToken (FR-029) remove the stored token; the environment
+	// token, if any, becomes the effective one again.
+	Clear      bool `json:"clear"`
+	ClearToken bool `json:"clearToken"`
 }
 
 // GetGitHubConfigHertz returns the current GitHub token, masked.
@@ -135,6 +139,9 @@ func (h *GitHubConfigHandler) SaveGitHubConfigHertz(ctx context.Context, c *app.
 	token := strings.TrimSpace(body.Token)
 	if token == "" || token == maskBotToken(current.Token) || token == maskBotToken(h.envToken) {
 		token = current.Token
+	}
+	if body.Clear || body.ClearToken {
+		token = ""
 	}
 
 	if err := h.store.Save(store.GitHubConfig{Token: token}); err != nil {
