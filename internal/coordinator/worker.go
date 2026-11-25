@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -251,6 +252,11 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 
 	if markErr := c.q.MarkDone(jobID, success, errMsg, summaryPtr); markErr != nil {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
+	}
+	if errors.Is(err, store.ErrRolledBack) {
+		if rbErr := c.q.MarkRolledBack(jobID); rbErr != nil {
+			slog.Error("coordinator: mark rolled back failed", "id", jobID, "err", rbErr)
+		}
 	}
 
 	c.captureJobLog(app.ServiceName, jobID, deployStart)

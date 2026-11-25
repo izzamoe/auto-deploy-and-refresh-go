@@ -366,8 +366,10 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 	slog.Info("restarting service", "service", app.ServiceName)
 	tracker.SetPhase(app.ID, progress.ProgressStageRestarting)
 	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("restart service: %w: %s", err, string(out))
+		// B9: the new binary is installed but the service will not start. Put
+		// the previous binary back and restart it instead of leaving it down.
+		cause := fmt.Errorf("restart service: %w: %s", err, strings.TrimSpace(string(out)))
+		return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, cause)
 	}
 	if cancelErr := checkpointRollbackInstalled(control, jobID, cancel.DeployPhaseRestarting, app, backupPath, backupCreated); cancelErr != nil {
 		if errors.Is(cancelErr, errDeployCanceled) {
@@ -397,22 +399,33 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 	}
 
 	slog.Error("rolling back", "reason", "service failed health check")
+	return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, errors.New("service failed to restart after deploy"))
+}
+
+// rollbackInstalled restores the previous binary (backupPath -> app.BinaryPath)
+// after the freshly installed one failed to run, and restarts the service. It
+// always finishes the tracker as failed and returns an error that starts with
+// cause and ends with the outcome of the rollback:
+//   - no backup: "rollback unavailable: no previous binary backup";
+//   - the restore or the restart of the old binary failed: the failure is
+//     reported verbatim and the error does NOT wrap store.ErrRolledBack;
+//   - success: "rolled back ..." and the error wraps store.ErrRolledBack so the
+//     coordinator sets deploy_jobs.rolled_back = 1.
+//
+// The failed new binary is replaced by the rename, so no .bak is left behind.
+func rollbackInstalled(app *store.App, tracker *progress.ProgressTracker, backupPath string, backupCreated bool, cause error) error {
 	tracker.SetPhase(app.ID, progress.ProgressStageRollback)
+	defer tracker.Fail(app.ID)
 	if !backupCreated {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("rollback unavailable: no previous binary backup")
+		return fmt.Errorf("%w; rollback unavailable: no previous binary backup", cause)
 	}
 	if err := renameFile(backupPath, app.BinaryPath); err != nil {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("rollback rename failed: %w", err)
+		return fmt.Errorf("%w; rollback rename failed: %v", cause, err)
 	}
 	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
-		tracker.Fail(app.ID)
-		return summary, fmt.Errorf("rollback restart failed: %w: %s", err, string(out))
+		return fmt.Errorf("%w; rollback restart failed: %v: %s", cause, err, strings.TrimSpace(string(out)))
 	}
-
-	tracker.Fail(app.ID)
-	return summary, fmt.Errorf("service failed to restart after deploy, rolled back")
+	return fmt.Errorf("%w; rolled back to the previous binary and restarted it: %w", cause, store.ErrRolledBack)
 }
 
 func deployDownloadContext(jobID string, control *cancel.CancelService) (context.Context, func()) {

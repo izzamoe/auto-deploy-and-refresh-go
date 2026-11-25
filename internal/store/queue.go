@@ -426,6 +426,18 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 	return err
 }
 
+// ErrRolledBack is wrapped by the error a deploy returns when it failed AFTER
+// installing the new binary and then restored and restarted the previous one
+// (B9). The coordinator turns it into deploy_jobs.rolled_back = 1.
+var ErrRolledBack = errors.New("rolled back to the previous binary")
+
+// MarkRolledBack flags job id as rolled back (deploy_jobs.rolled_back = 1). It
+// is idempotent and a no-op for unknown ids.
+func (q *DeployQueue) MarkRolledBack(id string) error {
+	_, err := q.db.Exec(`UPDATE deploy_jobs SET rolled_back = 1 WHERE id = ?`, id)
+	return err
+}
+
 // SaveJobLog stores captured service logs (e.g. journalctl output) for a job,
 // so a failed deploy's health-check logs can be reviewed later. It is a
 // best-effort UPDATE keyed by job id; unknown ids are a no-op.
