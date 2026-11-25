@@ -1,0 +1,104 @@
+/*
+ * Design tokens (T082, FR-102, FR-103). Style reference: reference/design/ref-dashboard-green.png
+ * (sage-green dashboard on a cream frame) used as a STYLE only; no asset is copied.
+ *
+ * Every colour is a plain #RRGGBB so src/styles/contrast.test.ts can parse this file and
+ * assert WCAG 2.x AA for each foreground/background pair in BOTH themes. Change a value
+ * here and the test tells whether the pair still passes.
+ *
+ * Light values follow note 06 §3-4 where they pass AA; two were darkened because they did
+ * not once measured on the frame colour (see contrast.test.ts for the measured ratios).
+ */
+
+:root {
+  /* Surfaces */
+  --background: #eae9e3; /* the cream "frame" around the cards */
+  --foreground: #161616;
+  --card: #ffffff;
+  --card-foreground: #161616;
+  --popover: #ffffff;
+  --popover-foreground: #161616;
+
+  /* Brand */
+  --primary: #4e7358; /* button fill, white text 5.36:1 */
+  --primary-foreground: #ffffff;
+  --primary-text: #3f6650; /* green text on card / frame */
+  --gradient-from: #557c60; /* accent card gradient, white text on BOTH stops (#5b8266 gave 4.35:1) */
+  --gradient-to: #3e5c47;
+  --gradient-foreground: #ffffff;
+
+  /* Neutral */
+  --secondary: #f3f2ee;
+  --secondary-foreground: #1f1f22;
+  --muted: #f3f2ee;
+  --muted-foreground: #62625d; /* note 06 proposed #6b6b67; darkened to pass on the frame */
+  --border: #dad9d1;
+  --input: #8a8a83; /* control boundary, >= 3:1 against the card */
+  --ring: #4e7358;
+
+  /* Status pills */
+  --accent: #e3ede6;
+  --accent-foreground: #3f6650;
+  --success-soft: #e3ede6;
+  --success-soft-foreground: #3f6650;
+  --destructive: #b3261e;
+  --destructive-foreground: #ffffff;
+  --danger-soft: #fbe3e3;
+  --danger-soft-foreground: #b3261e;
+  --warning-soft: #fbefd5;
+  --warning-soft-foreground: #7a4e00;
+  --info-soft: #e4ecf6;
+  --info-soft-foreground: #2d4f7c;
+
+  /* Active navigation item (dark disc, light icon) */
+  --nav: #1f1f22;
+  --nav-foreground: #ffffff;
+
+  /* Shape: --radius is the button radius (0.625rem); frame 2rem, card 1.5rem and pill
+     radii are constants in globals.css (@theme). */
+  --radius: 0.625rem;
+  --card-shadow: 0 4px 24px rgb(0 0 0 / 0.04);
+}
+
+.dark {
+  /* Derived dark theme: green-charcoal, same hue family as the light theme. */
+  --background: #121614;
+  --foreground: #ecedea;
+  --card: #1b211e;
+  --card-foreground: #ecedea;
+  --popover: #1b211e;
+  --popover-foreground: #ecedea;
+
+  --primary: #4e7358;
+  --primary-foreground: #ffffff;
+  --primary-text: #9ccba8;
+  --gradient-from: #3e5c47;
+  --gradient-to: #2c4233;
+  --gradient-foreground: #ffffff;
+
+  --secondary: #232b27;
+  --secondary-foreground: #ecedea;
+  --muted: #232b27;
+  --muted-foreground: #a3a8a3;
+  --border: #2a322e;
+  --input: #7d857f;
+  --ring: #8fbf9c;
+
+  --accent: #24332a;
+  --accent-foreground: #a9cdb3;
+  --success-soft: #24332a;
+  --success-soft-foreground: #a9cdb3;
+  --destructive: #b3261e;
+  --destructive-foreground: #ffffff;
+  --danger-soft: #3a1f1f;
+  --danger-soft-foreground: #f2b8b5;
+  --warning-soft: #3b2f14;
+  --warning-soft-foreground: #ebcb8b;
+  --info-soft: #1e2a3a;
+  --info-soft-foreground: #a9c4e8;
+
+  --nav: #ecedea;
+  --nav-foreground: #121614;
+
+  --card-shadow: 0 4px 24px rgb(0 0 0 / 0.35);
+}
