@@ -348,6 +348,17 @@ func (q *DeployQueue) Close() error {
 }
 
 func (q *DeployQueue) Enqueue(appID, tag string) error {
+	return q.enqueue(appID, tag, "webhook")
+}
+
+func (q *DeployQueue) EnqueueManual(appID, tag string) error {
+	return q.enqueue(appID, tag, "manual_deploy")
+}
+
+// enqueue inserts a pending job. The per-app quota is part of the INSERT itself (one
+// statement, atomic in SQLite): a count-then-insert in two statements let concurrent
+// callers all pass the count (B24, FR-049).
+func (q *DeployQueue) enqueue(appID, tag, trigger string) error {
 	if err := validateTag(tag); err != nil {
 		return err
 	}
@@ -359,22 +370,16 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 		return ErrDuplicate
 	}
 
-	count, err := q.PendingCount(appID)
-	if err != nil {
-		return err
-	}
-	if count >= q.maxPending {
-		return ErrQueueFull
-	}
-
 	jobID, err := generateJobID()
 	if err != nil {
 		return err
 	}
 
-	_, err = q.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'webhook')`,
-		jobID, appID, tag,
+	res, err := q.db.Exec(
+		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type)
+		 SELECT ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', ?
+		 WHERE (SELECT COUNT(*) FROM deploy_jobs WHERE app_id = ? AND status = 'pending') < ?`,
+		jobID, appID, tag, trigger, appID, q.maxPending,
 	)
 	q.InvalidateActiveJobsCache()
 	// The partial UNIQUE index is the backstop for the check-then-insert race:
@@ -382,49 +387,16 @@ func (q *DeployQueue) Enqueue(appID, tag string) error {
 	if isUniqueViolation(err) {
 		return ErrDuplicate
 	}
-	if err == nil {
-		q.enqueued()
-	}
-	return err
-}
-
-func (q *DeployQueue) EnqueueManual(appID, tag string) error {
-	if err := validateTag(tag); err != nil {
-		return err
-	}
-	dup, err := q.IsDuplicate(appID, tag)
 	if err != nil {
 		return err
 	}
-	if dup {
-		return ErrDuplicate
-	}
-
-	count, err := q.PendingCount(appID)
-	if err != nil {
-		return err
-	}
-	if count >= q.maxPending {
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n == 0 {
 		return ErrQueueFull
 	}
-
-	jobID, err := generateJobID()
-	if err != nil {
-		return err
-	}
-
-	_, err = q.db.Exec(
-		`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), ?, ?, 'pending', 'manual_deploy')`,
-		jobID, appID, tag,
-	)
-	q.InvalidateActiveJobsCache()
-	if isUniqueViolation(err) {
-		return ErrDuplicate
-	}
-	if err == nil {
-		q.enqueued()
-	}
-	return err
+	q.enqueued()
+	return nil
 }
 
 func (q *DeployQueue) DequeueNext(appID string) (id, tag string, err error) {
