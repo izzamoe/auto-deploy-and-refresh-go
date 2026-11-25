@@ -20,10 +20,15 @@ admin-ui:
 	npm ci
 	npm run admin:build
 
-# Next dev server (HMR) on :3000 under /admin. T081 adds cmd/devproxy so API and
-# WebSocket calls reach the Go backend; until then this serves the UI only.
+# Development (D17): open http://127.0.0.1:8080/admin/. The Go backend must listen on
+# :9000 (default LISTEN_ADDR; start it in another terminal with `go run ./cmd/server`).
+# `next dev` serves the UI with HMR on :3000; cmd/devproxy (loopback only) is the single
+# origin that sends API/events/webhook to the backend and the rest to Next.
 dev:
-	npm run admin:dev
+	@trap 'kill 0' INT TERM EXIT; \
+	npm run admin:dev & \
+	go run ./cmd/devproxy -listen 127.0.0.1:8080 -backend http://127.0.0.1:9000 -frontend http://127.0.0.1:3000 & \
+	wait
 
 build: admin-ui
 	go build $(RELEASE_GOFLAGS) -ldflags "$(LDFLAGS)" -o auto-deploy ./cmd/server/
