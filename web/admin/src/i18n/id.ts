@@ -12,12 +12,15 @@ import { idForm } from "./id/form";
 
 // The COMPLETE dictionary: the source of the `MessageKey` type and of the tests. The app itself
 // never imports this file at runtime (it would pull every page's text into the shared bundle).
+import { idHistory } from "./id/history";
+
 export const id = {
   ...idCore,
   ...idDashboard,
   ...idApps,
   ...idUnit,
   ...idForm,
+  ...idHistory,
 } as const;
 
 export type MessageKey = keyof typeof id;
