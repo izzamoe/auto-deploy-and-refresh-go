@@ -198,6 +198,17 @@ func (q *DeployQueue) Migrate() error {
 		return fmt.Errorf("deploy_queue: create index: %w", err)
 	}
 
+	// B13/FR-034: backfill legacy rows BEFORE the active-unique index exists (legacy
+	// data may hold the same tag active twice; the dedup below demotes the extras and
+	// only then is the index created), and never while a rows cursor is open: the
+	// database has a single connection (MaxOpenConns(1)), so an Exec issued under an
+	// open cursor waits for itself forever.
+	if legacyExists && !newExists {
+		if err := q.backfillLegacyQueue(); err != nil {
+			return err
+		}
+	}
+
 	// A partial UNIQUE index makes the database the final arbiter of "one active
 	// job per (app_id, tag)". IsDuplicate's check-then-insert has a race window
 	// (two concurrent webhooks can both pass the check, then both insert); this
@@ -233,42 +244,70 @@ func (q *DeployQueue) Migrate() error {
 		return fmt.Errorf("deploy_queue: create active-unique index: %w", err)
 	}
 
-	if legacyExists && !newExists {
-		rows, err := q.db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)
-		if err != nil {
-			return fmt.Errorf("deploy_queue: read legacy rows: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var tag, status, errMsg string
-			var createdAt, updatedAt time.Time
-			if err := rows.Scan(&tag, &status, &errMsg, &createdAt, &updatedAt); err != nil {
-				return fmt.Errorf("deploy_queue: scan legacy row: %w", err)
-			}
-			jobID, err := generateJobID()
-			if err != nil {
-				return err
-			}
-			var nullErrMsg *string
-			if errMsg != "" {
-				nullErrMsg = &errMsg
-			}
-			_, err = q.db.Exec(
-				`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, error_msg, created_at, updated_at) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), 'legacy', ?, ?, 'webhook', ?, ?, ?)`,
-				jobID, tag, status, nullErrMsg, createdAt, updatedAt,
-			)
-			if err != nil {
-				return fmt.Errorf("deploy_queue: backfill legacy row: %w", err)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("deploy_queue: iterate legacy rows: %w", err)
-		}
-	}
-
 	q.InvalidateActiveJobsCache()
 	return nil
+}
+
+// legacyQueueRow is one row of the pre-multi-app deploy_queue table.
+type legacyQueueRow struct {
+	tag, status, errMsg  string
+	createdAt, updatedAt time.Time
+}
+
+// backfillLegacyQueue copies the legacy deploy_queue rows into deploy_jobs (app
+// "legacy") in ONE transaction: all rows or none. The legacy rows are read fully,
+// and the cursor closed, before the first write.
+func (q *DeployQueue) backfillLegacyQueue() error {
+	legacy, err := q.readLegacyQueue()
+	if err != nil {
+		return err
+	}
+	tx, err := q.db.Begin()
+	if err != nil {
+		return fmt.Errorf("deploy_queue: begin legacy backfill: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+	for _, row := range legacy {
+		jobID, err := generateJobID()
+		if err != nil {
+			return err
+		}
+		var nullErrMsg *string
+		if row.errMsg != "" {
+			msg := row.errMsg
+			nullErrMsg = &msg
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO deploy_jobs (id, seq, app_id, tag, status, trigger_type, error_msg, created_at, updated_at) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM deploy_jobs), 'legacy', ?, ?, 'webhook', ?, ?, ?)`,
+			jobID, row.tag, row.status, nullErrMsg, row.createdAt, row.updatedAt,
+		); err != nil {
+			return fmt.Errorf("deploy_queue: backfill legacy row: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("deploy_queue: commit legacy backfill: %w", err)
+	}
+	return nil
+}
+
+func (q *DeployQueue) readLegacyQueue() ([]legacyQueueRow, error) {
+	rows, err := q.db.Query(`SELECT tag, status, COALESCE(error_msg, ''), created_at, updated_at FROM deploy_queue ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("deploy_queue: read legacy rows: %w", err)
+	}
+	defer rows.Close()
+	var out []legacyQueueRow
+	for rows.Next() {
+		var r legacyQueueRow
+		if err := rows.Scan(&r.tag, &r.status, &r.errMsg, &r.createdAt, &r.updatedAt); err != nil {
+			return nil, fmt.Errorf("deploy_queue: scan legacy row: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("deploy_queue: iterate legacy rows: %w", err)
+	}
+	return out, nil
 }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
