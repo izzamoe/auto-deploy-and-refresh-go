@@ -702,10 +702,15 @@ func TestDeploySuccessStageLifecycle(t *testing.T) {
 		recordStage("validating")
 		return os.Chmod(path, mode)
 	})
+	// FR-043: the backup is a hard link now (the binary path never disappears).
+	stubLink(t, func(oldpath, newpath string) error {
+		if oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak" {
+			recordStage("backup")
+		}
+		return os.Link(oldpath, newpath)
+	})
 	stubRename(t, func(oldpath, newpath string) error {
 		switch {
-		case oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak":
-			recordStage("backup")
 		case oldpath == app.BinaryPath+".tmp" && newpath == app.BinaryPath:
 			recordStage("install")
 		}
@@ -796,10 +801,14 @@ func TestDeployFailureStageLifecycle(t *testing.T) {
 		recordStage("validating")
 		return os.Chmod(path, mode)
 	})
+	stubLink(t, func(oldpath, newpath string) error {
+		if oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak" {
+			recordStage("backup")
+		}
+		return os.Link(oldpath, newpath)
+	})
 	stubRename(t, func(oldpath, newpath string) error {
 		switch {
-		case oldpath == app.BinaryPath && newpath == app.BinaryPath+".bak":
-			recordStage("backup")
 		case oldpath == app.BinaryPath+".tmp" && newpath == app.BinaryPath:
 			recordStage("install")
 		case oldpath == app.BinaryPath+".bak" && newpath == app.BinaryPath:
@@ -912,6 +921,13 @@ func stubSystemctl(t *testing.T, fn func(string, ...string) ([]byte, error)) {
 	original := runSystemctl
 	runSystemctl = fn
 	t.Cleanup(func() { runSystemctl = original })
+}
+
+func stubLink(t *testing.T, fn func(string, string) error) {
+	t.Helper()
+	original := linkFile
+	linkFile = fn
+	t.Cleanup(func() { linkFile = original })
 }
 
 func stubRename(t *testing.T, fn func(string, string) error) {

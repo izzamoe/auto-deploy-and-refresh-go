@@ -94,16 +94,16 @@ func TestWorkerCancelAfterBackupRestoresBackupAndMarksCanceled(t *testing.T) {
 	}
 	restoreGlobals := stubDeployGlobals(t)
 	defer restoreGlobals()
-	originalRename := renameFile
-	renameFile = func(oldpath, newpath string) error {
-		err := originalRename(oldpath, newpath)
+	// FR-043: the backup is a hard link now; cancel right after it is made.
+	stubLink(t, func(oldpath, newpath string) error {
+		err := os.Link(oldpath, newpath)
 		if err == nil && oldpath == binaryPath && newpath == binaryPath+".bak" {
 			if _, cancelErr := control.RequestJobCancel(jobID); cancelErr != nil {
 				return cancelErr
 			}
 		}
 		return err
-	}
+	})
 
 	app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
 	_, err := DeployWithControl(app, jobID, "v-backup", progress.NewProgressTracker(), staticELFClient(), control)

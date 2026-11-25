@@ -337,9 +337,28 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 		tracker.Fail(app.ID)
 		return summary, cancelErr
 	}
-	if _, err := os.Stat(app.BinaryPath); err == nil {
+
+	// FR-043/FR-044: the transaction marker is written before anything is touched and
+	// removed once the binary is consistent again (deploy succeeded, rollback restored
+	// the old binary, or nothing was changed). A crash in between leaves it for the
+	// startup recovery.
+	_, statErr := os.Stat(app.BinaryPath)
+	hadBinary := statErr == nil
+	markerPath := deployingMarkerPath(app.BinaryPath)
+	if err := writeDeployingMarker(app.BinaryPath, jobID, tag, hadBinary); err != nil {
+		tracker.Fail(app.ID)
+		return summary, fmt.Errorf("write deploy marker: %w", err)
+	}
+	leaveMarker := false
+	defer func() {
+		if !leaveMarker {
+			_ = os.Remove(markerPath)
+		}
+	}()
+
+	if hadBinary {
 		slog.Info("backup", "from", app.BinaryPath, "to", backupPath)
-		if err := renameFile(app.BinaryPath, backupPath); err != nil {
+		if err := makeBackup(app.BinaryPath, backupPath); err != nil {
 			tracker.Fail(app.ID)
 			return summary, fmt.Errorf("backup: %w", err)
 		}
@@ -356,13 +375,15 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 	slog.Info("replacing binary")
 	tracker.SetPhase(app.ID, progress.ProgressStageInstalling)
 	cleanup = false
-	if err := renameFile(tmpPath, app.BinaryPath); err != nil {
+	leaveMarker = true // from here on only a restored binary or a success closes the transaction
+	if err := installBinary(tmpPath, app.BinaryPath); err != nil {
+		// rename is atomic: the old binary is still in place. Drop the backup of this
+		// attempt and the temp file; nothing was changed.
 		cleanup = true
+		leaveMarker = false
 		tracker.Fail(app.ID)
 		if backupCreated {
-			if restoreErr := renameFile(backupPath, app.BinaryPath); restoreErr != nil {
-				return summary, fmt.Errorf("replace binary: %w; restore backup: %v", err, restoreErr)
-			}
+			_ = os.Remove(backupPath)
 		}
 		return summary, fmt.Errorf("replace binary: %w", err)
 	}
@@ -403,6 +424,7 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 		return summary, abort
 	}
 	if unhealthy == nil {
+		leaveMarker = false
 		tracker.Finish(app.ID)
 		return summary, nil
 	}
@@ -428,7 +450,7 @@ func rollbackInstalled(app *store.App, tracker *progress.ProgressTracker, backup
 	if !backupCreated {
 		return fmt.Errorf("%w; rollback unavailable: no previous binary backup", cause)
 	}
-	if err := renameFile(backupPath, app.BinaryPath); err != nil {
+	if err := restoreBackup(backupPath, app.BinaryPath); err != nil {
 		return fmt.Errorf("%w; rollback rename failed: %v", cause, err)
 	}
 	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
@@ -517,7 +539,7 @@ func checkpointRestoreBackup(control *cancel.CancelService, jobID, tmpPath, back
 		return fmt.Errorf("cancel cleanup temp: %w", err)
 	}
 	if backupCreated {
-		if err := renameFile(backupPath, binaryPath); err != nil {
+		if err := restoreBackup(backupPath, binaryPath); err != nil {
 			if _, checkpointErr := control.Checkpoint(jobID, cancel.DeployPhaseRollbackFailed); checkpointErr != nil {
 				return checkpointErr
 			}
@@ -544,7 +566,7 @@ func checkpointRollbackInstalled(control *cancel.CancelService, jobID string, ph
 		}
 		return fmt.Errorf("cancel rollback unavailable: no previous binary backup")
 	}
-	if err := renameFile(backupPath, app.BinaryPath); err != nil {
+	if err := restoreBackup(backupPath, app.BinaryPath); err != nil {
 		if _, checkpointErr := control.Checkpoint(jobID, cancel.DeployPhaseRollbackFailed); checkpointErr != nil {
 			return checkpointErr
 		}

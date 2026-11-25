@@ -37,16 +37,18 @@ func TestDeploy_AllExitPathsFinalizeTracker(t *testing.T) {
 					}
 				}
 			}
+			stubLink(t, func(oldpath, newpath string) error {
+				err := os.Link(oldpath, newpath)
+				if err == nil && oldpath == binaryPath && newpath == binaryPath+".bak" {
+					requestCancel("backup")
+				}
+				return err
+			})
 			originalRename := renameFile
 			renameFile = func(oldpath, newpath string) error {
 				err := originalRename(oldpath, newpath)
-				if err == nil {
-					switch {
-					case oldpath == binaryPath && newpath == binaryPath+".bak":
-						requestCancel("backup")
-					case oldpath == binaryPath+".tmp" && newpath == binaryPath:
-						requestCancel("install")
-					}
+				if err == nil && oldpath == binaryPath+".tmp" && newpath == binaryPath {
+					requestCancel("install")
 				}
 				return err
 			}
