@@ -39,7 +39,7 @@ export function Header() {
   return (
     <header className="flex flex-wrap items-center gap-x-5 gap-y-3 pb-6">
       <img src={LOGO_SRC} alt={t("app.name")} width={44} height={44} />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-[1_1_12rem]">
         <p className="truncate text-2xl font-semibold tracking-tight" data-testid="greeting">
           {t("shell.greeting", { name: session.username })}
         </p>

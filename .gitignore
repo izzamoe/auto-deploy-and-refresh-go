@@ -44,3 +44,6 @@ next-env.d.ts
 # Installed agent skills / local agent tooling
 .agents/
 .claude/
+
+# Visual baseline stays local (Q-25: created by Hermes on the runner)
+tests/*-snapshots/
