@@ -9,7 +9,7 @@ import type { FocusEvent, MouseEvent, ReactNode } from "react";
  * `position: fixed` so the scrollable rail never clips it. The control keeps its own
  * `aria-label`; the tooltip is aria-hidden so the name is not announced twice.
  */
-export function RailTip({ label, children }: { label: string; children: ReactNode }) {
+export function RailTip({ label, children, className = "inline-flex" }: { label: string; children: ReactNode; className?: string }) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   function show(e: MouseEvent<HTMLElement> | FocusEvent<HTMLElement>) {
@@ -19,7 +19,7 @@ export function RailTip({ label, children }: { label: string; children: ReactNod
 
   return (
     <span
-      className="inline-flex"
+      className={className}
       onMouseEnter={show}
       onMouseLeave={() => setPos(null)}
       onFocus={show}

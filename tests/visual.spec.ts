@@ -52,7 +52,9 @@ for (const shot of SHOTS) {
         test(`snapshot ${shot.name} ${theme} ${locale} ${width}px`, async ({ browser }) => {
           const context = await browser.newContext({
             viewport: { width, height: 900 },
-            storageState: shot.signedOut ? EMPTY_STATE : undefined,
+            // An explicit `storageState: undefined` would DROP the configured signed-in session
+            // (the T095 snapshots were the login page); only override it when signed out.
+            ...(shot.signedOut ? { storageState: EMPTY_STATE } : {}),
             reducedMotion: 'reduce',
           });
           await setPrefs(context, locale, theme);
@@ -227,6 +229,36 @@ test.describe('layout with data', () => {
         }
         await context.close();
       }
+    }
+  });
+
+  test('375 px: the bottom bar shows every control without horizontal scrolling; theme, language and sign out sit behind a visible "More" button', async ({ browser }) => {
+    for (const width of [360, 375, 430]) {
+      const context = await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: 'reduce' });
+      await setPrefs(context, 'en', 'light');
+      const page = await context.newPage();
+      await page.goto(adminURL('/'));
+      await ready(page);
+      const nav = page.getByRole('navigation', { name: 'Main navigation' });
+      const m = await nav.evaluate((el) => ({ scrollable: el.scrollWidth > el.clientWidth + 1, right: el.getBoundingClientRect().right, left: el.getBoundingClientRect().left, iw: window.innerWidth }));
+      expect(m.scrollable, `@${width}: the bar needs no horizontal scroll`).toBe(false);
+      expect(m.left, `@${width}`).toBeGreaterThanOrEqual(0);
+      expect(m.right, `@${width}`).toBeLessThanOrEqual(m.iw);
+      for (const name of ['Dashboard', 'Apps', 'History', 'System logs']) await expect(nav.getByRole('link', { name, exact: true })).toBeInViewport({ ratio: 1 });
+      for (const name of ['GitHub', 'Telegram', 'Account']) await expect(nav.getByRole('link', { name, exact: true })).toBeHidden();
+      await expect(nav.getByRole('button', { name: 'Sign out' })).toBeHidden();
+      const more = nav.getByRole('button', { name: 'More', exact: true });
+      await expect(more).toBeInViewport({ ratio: 1 });
+      await more.click();
+      const dialog = page.getByRole('dialog', { name: 'More options' });
+      for (const control of [dialog.getByRole('link', { name: 'GitHub' }), dialog.getByRole('link', { name: 'Telegram' }), dialog.getByRole('link', { name: 'Account' }), dialog.getByRole('button', { name: 'Toggle theme' }), dialog.getByRole('button', { name: /^EN / }), dialog.getByRole('button', { name: 'Sign out' })]) {
+        await expect(control).toBeInViewport({ ratio: 1 });
+      }
+      await dialog.getByRole('button', { name: 'Toggle theme' }).click();
+      await expect(page.locator('html')).toHaveClass(/dark/);
+      await dialog.getByRole('link', { name: 'Account' }).click();
+      await expect(page).toHaveURL(/\/account\/?$/);
+      await context.close();
     }
   });
 

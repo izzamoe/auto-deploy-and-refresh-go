@@ -14,10 +14,12 @@ interface StatCardProps {
   testId?: string;
   /** Colour of the big number: green for positive figures, red for failures. */
   tone?: "neutral" | "success" | "danger";
+  /** Colour of the icon badge; defaults to the tone (danger) or green. The failures card is always red. */
+  iconTone?: "primary" | "danger";
 }
 
 /** White stat card: label, big number, small hint (plan §E). */
-export function StatCard({ title, value, hint, icon, children, className, testId, tone = "neutral" }: StatCardProps) {
+export function StatCard({ title, value, hint, icon, children, className, testId, tone = "neutral", iconTone }: StatCardProps) {
   const id = useId();
   return (
     <section aria-labelledby={id} data-testid={testId} className={cn("flex flex-col gap-2 rounded-card bg-card p-5 shadow-card", className)}>
@@ -26,7 +28,7 @@ export function StatCard({ title, value, hint, icon, children, className, testId
           {title}
         </h2>
         {icon && (
-          <span aria-hidden="true" className={cn("inline-flex size-9 items-center justify-center rounded-full [&_svg]:size-4", tone === "danger" ? "bg-destructive text-destructive-foreground" : "bg-primary text-primary-foreground")}>
+          <span aria-hidden="true" data-testid={testId ? `${testId}-icon` : undefined} className={cn("inline-flex size-9 items-center justify-center rounded-full [&_svg]:size-4", (iconTone ?? (tone === "danger" ? "danger" : "primary")) === "danger" ? "bg-destructive text-destructive-foreground" : "bg-primary text-primary-foreground")}>
             {icon}
           </span>
         )}

@@ -70,6 +70,16 @@ for (const locale of LOCALES) {
         await expect(page.getByRole('dialog')).toBeVisible();
         await scan(page, `${locale}/${theme} delete dialog`);
       });
+
+      test('mobile "More" dialog (375 px)', async ({ page, context }) => {
+        await setPrefs(context, locale, theme);
+        await page.setViewportSize({ width: 375, height: 800 });
+        await page.goto(adminURL('/'));
+        await ready(page);
+        await page.getByRole('navigation').getByRole('button', { name: /^(Lainnya|More)$/ }).click();
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await scan(page, `${locale}/${theme} more dialog`);
+      });
     });
   }
 }

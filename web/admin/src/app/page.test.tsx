@@ -108,6 +108,19 @@ describe("Dashboard (T087, FR-100, FR-026, FR-108)", () => {
     expect(screen.queryByTestId("mini-bars")).toBeNull(); // no series is invented
   });
 
+  it("the failures badge is always red (also with 0 failures) and an empty 'Latest deploys' card does not stretch to the other column", async () => {
+    installFetch(routes({ ...FULL, deploys24h: { total: 0, succeeded: 0, failed: 0, canceled: 0 }, recent: [] }));
+    mount();
+    await screen.findByTestId("dashboard");
+    expect(screen.getByTestId("stat-failed-icon")).toHaveClass("bg-destructive");
+    expect(screen.getByTestId("stat-deploys-icon")).toHaveClass("bg-primary");
+    expect(screen.getByTestId("recent-deploys").parentElement?.className).not.toContain("flex-1");
+    cleanup();
+    installFetch(routes());
+    mount();
+    expect((await screen.findByTestId("recent-deploys")).parentElement?.className).toContain("flex-1"); // with data it still balances the columns
+  });
+
   it("days present but all zero: only the empty state, never a red line flat at 0", async () => {
     const zeroDays = DAILY.map((d) => ({ ...d, succeeded: 0, failed: 0, canceled: 0 }));
     installFetch(routes({ ...FULL, daily: zeroDays }));

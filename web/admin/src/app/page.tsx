@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query";
+import { cn } from "@/lib/utils";
 
 // The chart card is loaded on demand so it never weighs on the shared bundle (Q-20).
 const DeployActivityChart = dynamic(() => import("@/components/dashboard/DeployActivityChart").then((m) => m.DeployActivityChart), {
@@ -69,7 +70,7 @@ export default function DashboardPage() {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]" data-testid="dashboard">
       <h1 className="sr-only">{t("dashboard.title")}</h1>
-      <div className="flex min-w-0 flex-col gap-4 xl:[&>:last-child]:flex-1">
+      <div className={cn("flex min-w-0 flex-col gap-4", s.recent.length > 0 && "xl:[&>:last-child]:flex-1")}>
         <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
           <StatCard testId="stat-deploys" title={t("dashboard.deploys24h")} value={formatNumber(s.deploys24h.total)} hint={t("dashboard.deploys24h.hint", { n: s.deploys24h.succeeded })} icon={<BarChart3 />} tone={s.deploys24h.succeeded > 0 ? "success" : "neutral"}>
             {hourly.length > 0 && <MiniBars values={hourly} className="mt-1 h-8 w-full" />}
@@ -81,7 +82,7 @@ export default function DashboardPage() {
               </div>
             )}
           </StatCard>
-          <StatCard testId="stat-failed" title={t("dashboard.failed24h")} value={formatNumber(s.deploys24h.failed)} hint={t("dashboard.failed24h.hint", { total: s.deploys24h.total })} icon={<XCircle />} tone={s.deploys24h.failed > 0 ? "danger" : "neutral"} />
+          <StatCard testId="stat-failed" title={t("dashboard.failed24h")} value={formatNumber(s.deploys24h.failed)} hint={t("dashboard.failed24h.hint", { total: s.deploys24h.total })} icon={<XCircle />} iconTone="danger" tone={s.deploys24h.failed > 0 ? "danger" : "neutral"} />
           <ActiveDeployCard running={s.active.running} queued={s.active.queued} />
         </div>
         <DeployActivityChart stats={s} range={range} onRangeChange={setRange} />

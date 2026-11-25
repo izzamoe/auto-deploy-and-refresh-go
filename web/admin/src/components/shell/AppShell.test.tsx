@@ -280,3 +280,62 @@ describe("logout", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 });
+
+describe("mobile navigation (below 768 px): the \"More\" menu", () => {
+  it("keeps four sections in the bottom bar; the other three plus theme, language and sign out sit behind a visible \"Lainnya\" button", async () => {
+    installFetch(okRoutes());
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    // CSS is not applied in jsdom: assert the classes that hide the rail-only controls below md.
+    for (const name of ["GitHub", "Telegram", "Akun"]) {
+      expect(screen.getByRole("link", { name }).parentElement).toHaveClass("hidden", "md:inline-flex");
+    }
+    for (const name of ["Dasbor", "Aplikasi", "Riwayat", "Log sistem"]) {
+      expect(screen.getByRole("link", { name }).parentElement).not.toHaveClass("hidden");
+    }
+    expect(screen.getByRole("button", { name: "Ganti tema" }).closest("div.hidden")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Lainnya" })).toHaveClass("md:hidden");
+  });
+
+  it("opens a dialog with labelled links, the theme switch, the language toggle and sign out", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, pathname: "/admin/", search: "", hash: "", assign, replace: vi.fn() });
+    const api = installFetch({ ...okRoutes(), "DELETE /admin/api/v1/session": () => ({ status: 204 }) });
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    fireEvent.click(screen.getByRole("button", { name: "Lainnya" }));
+    const dialog = await screen.findByRole("dialog", { name: "Opsi lainnya" });
+    for (const [name, href] of [["GitHub", /^\/settings\/github\/?$/], ["Telegram", /^\/settings\/telegram\/?$/], ["Akun", /^\/account\/?$/]] as const) {
+      expect(within(dialog).getByRole("link", { name }).getAttribute("href")).toMatch(href);
+    }
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ganti tema" }));
+    await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(true));
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /English/ }));
+    expect(await screen.findByRole("dialog", { name: "More options" })).toBeInTheDocument();
+    expect(window.localStorage.getItem("ad.locale")).toBe("en");
+
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/admin/login/"));
+    expect(api.count("DELETE", "/admin/api/v1/session")).toBe(1);
+  });
+
+  it("a failed sign out from the menu says so inside the dialog", async () => {
+    vi.stubGlobal("location", { ...window.location, pathname: "/admin/", search: "", hash: "", assign: vi.fn(), replace: vi.fn() });
+    installFetch({ ...okRoutes(), "DELETE /admin/api/v1/session": () => ({ status: 500, body: errorBody("internal_error") }) });
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    fireEvent.click(screen.getByRole("button", { name: "Lainnya" }));
+    const dialog = await screen.findByRole("dialog", { name: "Opsi lainnya" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keluar" }));
+    expect(await within(dialog).findByText("Gagal keluar. Coba lagi.")).toBeInTheDocument();
+  });
+
+  it("the \"Lainnya\" button is marked current when a hidden section is open", async () => {
+    installFetch(okRoutes());
+    mountShell("/account/");
+    await screen.findByTestId("admin-shell");
+    expect(screen.getByRole("button", { name: "Lainnya" })).toHaveClass("bg-rail-active");
+  });
+});

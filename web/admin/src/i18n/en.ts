@@ -52,6 +52,8 @@ export const en: Record<MessageKey, string> = {
   "shell.locale.label": "Language",
   "shell.locale.id": "Bahasa Indonesia",
   "shell.locale.en": "English",
+  "shell.more": "More",
+  "shell.more.title": "More options",
   "shell.logout": "Sign out",
   "shell.logout.failed": "Could not sign out. Try again.",
   "shell.session.checking": "Checking session…",

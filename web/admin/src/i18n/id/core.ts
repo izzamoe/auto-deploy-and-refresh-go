@@ -48,6 +48,8 @@ export const idCore = {
   "shell.locale.label": "Bahasa",
   "shell.locale.id": "Bahasa Indonesia",
   "shell.locale.en": "English",
+  "shell.more": "Lainnya",
+  "shell.more.title": "Opsi lainnya",
   "shell.logout": "Keluar",
   "shell.logout.failed": "Gagal keluar. Coba lagi.",
   "shell.session.checking": "Memeriksa sesi…",
