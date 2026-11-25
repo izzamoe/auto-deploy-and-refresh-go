@@ -124,4 +124,20 @@ export const en: Record<MessageKey, string> = {
   "error.notJson": "The server sent an unrecognised response (not JSON). Try again later.",
   "error.unknown": "An unexpected error occurred.",
   "error.http": "The server answered with status {status}.",
+
+  "shell.search.submit": "Search",
+  "shell.notifications.count": "{count} unread notifications",
+  "shell.notifications.dismiss": "Dismiss notification",
+  "shell.reload": "Reload page",
+  "shell.stats.error": "Statistics could not be loaded.",
+  "notification.noticeFallback": "System notice",
+
+  "account.forced.title": "Change the default password",
+  "account.forced.body": "For your security, change the password before using the admin panel.",
+  "account.password.current": "Current password",
+  "account.password.new": "New password",
+  "account.password.confirm": "Repeat the new password",
+  "account.password.mismatch": "The new password and its repetition do not match.",
+  "account.password.submit": "Change password",
+  "account.password.submitting": "Saving…",
 };

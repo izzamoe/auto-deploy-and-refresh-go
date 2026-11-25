@@ -126,6 +126,22 @@ export const id = {
   "error.notJson": "Server mengirim respons yang tidak dikenali (bukan JSON). Coba lagi nanti.",
   "error.unknown": "Terjadi kesalahan tak terduga.",
   "error.http": "Server menjawab dengan kode {status}.",
+
+  "shell.search.submit": "Cari",
+  "shell.notifications.count": "{count} notifikasi belum dibaca",
+  "shell.notifications.dismiss": "Hapus notifikasi",
+  "shell.reload": "Muat ulang halaman",
+  "shell.stats.error": "Statistik tidak dapat dimuat.",
+  "notification.noticeFallback": "Pemberitahuan sistem",
+
+  "account.forced.title": "Ganti kata sandi bawaan",
+  "account.forced.body": "Demi keamanan, ganti kata sandi terlebih dahulu sebelum memakai panel admin.",
+  "account.password.current": "Kata sandi saat ini",
+  "account.password.new": "Kata sandi baru",
+  "account.password.confirm": "Ulangi kata sandi baru",
+  "account.password.mismatch": "Kata sandi baru dan pengulangannya tidak sama.",
+  "account.password.submit": "Ganti kata sandi",
+  "account.password.submitting": "Menyimpan…",
 } as const;
 
 export type MessageKey = keyof typeof id;
