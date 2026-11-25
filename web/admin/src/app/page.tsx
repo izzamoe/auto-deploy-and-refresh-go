@@ -1,5 +1,10 @@
-// Placeholder root route so the export has an index.html; T085+ replaces it
-// with the dashboard inside the app shell.
+"use client";
+
+import { useI18n } from "@/i18n";
+
+// Placeholder root route so the export has an index.html; replaced by the dashboard
+// inside the app shell (T086).
 export default function Home() {
-  return <main data-testid="home">auto-deploy</main>;
+  const { t } = useI18n();
+  return <main data-testid="home">{t("app.name")}</main>;
 }
