@@ -32,16 +32,45 @@ var (
 	renameFile             = os.Rename
 	chmodFile              = os.Chmod
 	deployHealthCheckSleep = time.Sleep
-	runJournalctl          = func(args ...string) ([]byte, error) {
+	// runJournalctl keeps at most maxJournalReadBytes (the TAIL) of journalctl's output, so
+	// "lines=all" on a huge journal cannot exhaust memory (FR-050, FR-058).
+	runJournalctl = func(args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), systemctlTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "journalctl", args...)
-		return cmd.CombinedOutput()
+		buf := &tailBuffer{max: maxJournalReadBytes}
+		cmd.Stdout, cmd.Stderr = buf, buf
+		err := cmd.Run()
+		return buf.Bytes(), err
 	}
 )
 
 // cancelPollFallback is the safety-net interval of the cancel watcher (FR-048).
 var cancelPollFallback = 2 * time.Second
+
+// maxJournalReadBytes bounds what one journalctl invocation may keep in memory.
+const maxJournalReadBytes = 4 << 20
+
+// tailBuffer is an io.Writer that keeps only the last max bytes written to it.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > 2*b.max {
+		b.buf = append([]byte(nil), b.buf[len(b.buf)-b.max:]...)
+	}
+	return len(p), nil
+}
+
+func (b *tailBuffer) Bytes() []byte {
+	if len(b.buf) > b.max {
+		return b.buf[len(b.buf)-b.max:]
+	}
+	return b.buf
+}
 
 // defaultJournalctlLines is how many recent journal lines CaptureServiceLogs
 // fetches when capturing a deploy's logs.
@@ -78,6 +107,13 @@ func CaptureServiceLogsLines(serviceName string, lines int) string {
 		return fmt.Sprintf("failed to read logs for %s: %v", serviceName, err)
 	}
 	return string(out)
+}
+
+// CaptureServiceLogsBounded is CaptureServiceLogsLines limited to maxBytes of the newest
+// output; truncated reports that older output was cut (the log then starts with a
+// one-line marker). FR-058: live log responses are bounded in bytes AND lines.
+func CaptureServiceLogsBounded(serviceName string, lines, maxBytes int) (log string, truncated bool) {
+	return store.CapLogTail(CaptureServiceLogsLines(serviceName, lines), maxBytes)
 }
 
 // CaptureServiceLogsSince returns serviceName's systemd journal limited to

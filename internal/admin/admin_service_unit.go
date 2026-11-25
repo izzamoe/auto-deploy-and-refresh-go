@@ -106,7 +106,8 @@ func (h *ServiceUnitAdminHandler) LiveLogsHertz(ctx context.Context, c *app.Requ
 		return
 	}
 	lines := parseLogLinesParam(c)
-	c.JSON(consts.StatusOK, map[string]any{"log": deploy.CaptureServiceLogsLines(appRecord.ServiceName, lines)})
+	logText, truncated := deploy.CaptureServiceLogsBounded(appRecord.ServiceName, lines, store.MaxLiveLogBytes)
+	c.JSON(consts.StatusOK, map[string]any{"log": logText, "truncated": truncated})
 }
 
 // ServiceStatusHertz returns the systemd active-state of the app's service.

@@ -29,6 +29,13 @@ func sleepOrDone(ctx context.Context, d time.Duration) bool {
 // notification arrived (FR-048): a safety net, not the primary mechanism.
 var pollFallback = 2 * time.Second
 
+// Job-history retention (Q-16, FR-050): the newest 200 finished jobs per app are kept;
+// the cleanup runs at start and every 6 hours.
+var (
+	retainJobsPerApp  = 200
+	retentionInterval = 6 * time.Hour
+)
+
 // DeployRunner is the legacy runner kept for backward compatibility with main.go.
 type DeployRunner func(tag string) error
 
@@ -176,6 +183,27 @@ func (c *Coordinator) Start(ctx context.Context) {
 	c.q.SetEnqueueHook(c.Wake)
 	c.wg.Go(func() {
 		c.schedule(ctx)
+	})
+
+	c.wg.Go(func() {
+		run := func() {
+			if n, err := c.q.PruneHistory(retainJobsPerApp); err != nil {
+				slog.Warn("coordinator: history retention failed", "err", err)
+			} else if n > 0 {
+				slog.Info("coordinator: pruned old deploy jobs", "deleted", n, "keep_per_app", retainJobsPerApp)
+			}
+		}
+		run()
+		ticker := time.NewTicker(retentionInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
 	})
 
 	if c.tracker != nil {

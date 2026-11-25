@@ -486,6 +486,7 @@ func (q *DeployQueue) MarkRolledBack(id string) error {
 // so a failed deploy's health-check logs can be reviewed later. It is a
 // best-effort UPDATE keyed by job id; unknown ids are a no-op.
 func (q *DeployQueue) SaveJobLog(id, log string) error {
+	log, _ = CapLogTail(log, MaxJobLogBytes) // FR-050: a job row never holds an unbounded log
 	_, err := q.db.Exec(
 		`UPDATE deploy_jobs SET deploy_log = ? WHERE id = ?`,
 		log, id,
@@ -711,4 +712,25 @@ func (q *DeployQueue) ListByStatus(status string) ([]JobRecord, error) {
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// PruneHistory deletes, per app, the finished jobs (succeeded, failed, canceled) beyond
+// the newest keep (Q-16: 200). Pending and active jobs are never touched. It returns the
+// number of rows removed.
+func (q *DeployQueue) PruneHistory(keep int) (int, error) {
+	if keep < 1 {
+		keep = 1
+	}
+	res, err := q.db.Exec(
+		`DELETE FROM deploy_jobs WHERE id IN (
+		   SELECT id FROM (
+		     SELECT id, ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY seq DESC) AS rn
+		     FROM deploy_jobs WHERE status IN ('succeeded', 'failed', 'canceled')
+		   ) WHERE rn > ?
+		 )`, keep)
+	if err != nil {
+		return 0, fmt.Errorf("deploy_queue: prune history: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }

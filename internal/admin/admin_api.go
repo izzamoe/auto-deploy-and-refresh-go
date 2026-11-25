@@ -949,7 +949,7 @@ func (h *AdminAPIHandler) JobLogsHertz(ctx context.Context, c *app.RequestContex
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load job logs")
 		return
 	}
-	c.JSON(consts.StatusOK, map[string]any{"log": logText})
+	c.JSON(consts.StatusOK, map[string]any{"log": logText, "truncated": store.IsTruncatedJobLog(logText)})
 }
 
 func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth app.HandlerFunc) {
