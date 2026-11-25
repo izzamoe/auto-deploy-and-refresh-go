@@ -211,11 +211,57 @@ func (h *AdminEventHub) writeInitialEvents(ctx context.Context, c *websocket.Con
 		return false
 	}
 
-	snapshot, err := h.encodeEvent(AdminEvent{Type: adminEventTypeSnapshot, Payload: h.snapshotAll()})
+	snapshot, err := h.encodeEvent(AdminEvent{Type: adminEventTypeSnapshot, Payload: adminEventSnapshotPayload{Jobs: h.snapshotJobs()}})
 	if err != nil {
 		return false
 	}
 	return writeAdminEventPayload(ctx, c, snapshot)
+}
+
+// adminEventSnapshotPayload is the payload of the second event of every connection
+// (events-ws.md 3.2).
+type adminEventSnapshotPayload struct {
+	Jobs []adminEventSnapshotJob `json:"jobs"`
+}
+
+// adminEventSnapshotJob is one active deployment. status is a JobStatus (B52: the
+// tracker phase must never be shown as the job status); percent/totalBytes are -1
+// while the size is unknown, like the OpenAPI Progress schema.
+type adminEventSnapshotJob struct {
+	AppID           string    `json:"appId"`
+	JobID           string    `json:"jobId"`
+	Tag             string    `json:"tag"`
+	Status          string    `json:"status"`
+	Phase           string    `json:"phase"`
+	Percent         int64     `json:"percent"`
+	DownloadedBytes int64     `json:"downloadedBytes"`
+	TotalBytes      int64     `json:"totalBytes"`
+	SpeedBPS        int64     `json:"speedBps"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+// snapshotJobs lists the ACTIVE deployments only: entries that reached a terminal
+// phase are not re-sent (FR-033).
+func (h *AdminEventHub) snapshotJobs() []adminEventSnapshotJob {
+	jobs := make([]adminEventSnapshotJob, 0)
+	for _, snap := range h.snapshotAll() {
+		if snap.Phase == progress.ProgressStageSucceeded || snap.Phase == progress.ProgressStageFailed {
+			continue
+		}
+		jobs = append(jobs, adminEventSnapshotJob{
+			AppID:           snap.AppID,
+			JobID:           snap.JobID,
+			Tag:             snap.Tag,
+			Status:          progressStatusForStage(snap.Phase),
+			Phase:           snap.Phase,
+			Percent:         progressPercentInt(snap.Percent),
+			DownloadedBytes: snap.DownloadedBytes,
+			TotalBytes:      snap.TotalBytes,
+			SpeedBPS:        int64(snap.SpeedBPS),
+			UpdatedAt:       snap.UpdatedAt.UTC(),
+		})
+	}
+	return jobs
 }
 
 func (h *AdminEventHub) snapshotAll() []progress.ProgressSnapshot {

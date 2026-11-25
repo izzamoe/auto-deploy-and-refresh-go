@@ -281,8 +281,8 @@ func (s *CancelService) Checkpoint(jobID string, phase DeployPhase) (CancelCheck
 		return CancelCheckpointDecision{}, errors.New("cancel service is not initialized")
 	}
 
-	var status string
-	err := s.q.DB().QueryRow(`SELECT status FROM deploy_jobs WHERE id = ?`, jobID).Scan(&status)
+	var status, appID string
+	err := s.q.DB().QueryRow(`SELECT status, app_id FROM deploy_jobs WHERE id = ?`, jobID).Scan(&status, &appID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return CancelCheckpointDecision{JobID: jobID, Phase: phase, Action: CancelActionNoop, Message: "job not found"}, nil
@@ -296,7 +296,7 @@ func (s *CancelService) Checkpoint(jobID string, phase DeployPhase) (CancelCheck
 			return CancelCheckpointDecision{}, err
 		}
 		decision.Status = decision.TerminalStatus
-		s.publishJobStatus(jobID, decision.TerminalStatus, decision.Message)
+		s.publishJobStatus(appID, jobID, status, decision.TerminalStatus, decision.Message)
 	}
 	return decision, nil
 }
@@ -310,27 +310,32 @@ func (s *CancelService) publishCancelResult(result CancelJobResult) {
 		AppID: result.AppID,
 		JobID: result.JobID,
 		Payload: map[string]any{
-			"previousState": result.PreviousState,
-			"status":        result.Status,
-			"outcome":       result.Outcome,
-			"message":       result.Message,
+			// events-ws.md 3.5: jobId is top-level; the payload copy is kept for ONE release.
+			"jobId":          result.JobID,
+			"previousStatus": result.PreviousState,
+			"status":         result.Status,
+			"outcome":        result.Outcome,
+			"message":        result.Message,
 		},
 	})
 	if result.Status == JobStatusCanceled || result.Status == JobStatusFailed || result.Status == JobStatusSucceeded {
-		s.publishJobStatus(result.JobID, result.Status, result.Message)
+		s.publishJobStatus(result.AppID, result.JobID, result.PreviousState, result.Status, result.Message)
 	}
 }
 
-func (s *CancelService) publishJobStatus(jobID, status, message string) {
+func (s *CancelService) publishJobStatus(appID, jobID, previousStatus, status, message string) {
 	if s == nil || s.events == nil {
 		return
 	}
 	s.events.BroadcastCancelEvent(CancelEvent{
 		Type:  CancelEventTypeJobStatus,
+		AppID: appID,
 		JobID: jobID,
 		Payload: map[string]any{
-			"status":  status,
-			"message": message,
+			"jobId":          jobID, // payload copy kept for ONE release (events-ws.md 3.5)
+			"previousStatus": previousStatus,
+			"status":         status,
+			"message":        message,
 		},
 	})
 }

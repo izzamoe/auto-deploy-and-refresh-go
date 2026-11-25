@@ -143,6 +143,7 @@ func main() {
 		return deploy.DeployArtifact(app, jobID, tag, tracker, dlClient, cancelService, githubClient)
 	}, tracker)
 	coord.SetLogCapturer(deploy.CaptureServiceLogsSince)
+	coord.SetEventSink(adminEventHub) // job_status after every terminal MarkDone (events-ws.md 3.4)
 	coord.Start(ctx)
 	telegramConfigStore, err := store.NewTelegramConfigStore(db)
 	if err != nil {

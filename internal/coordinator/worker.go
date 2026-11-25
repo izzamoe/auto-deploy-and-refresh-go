@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 	"github.com/izzamoe/auto-deploy/internal/telegram"
@@ -102,6 +103,7 @@ type Coordinator struct {
 	tracker     *progress.ProgressTracker
 	notifier    telegram.Notifier
 	logCapturer func(serviceName string, since time.Time) string
+	events      cancel.EventSink
 	wg          sync.WaitGroup
 
 	mu         sync.Mutex
@@ -117,6 +119,15 @@ func NewCoordinator(apps *store.AppStore, q *store.DeployQueue, runner Coordinat
 		notifier:   telegram.NopNotifier{},
 		activeApps: make(map[string]bool),
 	}
+}
+
+// SetEventSink attaches the sink that receives a job_status event after every job
+// the coordinator itself moves to a terminal status (events-ws.md 3.4). Safe to
+// call before Start; nil disables the announcements.
+func (c *Coordinator) SetEventSink(s cancel.EventSink) {
+	c.mu.Lock()
+	c.events = s
+	c.mu.Unlock()
 }
 
 // SetNotifier attaches a Telegram (or other) notifier used to announce
@@ -238,6 +249,13 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 	// an arbitrary tail of the service's journal.
 	deployStart := time.Now()
 	summary, err := c.runner(&app, jobID, tag)
+	// The status just BEFORE MarkDone tells whether MarkDone ends the job: a job the
+	// cancel service already ended (canceled/failed at a checkpoint) was announced
+	// by it, MarkDone is then a no-op and nothing is announced twice.
+	var statusBefore string
+	if job, jobErr := c.q.GetJob(jobID); jobErr == nil && job != nil {
+		statusBefore = job.Status
+	}
 	success := err == nil
 
 	var errMsg string
@@ -253,10 +271,14 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 	if markErr := c.q.MarkDone(jobID, success, errMsg, summaryPtr); markErr != nil {
 		slog.Error("coordinator: mark done failed", "id", jobID, "err", markErr)
 	}
-	if errors.Is(err, store.ErrRolledBack) {
+	rolledBack := errors.Is(err, store.ErrRolledBack)
+	if rolledBack {
 		if rbErr := c.q.MarkRolledBack(jobID); rbErr != nil {
 			slog.Error("coordinator: mark rolled back failed", "id", jobID, "err", rbErr)
 		}
+	}
+	if statusBefore == "in_progress" || statusBefore == "cancel_requested" {
+		c.publishJobStatus(app, jobID, tag, statusBefore, success, rolledBack)
 	}
 
 	c.captureJobLog(app.ServiceName, jobID, deployStart)
@@ -268,6 +290,35 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 		slog.Error("coordinator: deploy failed", "app", app.ID, "tag", tag, "err", err)
 		c.notify(fmt.Sprintf("❌ %s: deploy of %s failed: %s", app.Name, tag, errMsg))
 	}
+}
+
+// publishJobStatus announces the terminal status of a job this coordinator just
+// finished (events-ws.md 3.4). jobId is top-level AND in the payload (one release).
+// errorCode is a stable machine code, never the raw error text.
+func (c *Coordinator) publishJobStatus(app store.App, jobID, tag, previousStatus string, success, rolledBack bool) {
+	c.mu.Lock()
+	sink := c.events
+	c.mu.Unlock()
+	if sink == nil {
+		return
+	}
+	status := cancel.JobStatusSucceeded
+	payload := map[string]any{
+		"jobId":          jobID,
+		"previousStatus": previousStatus,
+		"tag":            tag,
+		"rolledBack":     rolledBack,
+		"finishedAt":     time.Now().UTC().Format(time.RFC3339),
+	}
+	if !success {
+		status = cancel.JobStatusFailed
+		payload["errorCode"] = "deploy_failed"
+		if rolledBack {
+			payload["errorCode"] = "rolled_back"
+		}
+	}
+	payload["status"] = status
+	sink.BroadcastCancelEvent(cancel.CancelEvent{Type: cancel.CancelEventTypeJobStatus, AppID: app.ID, JobID: jobID, Payload: payload})
 }
 
 // captureJobLog snapshots the service's logs for this deploy's window — from
