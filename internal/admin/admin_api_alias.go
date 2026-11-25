@@ -33,7 +33,7 @@ func RegisterLegacyAPIAliases(h *server.Hertz, authMW app.HandlerFunc) {
 		if isNewInV1(rest) {
 			continue
 		}
-		h.Handle(ri.Method, apiLegacyPrefix+rest, authMW, markDeprecatedAlias, ri.HandlerFunc)
+		h.Handle(ri.Method, apiLegacyPrefix+rest, authMW, deprecatedAlias, ri.HandlerFunc)
 	}
 }
 
@@ -46,9 +46,9 @@ func isNewInV1(rest string) bool {
 	return false
 }
 
-// markDeprecatedAlias announces that the pre-v1 path is going away and where the
+// deprecatedAlias announces that the pre-v1 path is going away and where the
 // canonical path is (RFC 9745 Deprecation, RFC 8288 Link).
-func markDeprecatedAlias(ctx context.Context, c *app.RequestContext) {
+func deprecatedAlias(ctx context.Context, c *app.RequestContext) {
 	c.Header("Deprecation", "true")
 	path := string(c.Request.URI().Path())
 	if strings.HasPrefix(path, apiLegacyPrefix+"/") && !strings.HasPrefix(path, apiV1Prefix+"/") {

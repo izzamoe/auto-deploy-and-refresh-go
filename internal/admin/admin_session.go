@@ -158,9 +158,9 @@ func (h *SessionHandler) DeleteHertz(ctx context.Context, c *app.RequestContext)
 
 // RegisterSessionRoutesHertz mounts the session endpoints. Login is public
 // (OpenAPI security: []); the other methods sit behind the auth middleware.
-func RegisterSessionRoutesHertz(h *server.Hertz, handler *SessionHandler, authMW app.HandlerFunc) {
+func RegisterSessionRoutesHertz(h *server.Hertz, handler *SessionHandler, auth app.HandlerFunc) {
 	h.POST("/admin/api/v1/session", handler.CreateHertz)
-	api := h.Group("/admin/api/v1", authMW)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/session", handler.GetHertz)
 	api.DELETE("/session", handler.DeleteHertz)
 }

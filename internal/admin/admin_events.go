@@ -356,8 +356,8 @@ const (
 // RegisterAdminEventRoutesHertz mounts the event socket at /admin/events/v1/ws and, for
 // ONE release, at the pre-v1 path /admin/events/ws with a Deprecation notice (Q-7).
 func RegisterAdminEventRoutesHertz(h *server.Hertz, hub *AdminEventHub, auth app.HandlerFunc) {
-	h.GET(adminEventsV1Path, auth, hub.EventsWebSocketHertz)
-	h.GET(adminEventsLegacyPath, auth, hub.EventsWebSocketHertz)
+	h.GET("/admin/events/v1/ws", auth, hub.EventsWebSocketHertz)
+	h.GET("/admin/events/ws", auth, deprecatedAlias, hub.EventsWebSocketHertz)
 }
 
 func (h *AdminEventHub) BroadcastCancelEvent(event cancel.CancelEvent) {

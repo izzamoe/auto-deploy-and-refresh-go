@@ -127,8 +127,8 @@ func (h *TokensHandler) RevokeHertz(ctx context.Context, c *app.RequestContext) 
 }
 
 // RegisterTokenRoutesHertz mounts the token endpoints behind the auth middleware.
-func RegisterTokenRoutesHertz(h *server.Hertz, handler *TokensHandler, authMW app.HandlerFunc) {
-	api := h.Group("/admin/api/v1", authMW)
+func RegisterTokenRoutesHertz(h *server.Hertz, handler *TokensHandler, auth app.HandlerFunc) {
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/tokens", handler.ListHertz)
 	api.POST("/tokens", handler.CreateHertz)
 	api.DELETE("/tokens/:id", handler.RevokeHertz)

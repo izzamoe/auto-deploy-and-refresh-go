@@ -220,8 +220,8 @@ func (h *AccountHandler) removeInitialPasswordFile() {
 }
 
 // RegisterAccountRoutesHertz mounts the account endpoints behind the auth middleware.
-func RegisterAccountRoutesHertz(h *server.Hertz, handler *AccountHandler, authMW app.HandlerFunc) {
-	api := h.Group("/admin/api/v1", authMW)
+func RegisterAccountRoutesHertz(h *server.Hertz, handler *AccountHandler, auth app.HandlerFunc) {
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/account", handler.GetAccountHertz)
 	api.POST("/account/password", handler.ChangePasswordHertz)
 	api.POST("/account/username", handler.ChangeUsernameHertz)
