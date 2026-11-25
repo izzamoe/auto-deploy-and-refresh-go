@@ -1,4 +1,4 @@
-.PHONY: build build-arm64 build-linux-amd64 build-linux-arm64 package-release release release-validate-local vet clean test admin-ui lint llms llms-check \
+.PHONY: dev build build-arm64 build-linux-amd64 build-linux-arm64 package-release release release-validate-local vet clean test admin-ui lint llms llms-check \
 	fe-install fe-typecheck fe-test api-types-install api-types api-types-check vuln e2e ci
 
 GOVULNCHECK_VERSION := v1.10.0
@@ -19,6 +19,11 @@ LDFLAGS := -X github.com/izzamoe/auto-deploy/internal/llmstxt.Version=$(VERSION)
 admin-ui:
 	npm ci
 	npm run admin:build
+
+# Next dev server (HMR) on :3000 under /admin. T081 adds cmd/devproxy so API and
+# WebSocket calls reach the Go backend; until then this serves the UI only.
+dev:
+	npm run admin:dev
 
 build: admin-ui
 	go build $(RELEASE_GOFLAGS) -ldflags "$(LDFLAGS)" -o auto-deploy ./cmd/server/
@@ -68,9 +73,8 @@ lint:
 	golangci-lint run --timeout 5m
 
 clean:
-	rm -rf $(BUILD_DIR) auto-deploy auto-deploy-arm64 web/admin/dist
-	mkdir -p web/admin/dist
-	touch web/admin/dist/.keep
+	rm -rf $(BUILD_DIR) auto-deploy auto-deploy-arm64 web/admin/out web/admin/.next
+	find internal/admin/web/admin/dist -mindepth 1 ! -name .keep -delete 2>/dev/null || true
 
 # Go tests. Deliberately independent of admin-ui: tests must not rewrite the
 # tracked internal/admin/web/admin/dist (the built UI is not embedded-by-test).
@@ -88,9 +92,8 @@ fe-install:
 fe-typecheck:
 	npx tsc --noEmit -p web/admin/tsconfig.json
 
-# vite.config.ts is the Vitest config until the Next.js migration replaces it.
 fe-test:
-	npx vitest run web/admin --config web/admin/vite.config.ts
+	npx vitest run web/admin --config web/admin/vitest.config.ts
 
 # --- OpenAPI contract -> TypeScript types ---
 # openapi-typescript 7.x needs the classic TypeScript JS API (peer typescript ^5),

@@ -135,7 +135,7 @@ describe("B51 / B52 — event store", () => {
 	});
 
 	it("B52 (UI): live status of a snapshot job overrides the DB status with the phase in the apps list", async () => {
-		installFetch((method, path) => {
+		installFetch((_method, path) => {
 			if (path === "/apps") return jsonResponse(200, { apps: [{ ...APP, lastJobId: "j1", lastJobStatus: "canceled" }] });
 			if (path.endsWith("/service/status")) return jsonResponse(200, { status: "active" });
 			if (path.endsWith("/releases")) return jsonResponse(200, { releases: [] });
