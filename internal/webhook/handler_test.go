@@ -182,3 +182,57 @@ func TestWebhook_UnexpectedOutcomeIsGeneric500(t *testing.T) {
 		t.Fatalf("got %d %s", c.Response.StatusCode(), c.Response.Body())
 	}
 }
+
+// B31 / FR-055 / contracts W3 (Q-4): failed authentications are rate limited per IP,
+// 30 per minute; correct secrets are never counted.
+func TestWebhook_FailedAuthIsRateLimitedPerIP(t *testing.T) {
+	unauthorized := fakeAdmitter{admission.AdmissionResult{Outcome: admission.OutcomeUnauthorized}}
+	h := server.New(server.WithHostPorts("127.0.0.1:0"))
+	h.Use(httpx.RequestID())
+	h.POST("/webhook", Handler(unauthorized))
+	send := func() *app.RequestContext {
+		c := app.NewContext(0)
+		c.Request.SetRequestURI("/webhook")
+		c.Request.SetMethod(http.MethodPost)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Header.Set("Authorization", "Bearer guess")
+		c.Request.SetBodyString(`{"tag":"v1"}`)
+		h.ServeHTTP(context.Background(), c)
+		return c
+	}
+	first429 := 0
+	var limited *app.RequestContext
+	for i := 1; i <= 100; i++ {
+		c := send()
+		switch c.Response.StatusCode() {
+		case 401:
+		case 429:
+			if first429 == 0 {
+				first429, limited = i, c
+			}
+		default:
+			t.Fatalf("request %d: status %d", i, c.Response.StatusCode())
+		}
+	}
+	if first429 == 0 {
+		t.Fatal("B31: 100 failed authentications in a row were all answered 401, never 429")
+	}
+	if first429 != 31 {
+		t.Errorf("the limit kicked in at request %d, want 31 (30 failures per minute are allowed)", first429)
+	}
+	if b := decode(t, limited); b.Code != "rate_limited" || b.Error != "rate limited" || b.Status != "error" {
+		t.Errorf("429 body = %+v", b)
+	}
+	if ra := string(limited.Response.Header.Peek("Retry-After")); ra == "" || ra == "0" {
+		t.Errorf("Retry-After = %q, want a positive number of seconds", ra)
+	}
+}
+
+func TestWebhook_CorrectSecretsAreNeverCounted(t *testing.T) {
+	queued := fakeAdmitter{admission.AdmissionResult{Outcome: admission.OutcomeQueued, Tag: "v1"}}
+	for i := 0; i < 100; i++ {
+		if c := serve(t, queued, "Bearer good-secret", `{"tag":"v1"}`); c.Response.StatusCode() != 202 {
+			t.Fatalf("request %d with a correct secret: %d, want 202", i, c.Response.StatusCode())
+		}
+	}
+}

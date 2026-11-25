@@ -23,7 +23,7 @@ type validationBody struct {
 
 func validAppJSON(over map[string]string) string {
 	m := map[string]string{
-		"name": "v-app", "secret": "secret-v", "binaryPath": "/opt/v-app/v-app", "serviceName": "v-app.service",
+		"name": "v-app", "secret": "secret-v-padding-padding-padding-1234", "binaryPath": "/opt/v-app/v-app", "serviceName": "v-app.service",
 		"githubRepo": "owner/v-app", "artifactName": "v-app-linux",
 	}
 	for k, v := range over {

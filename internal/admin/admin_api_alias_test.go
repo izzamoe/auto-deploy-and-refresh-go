@@ -78,7 +78,7 @@ func TestLegacyAPIAliasesMirrorV1AndAreDeprecated(t *testing.T) {
 	}
 
 	// Mutations through the alias are still CSRF-protected by the same middleware.
-	body := `{"name":"made-via-alias","secret":"secret-alias-1","binaryPath":"/opt/alias","serviceName":"alias.service","githubRepo":"o/alias","artifactName":"alias"}`
+	body := `{"name":"made-via-alias","secret":"secret-alias-1-padding-padding-1234","binaryPath":"/opt/alias","serviceName":"alias.service","githubRepo":"o/alias","artifactName":"alias"}`
 	noCSRF := map[string]string{"Cookie": testAdminSessionCookie(t), "Content-Type": "application/json"}
 	if w := do("POST", "/admin/api/apps", noCSRF, body); w.Code != http.StatusForbidden {
 		t.Errorf("alias mutation without CSRF headers: %d, want 403", w.Code)

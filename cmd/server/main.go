@@ -280,7 +280,7 @@ func main() {
 	publicPage := func(ctx context.Context, c *app.RequestContext) { c.Next(ctx) }
 	admin.RegisterSessionRoutesHertz(h, sessionHandler, authMW)
 	admin.RegisterTokenRoutesHertz(h, tokensHandler, authMW)
-	h.POST("/webhook", webhook.Handler(admissionSvc))
+	h.POST("/webhook", webhook.HandlerWithLimits(admissionSvc, webhook.Limits{ClientIP: clientIPs}))
 	llmstxt.RegisterRoutesHertz(h)
 	admin.RegisterAdminEventRoutesHertz(h, adminEventHub, authMW)
 	admin.RegisterAccountRoutesHertz(h, accountHandler, authMW)

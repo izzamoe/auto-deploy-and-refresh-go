@@ -133,7 +133,7 @@ func TestDeleteAppHertzWorksWithoutContentType(t *testing.T) {
 	t.Parallel()
 	h, _, _, jwt := newTestAdminAPIHertz(t)
 
-	createBody := `{"name":"del-test","secret":"secret-del","binaryPath":"/opt/del-test","serviceName":"del-test.service","githubRepo":"owner/del-test","artifactName":"del-test-linux"}`
+	createBody := `{"name":"del-test","secret":"secret-del-padding-padding-padding-1","binaryPath":"/opt/del-test","serviceName":"del-test.service","githubRepo":"owner/del-test","artifactName":"del-test-linux"}`
 	createRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps", createBody))
 	created := decodeAdminAPIResponseHertz[struct {
 		Status string              `json:"status"`
@@ -157,7 +157,7 @@ func TestAdminAPIAppsCRUD(t *testing.T) {
 	t.Parallel()
 	h, store, _, jwt := newTestAdminAPIHertz(t)
 
-	createBody := `{"name":"api-app","secret":"secret-1","binaryPath":"/opt/api-app","serviceName":"api-app.service","githubRepo":"owner/api-app","artifactName":"api-app-linux"}`
+	createBody := `{"name":"api-app","secret":"secret-1-padding-padding-padding-12","binaryPath":"/opt/api-app","serviceName":"api-app.service","githubRepo":"owner/api-app","artifactName":"api-app-linux"}`
 	createRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps", createBody))
 	if createRR.Response.StatusCode() != http.StatusCreated {
 		t.Fatalf("expected 201 create, got %d body=%s", createRR.Response.StatusCode(), string(createRR.Response.Body()))
@@ -237,12 +237,12 @@ func TestAdminAPIUpdateDuplicateSecretDoesNotPartiallyUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create app A: %v", err)
 	}
-	_, err = store.Create("app-b", "secret-b", "/bin/b", "b.service", "owner/b", "artifact-b")
+	_, err = store.Create("app-b", "secret-b-padding-padding-padding-1234", "/bin/b", "b.service", "owner/b", "artifact-b")
 	if err != nil {
 		t.Fatalf("create app B: %v", err)
 	}
 
-	updateBody := `{"name":"app-a-mutated","secret":"secret-b","binaryPath":"/bin/a-mutated","serviceName":"a-mutated.service","githubRepo":"owner/a-mutated","artifactName":"artifact-a-mutated"}`
+	updateBody := `{"name":"app-a-mutated","secret":"secret-b-padding-padding-padding-1234","binaryPath":"/bin/a-mutated","serviceName":"a-mutated.service","githubRepo":"owner/a-mutated","artifactName":"artifact-a-mutated"}`
 	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "PUT", "/admin/api/v1/apps/"+appA.ID, updateBody))
 	if rr.Response.StatusCode() != http.StatusBadRequest {
 		t.Fatalf("expected 400 duplicate secret update, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))

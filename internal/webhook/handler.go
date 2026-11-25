@@ -6,13 +6,32 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/izzamoe/auto-deploy/internal/admission"
+	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/httpx"
 )
+
+// Failed-authentication limit of the webhook (contracts/webhook.md W3, Q-4, FR-055): 30
+// failures per minute per client IP; a blocked IP gets 429 + Retry-After until its
+// window clears. Requests with a correct secret are never counted.
+const (
+	maxFailedAuthPerMinute = 30
+	failedAuthWindow       = time.Minute
+)
+
+// Limits configures the rate limiter of HandlerWithLimits; zero values pick the defaults.
+type Limits struct {
+	// Failures counts failed authentications per client IP.
+	Failures *auth.Window
+	// ClientIP resolves the client address (TRUSTED_PROXY_CIDRS aware).
+	ClientIP *auth.ClientIPResolver
+}
 
 // Admitter is what the handler needs from the admission service.
 type Admitter interface {
@@ -39,11 +58,34 @@ func fail(c *app.RequestContext, status int, code, msg string) {
 //   - W2: every error carries `code`;
 //   - W6: the request ID middleware (installed by the server) puts X-Request-ID on the
 //     response.
-func Handler(adm Admitter) app.HandlerFunc {
+func Handler(adm Admitter) app.HandlerFunc { return HandlerWithLimits(adm, Limits{}) }
+
+// HandlerWithLimits is Handler with an explicit rate limiter / client IP resolver.
+func HandlerWithLimits(adm Admitter, lim Limits) app.HandlerFunc {
+	if lim.Failures == nil {
+		lim.Failures = auth.NewWindow(maxFailedAuthPerMinute, failedAuthWindow, time.Now)
+	}
+	if lim.ClientIP == nil {
+		lim.ClientIP = auth.NewClientIPResolver(nil)
+	}
 	return func(ctx context.Context, c *app.RequestContext) {
+		ip := lim.ClientIP.FromContext(c)
+		if blocked, retry := lim.Failures.Blocked(ip); blocked {
+			secs := int(retry.Round(time.Second) / time.Second)
+			if secs < 1 {
+				secs = 1
+			}
+			c.Header("Retry-After", strconv.Itoa(secs))
+			fail(c, consts.StatusTooManyRequests, httpx.CodeRateLimited, "rate limited")
+			return
+		}
+		unauthorized := func() {
+			lim.Failures.Add(ip)
+			fail(c, consts.StatusUnauthorized, httpx.CodeUnauthorized, "unauthorized")
+		}
 		authHeader := string(c.GetHeader("Authorization"))
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			fail(c, consts.StatusUnauthorized, httpx.CodeUnauthorized, "unauthorized")
+			unauthorized()
 			return
 		}
 		var body struct {
@@ -56,7 +98,7 @@ func Handler(adm Admitter) app.HandlerFunc {
 		result := adm.Admit(strings.TrimPrefix(authHeader, "Bearer "), body.Tag)
 		switch result.Outcome {
 		case admission.OutcomeUnauthorized:
-			fail(c, consts.StatusUnauthorized, httpx.CodeUnauthorized, "unauthorized")
+			unauthorized()
 		case admission.OutcomeBadRequest:
 			if result.Tag == "" {
 				fail(c, consts.StatusBadRequest, httpx.CodeValidationFailed, "missing or empty tag")
