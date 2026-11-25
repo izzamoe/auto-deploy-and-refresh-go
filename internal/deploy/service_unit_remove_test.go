@@ -34,8 +34,8 @@ func TestRemoveServiceUnit(t *testing.T) {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("unit file still present: %v", err)
 		}
-		want := [][]string{{"disable", "gen"}, {"daemon-reload"}}
-		if len(calls) != len(want) || calls[0][0] != "disable" || calls[0][1] != "gen" || calls[1][0] != "daemon-reload" {
+		want := [][]string{{"disable", "--", "gen"}, {"daemon-reload"}}
+		if len(calls) != len(want) || calls[0][0] != "disable" || calls[0][1] != "--" || calls[0][2] != "gen" || calls[1][0] != "daemon-reload" {
 			t.Errorf("systemctl calls = %v, want %v", calls, want)
 		}
 	})

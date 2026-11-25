@@ -133,6 +133,9 @@ type AppInput struct {
 	ServiceName  string
 	GithubRepo   string
 	ArtifactName string
+	// Optional per-app settings (FR-042, FR-047).
+	RunAsUser string
+	HealthURL string
 }
 
 // FieldError is one invalid field; Field uses the API (JSON) name.
@@ -158,6 +161,8 @@ func ValidateAppInput(in AppInput) []FieldError {
 	check("serviceName", in.ServiceName, ValidateServiceName)
 	check("githubRepo", in.GithubRepo, ValidateGithubRepo)
 	check("artifactName", in.ArtifactName, ValidateArtifactName)
+	check("runAsUser", in.RunAsUser, ValidateRunAsUser)
+	check("healthUrl", in.HealthURL, ValidateHealthURL)
 	return errs
 }
 

@@ -34,7 +34,7 @@ func RemoveServiceUnit(serviceName string) (removed bool, err error) {
 	if string(firstLine) != generatedUnitMarker {
 		return false, errRefuseOverwrite
 	}
-	if out, err := runSystemctl("disable", base); err != nil {
+	if out, err := systemctlUnit("disable", base); err != nil {
 		return false, fmt.Errorf("service_unit: disable: %w: %s", err, string(out))
 	}
 	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {

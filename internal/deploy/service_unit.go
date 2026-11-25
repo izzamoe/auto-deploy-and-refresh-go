@@ -130,6 +130,14 @@ func RenderServiceUnit(app store.App) string {
 	// ExecStart= expands both %specifiers and $VARIABLES, so the path gets the same
 	// "%" -> "%%" and "$" -> "$$" as the arguments (B8, FR-041).
 	fmt.Fprintf(&b, "[Service]\nExecStart=%s%s\nWorkingDirectory=%s\nRestart=on-failure\nRestartSec=5\n", systemdArgEscaper.Replace(cleanSystemdValue(app.BinaryPath)), renderExecArgs(app.Args), workingDir)
+	// FR-047, Q-15: root and no hardening unless the app asks for them. The user name is
+	// validated; a value that fails validation is never written (Preview/Apply refuse it).
+	if app.RunAsUser != "" && ValidateRunAsUser(app.RunAsUser) == nil {
+		fmt.Fprintf(&b, "User=%s\n", app.RunAsUser)
+	}
+	if app.Hardening {
+		b.WriteString("NoNewPrivileges=yes\nProtectSystem=full\nPrivateTmp=yes\n")
+	}
 	for _, env := range app.EnvVars {
 		name := cleanSystemdValue(env.Name)
 		if name == "" {
@@ -151,6 +159,9 @@ func RenderServiceUnit(app store.App) string {
 func PreviewServiceUnit(app store.App) (string, error) {
 	if _, _, err := serviceUnitBaseAndFile(app.ServiceName); err != nil {
 		return "", err
+	}
+	if err := ValidateRunAsUser(app.RunAsUser); err != nil {
+		return "", fmt.Errorf("service_unit: runAsUser %w", err)
 	}
 	return RenderServiceUnit(app), nil
 }
@@ -177,6 +188,9 @@ func ApplyServiceUnit(app store.App) error {
 	base, fileName, err := serviceUnitBaseAndFile(app.ServiceName)
 	if err != nil {
 		return err
+	}
+	if err := ValidateRunAsUser(app.RunAsUser); err != nil {
+		return fmt.Errorf("service_unit: runAsUser %w", err)
 	}
 	// Defense in depth: validate the base name a second time before any I/O.
 	if err := ValidateServiceUnitName(base); err != nil {
@@ -206,7 +220,7 @@ func ApplyServiceUnit(app store.App) error {
 	if out, err := runSystemctl("daemon-reload"); err != nil {
 		return fmt.Errorf("service_unit: daemon-reload: %w: %s", err, string(out))
 	}
-	if out, err := runSystemctl("enable", base); err != nil {
+	if out, err := systemctlUnit("enable", base); err != nil {
 		return fmt.Errorf("service_unit: enable: %w: %s", err, string(out))
 	}
 	return nil

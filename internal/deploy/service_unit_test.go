@@ -326,8 +326,8 @@ func TestApplyServiceUnitFreshWrite(t *testing.T) {
 	if (*calls)[0][0] != "daemon-reload" {
 		t.Fatalf("first call = %v, want daemon-reload", (*calls)[0])
 	}
-	if (*calls)[1][0] != "enable" || (*calls)[1][1] != "myapp" {
-		t.Fatalf("second call = %v, want [enable myapp]", (*calls)[1])
+	if (*calls)[1][0] != "enable" || (*calls)[1][1] != "--" || (*calls)[1][2] != "myapp" {
+		t.Fatalf("second call = %v, want [enable -- myapp]", (*calls)[1])
 	}
 }
 
@@ -461,7 +461,7 @@ func TestApplyServiceUnitServiceNameWithoutSuffix(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "myapp.service")); err != nil {
 		t.Fatalf("expected unit file at myapp.service: %v", err)
 	}
-	if (*calls)[1][1] != "myapp" {
-		t.Fatalf("enable call = %v, want myapp (no double suffix)", (*calls)[1])
+	if (*calls)[1][2] != "myapp" {
+		t.Fatalf("enable call = %v, want myapp after \"--\" (no double suffix)", (*calls)[1])
 	}
 }

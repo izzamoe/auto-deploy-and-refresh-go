@@ -66,7 +66,7 @@ func TestSelfDeploy_ArmsGuardAndPendingBeforeRestartThenWaits(t *testing.T) {
 	if !errors.Is(err, store.ErrSelfDeployInFlight) {
 		t.Fatalf("err = %v, want ErrSelfDeployInFlight (the next process settles the job)", err)
 	}
-	if len(order) < 2 || order[0] != "guard" || order[1] != "restart --no-block auto-deploy.service" {
+	if len(order) < 2 || order[0] != "guard" || order[1] != "restart --no-block -- auto-deploy.service" {
 		t.Errorf("order = %v, want guard first, then a NON-blocking restart", order)
 	}
 	joined := strings.Join(guardArgs, " ")

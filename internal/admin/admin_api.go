@@ -227,6 +227,11 @@ func validateAdminAPIAppRequest(body adminAPIAppRequest, requireSecret bool) []h
 // validateAdminAPIAppSettings checks the optional per-app deploy settings.
 func validateAdminAPIAppSettings(body adminAPIAppRequest) []httpx.FieldError {
 	var errs []httpx.FieldError
+	if body.RunAsUser != nil {
+		if err := deploy.ValidateRunAsUser(*body.RunAsUser); err != nil {
+			errs = append(errs, httpx.FieldError{Field: "runAsUser", Message: "Run-as user " + err.Error()})
+		}
+	}
 	if body.HealthURL != nil {
 		if err := deploy.ValidateHealthURL(*body.HealthURL); err != nil {
 			errs = append(errs, httpx.FieldError{Field: "healthUrl", Message: "Health URL " + err.Error()})

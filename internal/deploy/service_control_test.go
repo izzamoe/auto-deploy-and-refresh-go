@@ -2,9 +2,12 @@ package deploy
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/izzamoe/auto-deploy/internal/progress"
 )
 
 func TestControlServiceRunsWhitelistedActions(t *testing.T) {
@@ -26,8 +29,8 @@ func TestControlServiceRunsWhitelistedActions(t *testing.T) {
 		if out != "ok" {
 			t.Errorf("output = %q, want ok", out)
 		}
-		if gotName != action || len(gotArgs) != 1 || gotArgs[0] != "bot.service" {
-			t.Errorf("systemctl called as %q %v, want %q [bot.service]", gotName, gotArgs, action)
+		if gotName != action || len(gotArgs) != 2 || gotArgs[0] != "--" || gotArgs[1] != "bot.service" {
+			t.Errorf("systemctl called as %q %v, want %q [-- bot.service]", gotName, gotArgs, action)
 		}
 	}
 }
@@ -163,5 +166,99 @@ func TestCaptureServiceLogsLinesUnlimitedOmitsCount(t *testing.T) {
 	}
 	if !strings.Contains(gotArgs, "--no-tail") {
 		t.Errorf("journalctl args = %q, want --no-tail for unlimited", gotArgs)
+	}
+}
+
+// B22 / FR-047: a unit name is always passed after "--", so a name can never be read as
+// a systemctl option.
+func TestSystemctl_UnitNameIsAlwaysAfterDoubleDash(t *testing.T) {
+	dir := t.TempDir()
+	defer SetSystemdUnitDirForTest(dir)()
+	var calls [][]string
+	defer SetRunSystemctlForTest(func(name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		if name == "show" {
+			return []byte("0\n"), nil
+		}
+		return []byte("active\n"), nil
+	})()
+
+	app := testApp(t.TempDir())
+	for _, action := range []string{"start", "stop", "restart"} {
+		if _, err := ControlService(app.ServiceName, action); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ServiceStatus(app.ServiceName)
+	if err := ApplyServiceUnit(*app); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoveServiceUnit(app.ServiceName); err != nil {
+		t.Fatal(err)
+	}
+	readNRestarts(app.ServiceName)
+	stubDeploySleep(t)
+	if err := os.WriteFile(app.BinaryPath, elfBinary("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DeployWithControl(app, "job-b22", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new")), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	unitVerbs := map[string]bool{"start": true, "stop": true, "restart": true, "is-active": true, "show": true, "enable": true, "disable": true}
+	checked := 0
+	for _, c := range calls {
+		if !unitVerbs[c[0]] {
+			continue
+		}
+		checked++
+		if len(c) < 3 || c[len(c)-2] != "--" {
+			t.Errorf("B22: systemctl %v: the unit name must come right after \"--\"", c[1:])
+		}
+	}
+	if checked < 8 {
+		t.Fatalf("only %d unit-addressed systemctl calls were observed; the test no longer exercises the code", checked)
+	}
+}
+
+// B22 / FR-047 / Q-15: the unit runs as root without hardening by default (compatible
+// with existing apps) and renders User= and the base hardening directives when asked.
+func TestUnit_RunAsUserAndHardeningAreRendered(t *testing.T) {
+	app := testApp(t.TempDir())
+	plain := RenderServiceUnit(*app)
+	for _, forbidden := range []string{"User=", "NoNewPrivileges", "ProtectSystem", "PrivateTmp"} {
+		if strings.Contains(plain, forbidden) {
+			t.Errorf("an app without runAsUser/hardening must keep the old unit (found %q)", forbidden)
+		}
+	}
+	app.RunAsUser = "svc-app"
+	app.Hardening = true
+	hardened := RenderServiceUnit(*app)
+	for _, want := range []string{"\nUser=svc-app\n", "\nNoNewPrivileges=yes\n", "\nProtectSystem=full\n", "\nPrivateTmp=yes\n"} {
+		if !strings.Contains(hardened, want) {
+			t.Errorf("B22: the unit lacks %q:\n%s", strings.TrimSpace(want), hardened)
+		}
+	}
+	// the directives live in [Service]
+	if i, j := strings.Index(hardened, "[Service]"), strings.Index(hardened, "NoNewPrivileges"); i < 0 || j < i {
+		t.Error("hardening directives must be inside [Service]")
+	}
+	app.RunAsUser = ""
+	rootHardened := RenderServiceUnit(*app)
+	if strings.Contains(rootHardened, "User=") || !strings.Contains(rootHardened, "NoNewPrivileges=yes") {
+		t.Errorf("hardening without runAsUser keeps root but applies the directives:\n%s", rootHardened)
+	}
+}
+
+func TestValidateRunAsUser(t *testing.T) {
+	for _, ok := range []string{"", "svc", "svc-app", "_svc", "app1", "a" + strings.Repeat("b", 30)} {
+		if err := ValidateRunAsUser(ok); err != nil {
+			t.Errorf("%q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"Root", "1app", "-svc", "svc app", "svc\nUser=root", "svc;id", "svc%h", "a" + strings.Repeat("b", 40), "svc$x", "../x"} {
+		if err := ValidateRunAsUser(bad); err == nil {
+			t.Errorf("%q must be rejected", bad)
+		}
 	}
 }

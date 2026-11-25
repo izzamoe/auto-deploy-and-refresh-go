@@ -265,7 +265,7 @@ func DeployArtifactContext(parent context.Context, app *store.App, jobID, tag st
 	// FR-040 defense in depth: an app row written before validation existed (or by a
 	// path that skipped it) must not reach the filesystem or systemctl with an unsafe
 	// binary path, service name, repo or artifact name.
-	if errs := ValidateAppInput(AppInput{BinaryPath: app.BinaryPath, ServiceName: app.ServiceName, GithubRepo: app.GithubRepo, ArtifactName: app.ArtifactName}); len(errs) > 0 {
+	if errs := ValidateAppInput(AppInput{BinaryPath: app.BinaryPath, ServiceName: app.ServiceName, GithubRepo: app.GithubRepo, ArtifactName: app.ArtifactName, RunAsUser: app.RunAsUser, HealthURL: app.HealthURL}); len(errs) > 0 {
 		return store.DownloadSummary{}, fmt.Errorf("edit app: %s is invalid (%s); this stored value predates input validation and must be corrected before the app can be deployed", errs[0].Field, errs[0].Message)
 	}
 
@@ -431,7 +431,7 @@ func DeployArtifactContext(parent context.Context, app *store.App, jobID, tag st
 			}
 			return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, err)
 		}
-	} else if out, err := runSystemctl("restart", app.ServiceName); err != nil {
+	} else if out, err := systemctlUnit("restart", app.ServiceName); err != nil {
 		// B9: the new binary is installed but the service will not start. Put
 		// the previous binary back and restart it instead of leaving it down.
 		cause := fmt.Errorf("restart service: %w: %s", err, strings.TrimSpace(string(out)))
@@ -487,7 +487,7 @@ func rollbackInstalled(app *store.App, tracker *progress.ProgressTracker, backup
 	if err := restoreBackup(backupPath, app.BinaryPath); err != nil {
 		return fmt.Errorf("%w; rollback rename failed: %v", cause, err)
 	}
-	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
+	if out, err := systemctlUnit("restart", app.ServiceName); err != nil {
 		return fmt.Errorf("%w; rollback restart failed: %v: %s", cause, err, strings.TrimSpace(string(out)))
 	}
 	return fmt.Errorf("%w; rolled back to the previous binary and restarted it: %w", cause, store.ErrRolledBack)
@@ -606,7 +606,7 @@ func checkpointRollbackInstalled(control *cancel.CancelService, jobID string, ph
 		}
 		return fmt.Errorf("cancel rollback rename failed: %w", err)
 	}
-	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
+	if out, err := systemctlUnit("restart", app.ServiceName); err != nil {
 		if _, checkpointErr := control.Checkpoint(jobID, cancel.DeployPhaseRollbackFailed); checkpointErr != nil {
 			return checkpointErr
 		}

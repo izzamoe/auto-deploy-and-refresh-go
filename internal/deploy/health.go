@@ -40,7 +40,7 @@ var healthHTTPGet = func(target string) (int, error) {
 // readNRestarts returns the unit's NRestarts counter. ok is false when systemd does
 // not report it (older systemd, stub, error); the restart check is then skipped.
 func readNRestarts(serviceName string) (n int, ok bool) {
-	out, err := runSystemctl("show", "-p", "NRestarts", "--value", serviceName)
+	out, err := systemctlUnit("show", serviceName, "-p", "NRestarts", "--value")
 	if err != nil {
 		return 0, false
 	}
@@ -69,7 +69,7 @@ func runHealthCheck(serviceName, healthURL string, baseline int, haveBaseline bo
 		deployHealthCheckSleep(healthInterval)
 		elapsed += healthInterval
 
-		out, err := runSystemctl("is-active", serviceName)
+		out, err := systemctlUnit("is-active", serviceName)
 		lastStatus = strings.TrimSpace(string(out))
 		slog.Info("health check", "elapsed", elapsed, "status", lastStatus, "consecutive", consecutive)
 		if err == nil && lastStatus == "active" {

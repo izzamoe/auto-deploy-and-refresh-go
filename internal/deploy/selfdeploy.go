@@ -143,7 +143,7 @@ func armSelfDeploy(app *store.App, jobID, backupPath string) error {
 // disarmSelfDeploy removes the pending file and stops the guard timer.
 func disarmSelfDeploy(jobID string) {
 	_ = os.Remove(PendingSelfDeployPath(selfDir()))
-	if out, err := runSystemctl("stop", guardUnitName(jobID)+".timer"); err != nil {
+	if out, err := systemctlUnit("stop", guardUnitName(jobID)+".timer"); err != nil {
 		slog.Debug("stopping the self-deploy guard", "err", err, "out", strings.TrimSpace(string(out)))
 	}
 }
@@ -155,7 +155,7 @@ func selfDeployRestart(ctx context.Context, app *store.App, jobID, backupPath st
 	if err := armSelfDeploy(app, jobID, backupPath); err != nil {
 		return &selfGuardError{err: err}
 	}
-	if out, err := runSystemctl("restart", "--no-block", app.ServiceName); err != nil {
+	if out, err := systemctlUnit("restart", app.ServiceName, "--no-block"); err != nil {
 		disarmSelfDeploy(jobID)
 		return fmt.Errorf("restart service: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -216,7 +216,7 @@ func RecoverSelfDeploy(stateDir string, r SelfDeployResolver) (bool, error) {
 
 func disarmSelfDeploy2(stateDir, jobID string) {
 	_ = os.Remove(PendingSelfDeployPath(stateDir))
-	if out, err := runSystemctl("stop", guardUnitName(jobID)+".timer"); err != nil {
+	if out, err := systemctlUnit("stop", guardUnitName(jobID)+".timer"); err != nil {
 		slog.Debug("stopping the self-deploy guard", "err", err, "out", strings.TrimSpace(string(out)))
 	}
 }

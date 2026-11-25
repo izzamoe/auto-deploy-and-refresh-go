@@ -92,3 +92,31 @@ func TestAppSettings_NewAppsRequireDigestByDefault(t *testing.T) {
 		t.Fatalf("explicit requireDigest=false = %v (%d %s)", second.App.RequireDigest, rr.Response.StatusCode(), rr.Response.Body())
 	}
 }
+
+// FR-047 / Q-15: runAsUser + hardening round-trip; an invalid user name is a field error;
+// the unit preview reflects both.
+func TestAppSettings_RunAsUserAndHardening(t *testing.T) {
+	t.Parallel()
+	h, _, _, jwt := newTestAdminAPIHertz(t)
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps", appJSONWith(map[string]any{
+		"runAsUser": "svc-app", "hardening": true,
+	})))
+	var created appSettingsResp
+	_ = json.Unmarshal(rr.Response.Body(), &created)
+	if rr.Response.StatusCode() != http.StatusCreated || created.App.RunAsUser != "svc-app" || !created.App.Hardening {
+		t.Fatalf("create = %d %s", rr.Response.StatusCode(), rr.Response.Body())
+	}
+	for _, bad := range []string{"Root", "svc\nUser=root", "a b", "-x"} {
+		rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "PUT", "/admin/api/v1/apps/"+created.App.ID, appJSONWith(map[string]any{"runAsUser": bad})))
+		if rr.Response.StatusCode() != http.StatusBadRequest || !strings.Contains(string(rr.Response.Body()), `"field":"runAsUser"`) {
+			t.Errorf("runAsUser %q: %d %s, want 400 with field runAsUser", bad, rr.Response.StatusCode(), rr.Response.Body())
+		}
+	}
+	// an update that does not mention the settings keeps them
+	upd := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "PUT", "/admin/api/v1/apps/"+created.App.ID, appJSONWith(map[string]any{"name": "again"})))
+	var kept appSettingsResp
+	_ = json.Unmarshal(upd.Response.Body(), &kept)
+	if kept.App.RunAsUser != "svc-app" || !kept.App.Hardening {
+		t.Errorf("settings changed by an unrelated update: %+v", kept.App)
+	}
+}

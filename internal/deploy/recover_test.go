@@ -159,7 +159,7 @@ func TestSelfDeploy_PendingFileMeansNewBinaryStarted(t *testing.T) {
 	if err != nil || !resolved {
 		t.Fatalf("RecoverSelfDeploy = %v, %v", resolved, err)
 	}
-	if len(stopped) != 1 || stopped[0] != "stop auto-deploy-guard-jobself.timer" {
+	if len(stopped) != 1 || stopped[0] != "stop -- auto-deploy-guard-jobself.timer" {
 		t.Errorf("the guard timer must be stopped once the new binary is up; systemctl calls = %v", stopped)
 	}
 	if len(r.succeeded) != 1 || r.succeeded[0] != "job-self" {
