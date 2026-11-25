@@ -18,6 +18,8 @@ import { idSyslogs } from "./id/syslogs";
 
 import { idSettings } from "./id/settings";
 
+import { idAccount } from "./id/account";
+
 export const id = {
   ...idCore,
   ...idDashboard,
@@ -27,6 +29,7 @@ export const id = {
   ...idHistory,
   ...idSyslogs,
   ...idSettings,
+  ...idAccount,
 } as const;
 
 export type MessageKey = keyof typeof id;
