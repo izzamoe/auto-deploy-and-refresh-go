@@ -249,6 +249,11 @@ func (c *Coordinator) runDeploy(app store.App, jobID, tag string) {
 	// an arbitrary tail of the service's journal.
 	deployStart := time.Now()
 	summary, err := c.runner(&app, jobID, tag)
+	if errors.Is(err, store.ErrSelfDeployInFlight) {
+		// FR-144: auto-deploy is replacing itself; the restarted process settles this job.
+		slog.Info("coordinator: self-deploy in flight; the next process settles the job", "app", app.ID, "job", jobID)
+		return
+	}
 	// The status just BEFORE MarkDone tells whether MarkDone ends the job: a job the
 	// cancel service already ended (canceled/failed at a checkpoint) was announced
 	// by it, MarkDone is then a no-op and nothing is announced twice.

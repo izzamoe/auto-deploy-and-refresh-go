@@ -10,6 +10,8 @@ WorkingDirectory=/opt/auto-deploy
 ExecStart=/opt/auto-deploy/auto-deploy
 Restart=on-failure
 RestartSec=5
+# Must stay above server.WithExitWaitTime (30 s) so a graceful stop finishes first.
+TimeoutStopSec=45
 EnvironmentFile=/etc/auto-deploy.env
 
 [Install]

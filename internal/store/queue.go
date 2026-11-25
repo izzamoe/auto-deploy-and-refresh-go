@@ -507,6 +507,14 @@ func (q *DeployQueue) GetJobLog(id string) (string, error) {
 	return log, nil
 }
 
+// ErrSelfDeployInFlight is returned by a deploy of auto-deploy's own service once the
+// restart was requested: the process is about to die and the NEXT process settles the
+// job (FR-144). The coordinator must leave the job in_progress.
+var ErrSelfDeployInFlight = errors.New("self-deploy in flight: the restarted process settles the job")
+
+// RecoverStale fails every job a dead process left in_progress / cancel_requested, so
+// none stays active forever (FR-044, NFR-007). It runs at startup, after a
+// self-deploy has been settled.
 func (q *DeployQueue) RecoverStale() error {
 	_, err := q.db.Exec(
 		`UPDATE deploy_jobs SET status = 'failed', error_msg = 'recovered: process crashed', updated_at = CURRENT_TIMESTAMP WHERE status IN ('in_progress', 'cancel_requested')`,

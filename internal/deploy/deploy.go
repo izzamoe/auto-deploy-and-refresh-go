@@ -249,6 +249,13 @@ func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.Prog
 // download authenticate against the GitHub API (required for assets in private
 // repositories). A nil resolver reproduces DeployWithControl's public-URL path.
 func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
+	return DeployArtifactContext(context.Background(), app, jobID, tag, tracker, client, control, resolver)
+}
+
+// DeployArtifactContext is DeployArtifact with a parent context: when it is canceled
+// (process shutdown, FR-044) the download stops, and a self-deploy that is waiting for
+// its own restart is released.
+func DeployArtifactContext(parent context.Context, app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
 	tracker.Start(app.ID, jobID, tag)
 	// B10: whatever path returns (cancel checkpoints included), the tracker entry
 	// ends terminal. A deploy canceled mid-way is "failed" for the tracker (its
@@ -281,7 +288,7 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 		}
 	}
 
-	downloadCtx, stopDownloadCancelWatcher := deployDownloadContext(jobID, control)
+	downloadCtx, stopDownloadCancelWatcher := deployDownloadContext(parent, jobID, control)
 	url, headers, err := resolveArtifactDownload(downloadCtx, resolver, app.GithubRepo, tag, app.ArtifactName)
 	if err != nil {
 		stopDownloadCancelWatcher()
@@ -397,7 +404,27 @@ func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.Progres
 
 	slog.Info("restarting service", "service", app.ServiceName)
 	tracker.SetPhase(app.ID, progress.ProgressStageRestarting)
-	if out, err := runSystemctl("restart", app.ServiceName); err != nil {
+	if IsSelfApp(app) {
+		// Q-19: this process is the one that dies on restart.
+		if err := selfDeployRestart(parent, app, jobID, backupPath); err != nil {
+			if errors.Is(err, store.ErrSelfDeployInFlight) {
+				return summary, err // the new process settles the job; marker + pending stay
+			}
+			var guardErr *selfGuardError
+			if errors.As(err, &guardErr) {
+				// Nothing was restarted: just put the previous binary back.
+				tracker.Fail(app.ID)
+				if !backupCreated {
+					return summary, err
+				}
+				if restoreErr := restoreBackup(backupPath, app.BinaryPath); restoreErr != nil {
+					return summary, fmt.Errorf("%w; restoring the previous binary failed: %v", err, restoreErr)
+				}
+				return summary, fmt.Errorf("%w; the previous binary was restored", err)
+			}
+			return summary, rollbackInstalled(app, tracker, backupPath, backupCreated, err)
+		}
+	} else if out, err := runSystemctl("restart", app.ServiceName); err != nil {
 		// B9: the new binary is installed but the service will not start. Put
 		// the previous binary back and restart it instead of leaving it down.
 		cause := fmt.Errorf("restart service: %w: %s", err, strings.TrimSpace(string(out)))
@@ -459,8 +486,8 @@ func rollbackInstalled(app *store.App, tracker *progress.ProgressTracker, backup
 	return fmt.Errorf("%w; rolled back to the previous binary and restarted it: %w", cause, store.ErrRolledBack)
 }
 
-func deployDownloadContext(jobID string, control *cancel.CancelService) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(context.Background())
+func deployDownloadContext(parent context.Context, jobID string, control *cancel.CancelService) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
 	if control == nil {
 		return ctx, cancel
 	}

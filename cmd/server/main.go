@@ -115,6 +115,13 @@ func main() {
 			"username", store.InitialAdminUsername, "password_file", passwordPath)
 	}
 	warnRetiredEnv()
+	// FR-044/FR-144: settle a self-deploy first (the new process finding its pending
+	// file means the new binary started), then fail whatever else a dead process left.
+	stateDir := filepath.Dir(serviceCfg.QueueDBPath)
+	deploy.ConfigureSelfDeploy(serviceCfg.SelfServiceName, stateDir)
+	if _, err := deploy.RecoverSelfDeploy(stateDir, queueSelfDeployResolver{q}); err != nil {
+		slog.Warn("self-deploy recovery", "err", err)
+	}
 	if err := q.RecoverStale(); err != nil {
 		slog.Warn("stale recovery", "err", err)
 	}
@@ -122,6 +129,14 @@ func main() {
 		slog.Error("bootstrap failed", "err", err)
 		db.Close()
 		os.Exit(1)
+	}
+	// FR-044: an interrupted deploy leaves a missing binary or a transaction marker.
+	if apps, err := appStore.List(); err == nil {
+		paths := make([]string, 0, len(apps))
+		for _, a := range apps {
+			paths = append(paths, a.BinaryPath)
+		}
+		deploy.RecoverInterrupted(paths)
 	}
 	// FR-040 backstop: from here on the store itself refuses an app whose binaryPath,
 	// serviceName, githubRepo or artifactName is unsafe (the API validates first). It is
@@ -144,7 +159,7 @@ func main() {
 	defer stop()
 	githubClient := github.NewClient(serviceCfg.GitHubToken)
 	coord := coordinator.NewCoordinator(appStore, q, func(app *store.App, jobID, tag string) (store.DownloadSummary, error) {
-		return deploy.DeployArtifact(app, jobID, tag, tracker, dlClient, cancelService, githubClient)
+		return deploy.DeployArtifactContext(ctx, app, jobID, tag, tracker, dlClient, cancelService, githubClient)
 	}, tracker)
 	coord.SetLogCapturer(deploy.CaptureServiceLogsSince)
 	coord.SetEventSink(adminEventHub) // job_status after every terminal MarkDone (events-ws.md 3.4)
@@ -323,4 +338,18 @@ func cleanSessions(ctx context.Context, sessions *store.AdminSessionStore) {
 			run()
 		}
 	}
+}
+
+// queueSelfDeployResolver settles a self-deploy job in the queue.
+type queueSelfDeployResolver struct{ q *store.DeployQueue }
+
+func (r queueSelfDeployResolver) MarkSelfDeploySucceeded(jobID string) error {
+	return r.q.MarkDone(jobID, true, "", nil)
+}
+
+func (r queueSelfDeployResolver) MarkSelfDeployRolledBack(jobID, message string) error {
+	if err := r.q.MarkDone(jobID, false, message, nil); err != nil {
+		return err
+	}
+	return r.q.MarkRolledBack(jobID)
 }
