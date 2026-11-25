@@ -67,9 +67,11 @@ function MoreMenu({ pathname, logout }: { pathname: string; logout: ReturnType<t
         <button
           type="button"
           aria-label={t("shell.more")}
+          aria-expanded={open}
+          aria-haspopup="dialog"
           className={cn(
             "inline-flex size-11 shrink-0 items-center justify-center rounded-full focus-visible:outline-rail-foreground md:hidden",
-            active ? "bg-rail-active text-rail-active-foreground" : "text-rail-muted hover:bg-white/10 hover:text-rail-foreground",
+            active || open ? "bg-rail-active text-rail-active-foreground" : "text-rail-muted hover:bg-white/10 hover:text-rail-foreground",
           )}
         >
           <Ellipsis className="size-5" aria-hidden="true" />
@@ -97,8 +99,8 @@ function MoreMenu({ pathname, logout }: { pathname: string; logout: ReturnType<t
             {dark ? <Sun className="size-5" aria-hidden="true" /> : <Moon className="size-5" aria-hidden="true" />}
             {t("shell.theme.toggle")}
           </button>
-          <div className="px-2 py-1">
-            <LocaleToggle />
+          <div className="px-4 py-1">
+            <LocaleToggle touch />
           </div>
           <button type="button" onClick={() => logout.mutate()} disabled={logout.isPending} className={ROW}>
             <LogOut className="size-5" aria-hidden="true" />

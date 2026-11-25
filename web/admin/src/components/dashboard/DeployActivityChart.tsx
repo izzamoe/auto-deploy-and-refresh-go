@@ -55,7 +55,7 @@ export function DeployActivityChart({ stats, range, onRangeChange }: Props) {
       </div>
 
       {empty ? (
-        <p data-testid="chart-empty" className="mt-4 flex min-h-40 flex-1 items-center justify-center rounded-2xl bg-secondary px-4 text-center text-sm text-muted-foreground">
+        <p data-testid="chart-empty" className="mt-4 flex min-h-16 max-h-24 items-center justify-center overflow-hidden rounded-2xl bg-secondary px-4 py-4 text-center text-sm text-muted-foreground">
           {t("dashboard.chart.empty")}
         </p>
       ) : (

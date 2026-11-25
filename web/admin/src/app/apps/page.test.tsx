@@ -79,7 +79,7 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     cleanup();
     nav.q = "zzz";
     mount();
-    expect(await screen.findByTestId("apps-empty")).toHaveTextContent("Tidak ada app yang cocok dengan “zzz”.");
+    expect(await screen.findByTestId("apps-empty")).toHaveTextContent("Tidak ada aplikasi yang cocok dengan “zzz”.");
   });
 
   it("a terminal job_status event invalidates the apps list AND the service status (B57, FR-078)", async () => {
@@ -137,13 +137,13 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     mount();
     const card = await screen.findByTestId("app-card-a2");
     fireEvent.click(within(card).getByRole("button", { name: "Hapus" }));
-    expect(await screen.findByText("Hapus app?")).toBeInTheDocument();
+    expect(await screen.findByText("Hapus aplikasi?")).toBeInTheDocument();
     expect(api.count("DELETE", "/admin/api/v1/apps/a2")).toBe(0); // nothing before confirming
     fireEvent.click(screen.getByLabelText("Hapus juga file unit systemd yang dibuat otomatis"));
     fireEvent.click(screen.getByRole("button", { name: "Ya, hapus" }));
     await waitFor(() => expect(api.count("DELETE", "/admin/api/v1/apps/a2")).toBe(1));
     expect(api.mock.mock.calls.some((c) => String(c[0]).includes("/apps/a2?removeUnitFile=true"))).toBe(true);
-    expect(await screen.findByText("App dihapus.")).toBeInTheDocument();
+    expect(await screen.findByText("Aplikasi dihapus.")).toBeInTheDocument();
   });
 
   it("service start posts the action and shows the returned state", async () => {
@@ -160,7 +160,7 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     let fail = true;
     const api = installFetch(routes({ "GET /admin/api/v1/apps": () => (fail ? { status: 500, body: errorBody("internal_error") } : { status: 200, body: { apps: APPS } }) }));
     mount();
-    expect(await screen.findByText("Daftar app tidak dapat dimuat.")).toBeInTheDocument();
+    expect(await screen.findByText("Daftar aplikasi tidak dapat dimuat.")).toBeInTheDocument();
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Coba lagi" }));
     expect(await screen.findByTestId("app-card-a1")).toBeInTheDocument();

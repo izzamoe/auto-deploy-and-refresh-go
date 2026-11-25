@@ -94,8 +94,8 @@ describe("translate", () => {
 
   it("Indonesian has no plural: 0, 1 and 2 use the same form", () => {
     const sub = (n: number) => translate("id", "shell.subtitle", { active: n, running: 0 });
-    expect([sub(0), sub(1), sub(2)]).toEqual(["0 app aktif · 0 berjalan", "1 app aktif · 0 berjalan", "2 app aktif · 0 berjalan"]);
-    expect(translate("id", "dashboard.apps.hint", { total: 1 })).toBe("dari 1 app");
+    expect([sub(0), sub(1), sub(2)]).toEqual(["0 aplikasi aktif · 0 berjalan", "1 aplikasi aktif · 0 berjalan", "2 aplikasi aktif · 0 berjalan"]);
+    expect(translate("id", "dashboard.apps.hint", { total: 1 })).toBe("dari 1 aplikasi");
   });
 
   it("every `.one` message has the same placeholders as its base message and a base sibling", () => {

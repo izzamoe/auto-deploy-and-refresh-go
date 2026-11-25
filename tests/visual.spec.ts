@@ -37,7 +37,8 @@ async function open(page: Page, shot: Shot) {
   await page.goto(adminURL(shot.route));
   if (shot.signedOut) await expect(page.locator('form')).toBeVisible();
   else await ready(page);
-  await page.waitForTimeout(500); // lazy chart chunk, font swap
+  await page.evaluate(() => document.fonts.ready); // a late font swap re-wraps text (the 375 px id dashboard once differed by one line)
+  await page.waitForTimeout(500); // lazy chart chunk
 }
 
 const horizontalOverflow = (page: Page) => page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
@@ -254,12 +255,52 @@ test.describe('layout with data', () => {
       for (const control of [dialog.getByRole('link', { name: 'GitHub' }), dialog.getByRole('link', { name: 'Telegram' }), dialog.getByRole('link', { name: 'Account' }), dialog.getByRole('button', { name: 'Toggle theme' }), dialog.getByRole('button', { name: /^EN / }), dialog.getByRole('button', { name: 'Sign out' })]) {
         await expect(control).toBeInViewport({ ratio: 1 });
       }
+      // T101-pre: the trigger is active while the dialog is open; touch targets >= 44 px; 12 px side margin; card radius.
+      await expect(page.locator('nav button[aria-haspopup="dialog"]')).toHaveAttribute('aria-expanded', 'true'); // role queries skip it: Radix hides the page behind a modal
+      const geo = await dialog.evaluate((el) => {
+        const box = (e: Element) => { const b = e.getBoundingClientRect(); return { x: b.x, w: b.width, h: b.height, right: window.innerWidth - b.right }; };
+        const group = el.querySelector('[role="group"]')!;
+        return {
+          dialog: box(el),
+          radius: parseFloat(getComputedStyle(el).borderTopLeftRadius),
+          close: box(el.querySelector('[data-testid="dialog-close"]')!),
+          locale: [...group.querySelectorAll('button')].map(box),
+          groupLeft: group.getBoundingClientRect().x,
+          iconLeft: el.querySelector('[data-testid="more-menu"] a svg')!.getBoundingClientRect().x,
+        };
+      });
+      expect(geo.dialog.x, `@${width} left margin`).toBeGreaterThanOrEqual(12);
+      expect(geo.dialog.right, `@${width} right margin`).toBeGreaterThanOrEqual(12);
+      expect(geo.radius, `@${width} radius`).toBeGreaterThanOrEqual(24);
+      expect(geo.close.w).toBeGreaterThanOrEqual(44);
+      expect(geo.close.h).toBeGreaterThanOrEqual(44);
+      for (const b of geo.locale) expect(b.h, `@${width} locale button height`).toBeGreaterThanOrEqual(44);
+      expect(Math.abs(geo.groupLeft - geo.iconLeft), `@${width} language toggle aligned with the row icons`).toBeLessThanOrEqual(2);
       await dialog.getByRole('button', { name: 'Toggle theme' }).click();
       await expect(page.locator('html')).toHaveClass(/dark/);
       await dialog.getByRole('link', { name: 'Account' }).click();
       await expect(page).toHaveURL(/\/account\/?$/);
       await context.close();
     }
+  });
+
+  test('T101-pre: without deploys in the range the activity card shows a short empty state (<= 96 px)', async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
+    await setPrefs(context, 'id', 'light');
+    const page = await context.newPage();
+    await page.route('**/admin/api/v1/stats*', async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      body.daily = body.daily.map((d: Record<string, unknown>) => ({ ...d, succeeded: 0, failed: 0, canceled: 0 }));
+      await route.fulfill({ response: res, json: body });
+    });
+    await page.goto(adminURL('/'));
+    await ready(page);
+    const empty = page.getByTestId('chart-empty');
+    await expect(empty).toBeVisible();
+    const h = (await empty.boundingBox())!.height;
+    expect(h).toBeLessThanOrEqual(96);
+    await context.close();
   });
 
   test('icon-only controls show a text tooltip next to the rail on hover', async ({ browser }) => {

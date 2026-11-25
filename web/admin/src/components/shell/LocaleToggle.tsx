@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
 
 const NAME_KEY = { id: "shell.locale.id", en: "shell.locale.en" } as const;
 
-export function LocaleToggle({ className }: { className?: string }) {
+/** `touch` = buttons at least 44 px tall (the mobile "More" dialog); the rail keeps the compact size. */
+export function LocaleToggle({ className, touch = false }: { className?: string; touch?: boolean }) {
   const { t, locale, setLocale } = useI18n();
   return (
     <div role="group" aria-label={t("shell.locale.label")} className={cn("inline-flex rounded-full bg-black/25 p-0.5", className)}>
@@ -19,6 +20,7 @@ export function LocaleToggle({ className }: { className?: string }) {
           onClick={() => setLocale(l)}
           className={cn(
             "rounded-full px-2.5 py-1 text-xs font-semibold focus-visible:outline-rail-foreground",
+            touch && "inline-flex min-h-11 min-w-11 items-center justify-center px-4 text-sm",
             locale === l ? "bg-rail-active text-rail-active-foreground" : "text-rail-muted hover:text-rail-foreground",
           )}
         >

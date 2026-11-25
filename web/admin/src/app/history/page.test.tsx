@@ -58,7 +58,7 @@ describe("History page (T090, FR-077, B56, B52)", () => {
     mount();
     const table = await screen.findByTestId("history-table");
     expect(within(table).getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "App" })).toBeInTheDocument(); // unfiltered: app column
+    expect(within(table).getByRole("columnheader", { name: "Aplikasi" })).toBeInTheDocument(); // unfiltered: app column
     const failed = screen.getByTestId("history-row-j2");
     expect(within(failed).getByText("Gagal")).toBeInTheDocument();
     expect(within(failed).getByText("Webhook")).toBeInTheDocument();
@@ -129,8 +129,8 @@ describe("History page (T090, FR-077, B56, B52)", () => {
     installFetch(routes({ [`GET ${U}/history`]: () => ({ status: 200, body: pageOf([job(1)], 1, 1, { app: { id: "a1", name: "web-api" } }) }) }));
     mount();
     const table = await screen.findByTestId("history-table");
-    expect(within(table).queryByRole("columnheader", { name: "App" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Tampilkan semua app" })).toBeInTheDocument();
+    expect(within(table).queryByRole("columnheader", { name: "Aplikasi" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Tampilkan semua aplikasi" })).toBeInTheDocument();
   });
 
   it("retry posts once, hides the button for that job and refreshes the history", async () => {
@@ -171,6 +171,6 @@ describe("History page (T090, FR-077, B56, B52)", () => {
     nav.params = "appId=zz";
     installFetch(routes({ [`GET ${U}/history`]: () => ({ status: 404, body: errorBody("not_found") }) }));
     mount();
-    expect(await screen.findByText("App untuk riwayat ini tidak ditemukan.")).toBeInTheDocument();
+    expect(await screen.findByText("Aplikasi untuk riwayat ini tidak ditemukan.")).toBeInTheDocument();
   });
 });

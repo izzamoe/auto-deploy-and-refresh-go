@@ -75,7 +75,7 @@ describe("Dashboard (T087, FR-100, FR-026, FR-108)", () => {
     expect(within(recent).getByRole("link", { name: /^web-api.*Lihat riwayat$/ })).toHaveAttribute("href", expect.stringMatching(/^\/history\/?\?appId=a1$/));
     // account + add-app
     expect(screen.getByTestId("account-username")).toHaveTextContent("budi");
-    expect(screen.getByRole("link", { name: "Tambah app" })).toHaveAttribute("href", expect.stringMatching(/^\/apps\/new\/?$/));
+    expect(screen.getByRole("link", { name: "Tambah aplikasi" })).toHaveAttribute("href", expect.stringMatching(/^\/apps\/new\/?$/));
   });
 
   it("the chart has a hidden table with every value and a legend (not colour alone)", async () => {
@@ -100,6 +100,10 @@ describe("Dashboard (T087, FR-100, FR-026, FR-108)", () => {
     expect(screen.queryByTestId("tile-success-rate")).toBeNull();
     expect(screen.getAllByText("Belum ada data")).toHaveLength(1); // not repeated in the chart panel
     expect(screen.getByTestId("chart-empty")).toHaveTextContent("Belum ada deploy pada rentang ini.");
+    // T101-pre: the empty state is a short strip (<= 96 px = max-h-24), not a 160 px block that stretches.
+    expect(screen.getByTestId("chart-empty")).toHaveClass("max-h-24");
+    expect(screen.getByTestId("chart-empty")).not.toHaveClass("flex-1");
+    expect(screen.getByTestId("chart-empty")).not.toHaveClass("min-h-40");
     expect(screen.queryByRole("img", { name: /Grafik area/ })).toBeNull(); // no flat line at 0
     expect(screen.queryByTestId("chart-table")).toBeNull();
     expect(screen.queryByTestId("delta-pill")).toBeNull();

@@ -43,12 +43,12 @@ function mount(appId?: string) {
 
 const edit = async () => {
   mount("a1");
-  return screen.findByLabelText("Nama app");
+  return screen.findByLabelText("Nama aplikasi");
 };
 const puts = (api: ReturnType<typeof installFetch>, suffix: string) => api.calls.filter((c) => c.method === "PUT" && c.path === `${U}/apps/a1${suffix}`);
 
 function fillCreate() {
-  fireEvent.change(screen.getByLabelText("Nama app"), { target: { value: "my-app" } });
+  fireEvent.change(screen.getByLabelText("Nama aplikasi"), { target: { value: "my-app" } });
   fireEvent.change(screen.getByLabelText("Nama service"), { target: { value: "my-app.service" } });
   fireEvent.change(screen.getByLabelText("Path binary"), { target: { value: "/opt/my-app/bin" } });
   fireEvent.change(screen.getByLabelText("Repo GitHub"), { target: { value: "owner/repo" } });
@@ -70,11 +70,11 @@ describe("AppForm create (B55, FR-028, FR-076)", () => {
   it("creates with ONE atomic POST carrying env + args, and shows the secret once", async () => {
     const api = installFetch(routes({ [`POST ${U}/apps`]: () => ({ status: 201, body: { status: "created", app: { ...APP, id: "n1", name: "my-app" }, webhookSecret: "S".repeat(40) } }) }));
     mount();
-    await screen.findByLabelText("Nama app");
+    await screen.findByLabelText("Nama aplikasi");
     fillCreate();
     fireEvent.change(screen.getByLabelText("Variabel lingkungan"), { target: { value: "A=1\nB=two" } });
     fireEvent.change(screen.getByLabelText("Argumen baris perintah"), { target: { value: '--port 8080 --msg "hi there"' } });
-    fireEvent.click(screen.getByRole("button", { name: "Buat app" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buat aplikasi" }));
 
     expect(await screen.findByTestId("webhook-snippet")).toBeInTheDocument();
     const posts = api.calls.filter((c) => c.method === "POST" && c.path === `${U}/apps`);
@@ -93,14 +93,14 @@ describe("AppForm create (B55, FR-028, FR-076)", () => {
   it("a failed create leaves no ambiguous state: still the form, nothing else was called", async () => {
     const api = installFetch(routes({ [`POST ${U}/apps`]: () => ({ status: 409, body: errorBody("duplicate") }) }));
     mount();
-    await screen.findByLabelText("Nama app");
+    await screen.findByLabelText("Nama aplikasi");
     fillCreate();
     fireEvent.change(screen.getByLabelText("Variabel lingkungan"), { target: { value: "A=1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Buat app" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buat aplikasi" }));
     expect(await screen.findByText("Data dengan nilai yang sama sudah ada.")).toBeInTheDocument();
     expect(screen.queryByTestId("webhook-snippet")).toBeNull();
     expect(api.calls.filter((c) => c.method !== "GET")).toHaveLength(1); // the single POST
-    expect(screen.getByLabelText("Nama app")).toHaveValue("my-app"); // typed values kept
+    expect(screen.getByLabelText("Nama aplikasi")).toHaveValue("my-app"); // typed values kept
   });
 
   it("shows per-field errors from errors[] (localized) linked with aria-invalid/aria-describedby", async () => {
@@ -113,16 +113,16 @@ describe("AppForm create (B55, FR-028, FR-076)", () => {
       }),
     );
     mount();
-    await screen.findByLabelText("Nama app");
+    await screen.findByLabelText("Nama aplikasi");
     fillCreate();
-    fireEvent.click(screen.getByRole("button", { name: "Buat app" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buat aplikasi" }));
     const binary = await screen.findByLabelText("Path binary");
     await waitFor(() => expect(binary).toHaveAttribute("aria-invalid", "true"));
     expect(binary.getAttribute("aria-describedby")).toContain("f-binary-error");
     expect(screen.getByText("Harus path absolut tanpa spasi, %, $, atau backslash, dan tidak di direktori sistem.")).toBeInTheDocument();
     expect(screen.getByText("URL health check tidak valid.")).toBeInTheDocument();
     expect(screen.queryByText(/must not contain spaces/)).toBeNull(); // raw server English is never shown
-    expect(screen.getByLabelText("Nama app")).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByLabelText("Nama aplikasi")).not.toHaveAttribute("aria-invalid");
     const summary = screen.getByTestId("form-errors");
     expect(within(summary).getByRole("link", { name: "Path binary" })).toHaveAttribute("href", "#f-binary");
   });
@@ -130,9 +130,9 @@ describe("AppForm create (B55, FR-028, FR-076)", () => {
   it("validates required fields and the repo format before any request", async () => {
     const api = installFetch(routes());
     mount();
-    await screen.findByLabelText("Nama app");
+    await screen.findByLabelText("Nama aplikasi");
     fireEvent.change(screen.getByLabelText("Repo GitHub"), { target: { value: "not a repo" } });
-    fireEvent.click(screen.getByRole("button", { name: "Buat app" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buat aplikasi" }));
     expect(await screen.findAllByText("Wajib diisi.")).not.toHaveLength(0);
     expect(screen.getByText("Gunakan format pemilik/repo.")).toBeInTheDocument();
     expect(api.calls.some((c) => c.method === "POST")).toBe(false);
@@ -141,10 +141,10 @@ describe("AppForm create (B55, FR-028, FR-076)", () => {
   it("rejects an invalid env variable name client-side", async () => {
     const api = installFetch(routes());
     mount();
-    await screen.findByLabelText("Nama app");
+    await screen.findByLabelText("Nama aplikasi");
     fillCreate();
     fireEvent.change(screen.getByLabelText("Variabel lingkungan"), { target: { value: "1BAD=x" } });
-    fireEvent.click(screen.getByRole("button", { name: "Buat app" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buat aplikasi" }));
     expect(await screen.findByText("Nama variabel tidak valid: 1BAD")).toBeInTheDocument();
     expect(api.calls.some((c) => c.method === "POST")).toBe(false);
   });
@@ -163,7 +163,7 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
     await waitFor(() => expect(puts(api, "")).toHaveLength(1));
     expect(puts(api, "")[0].body).toMatchObject({ name: "web-api-2" });
     expect(puts(api, "/env")).toHaveLength(0);
-    expect(await screen.findByText("App diperbarui.")).toBeInTheDocument();
+    expect(await screen.findByText("Aplikasi diperbarui.")).toBeInTheDocument();
   });
 
   it("an unchanged env/args text sends no PUT for them; only the app is saved", async () => {
@@ -174,7 +174,7 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
     fireEvent.change(name, { target: { value: "renamed" } });
     fireEvent.click(screen.getByRole("button", { name: "Simpan perubahan" }));
     await waitFor(() => expect(puts(api, "")).toHaveLength(1));
-    await screen.findByText("App diperbarui.");
+    await screen.findByText("Aplikasi diperbarui.");
     expect(puts(api, "/env")).toHaveLength(0);
     expect(puts(api, "/args")).toHaveLength(0);
     // A cosmetic change (extra blank line / comment) is not a change either.
@@ -193,7 +193,7 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
     await waitFor(() => expect(puts(api, "/env")).toHaveLength(1));
     expect(puts(api, "/env")[0].body).toEqual({ envVars: [{ name: "LOG", value: "debug" }, { name: "NEW", value: "1" }] });
     expect(puts(api, "/args")).toHaveLength(0);
-    await screen.findByText("App diperbarui.");
+    await screen.findByText("Aplikasi diperbarui.");
     fireEvent.click(screen.getByRole("button", { name: "Simpan perubahan" }));
     await waitFor(() => expect(puts(api, "")).toHaveLength(2));
     expect(puts(api, "/env")).toHaveLength(1);
@@ -206,8 +206,8 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
     await waitFor(() => expect(screen.getByLabelText("Variabel lingkungan")).toHaveValue("LOG=info"));
     fireEvent.change(screen.getByLabelText("Variabel lingkungan"), { target: { value: "LOG=x" } });
     fireEvent.click(screen.getByRole("button", { name: "Simpan perubahan" }));
-    expect(await screen.findByText(/App tersimpan, tetapi variabel lingkungan gagal disimpan/)).toBeInTheDocument();
-    expect(screen.queryByText("App diperbarui.")).toBeNull();
+    expect(await screen.findByText(/Aplikasi tersimpan, tetapi variabel lingkungan gagal disimpan/)).toBeInTheDocument();
+    expect(screen.queryByText("Aplikasi diperbarui.")).toBeNull();
     expect(screen.getByLabelText("Variabel lingkungan")).toHaveValue("LOG=x"); // typing kept
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Simpan perubahan" }));
@@ -224,7 +224,7 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
     await act(async () => {
       window.dispatchEvent(new Event("focus")); // window refocus refetch must not clobber the form either
     });
-    expect(screen.getByLabelText("Nama app")).toHaveValue("typing-in-progress");
+    expect(screen.getByLabelText("Nama aplikasi")).toHaveValue("typing-in-progress");
     expect(screen.getByLabelText("Webhook secret")).toHaveValue("x".repeat(33));
   });
 
@@ -240,7 +240,7 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
   it("an unknown app shows 'not found' with a way back", async () => {
     installFetch(routes({ [`GET ${U}/apps/a1`]: () => ({ status: 404, body: errorBody("not_found") }) }));
     mount("a1");
-    expect(await screen.findByText("App tidak ditemukan.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Kembali ke daftar app" })).toBeInTheDocument();
+    expect(await screen.findByText("Aplikasi tidak ditemukan.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Kembali ke daftar aplikasi" })).toBeInTheDocument();
   });
 });

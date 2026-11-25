@@ -95,7 +95,7 @@ describe("Header", () => {
     installFetch(okRoutes());
     mountShell();
     expect(await screen.findByTestId("greeting")).toHaveTextContent("Halo, budi");
-    await waitFor(() => expect(screen.getByTestId("subtitle")).toHaveTextContent("3 app aktif · 2 berjalan"));
+    await waitFor(() => expect(screen.getByTestId("subtitle")).toHaveTextContent("3 aplikasi aktif · 2 berjalan"));
   });
 
   it("a failing /stats does not break the shell", async () => {
@@ -108,7 +108,7 @@ describe("Header", () => {
   it("searching goes to the apps page with the term; an empty search goes to the plain list", async () => {
     installFetch(okRoutes());
     mountShell();
-    const input = await screen.findByRole("searchbox", { name: "Cari app" });
+    const input = await screen.findByRole("searchbox", { name: "Cari aplikasi" });
     fireEvent.change(input, { target: { value: "  demo app " } });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
     expect(nav.push).toHaveBeenLastCalledWith("/apps/?q=demo%20app");
@@ -330,6 +330,34 @@ describe("mobile navigation (below 768 px): the \"More\" menu", () => {
     const dialog = await screen.findByRole("dialog", { name: "Opsi lainnya" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Keluar" }));
     expect(await within(dialog).findByText("Gagal keluar. Coba lagi.")).toBeInTheDocument();
+  });
+
+  it("T101-pre: the \"Lainnya\" button is active (aria-expanded + active style) while the dialog is open", async () => {
+    installFetch(okRoutes());
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    const more = screen.getByRole("button", { name: "Lainnya" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(more).not.toHaveClass("bg-rail-active");
+    fireEvent.click(more);
+    await screen.findByRole("dialog", { name: "Opsi lainnya" });
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    expect(more).toHaveClass("bg-rail-active");
+  });
+
+  it("T101-pre: touch targets in the dialog are >= 44 px (close button, language buttons) and it keeps a side margin and the card radius", async () => {
+    installFetch(okRoutes());
+    mountShell();
+    await screen.findByTestId("admin-shell");
+    fireEvent.click(screen.getByRole("button", { name: "Lainnya" }));
+    const dialog = await screen.findByRole("dialog", { name: "Opsi lainnya" });
+    expect(within(dialog).getByTestId("dialog-close")).toHaveClass("size-11");
+    for (const b of within(dialog).getAllByRole("button", { name: /Bahasa Indonesia|English/ })) {
+      expect(b).toHaveClass("min-h-11", "min-w-11");
+    }
+    // jsdom has no layout: assert the classes that give the 12 px side margin and the card radius.
+    expect(dialog.className).toContain("w-[calc(100%-1.5rem)]");
+    expect(dialog.className).toContain("rounded-card");
   });
 
   it("the \"Lainnya\" button is marked current when a hidden section is open", async () => {

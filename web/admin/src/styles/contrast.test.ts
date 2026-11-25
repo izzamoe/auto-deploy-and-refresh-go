@@ -122,6 +122,26 @@ describe("token files", () => {
     expect(contrast("#ffffff", "#4e7358")).toBeGreaterThanOrEqual(UI);
   });
 
+  // T101-pre: the translucent boxes of the "Tambah aplikasi" illustration (white at the
+  // opacity written in AddAppCard.tsx) are graphics: >= 3:1 on BOTH gradient stops, both themes.
+  it.each(["light", "dark"] as Theme[])("the add-app illustration boxes are >= 3:1 on the gradient (%s)", (theme) => {
+    const src = readFileSync(resolve(SRC, "components", "dashboard", "AddAppCard.tsx"), "utf8");
+    const opacities = [...src.matchAll(/fillOpacity="([0-9.]+)"/g)].map((m) => parseFloat(m[1]));
+    expect(opacities.length).toBe(2);
+    const mixHex = (bg: string, o: number) => {
+      const n = parseInt(bg.slice(1), 16);
+      const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => Math.round(c * (1 - o) + 255 * o));
+      return `#${ch.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+    };
+    for (const stop of ["gradient-from", "gradient-to"]) {
+      for (const o of opacities) {
+        const r = contrast(mixHex(THEMES[theme][stop], o), THEMES[theme][stop]);
+        console.log(`${theme} add-app box opacity ${o} on --${stop}: ${r.toFixed(2)}:1`);
+        expect(r, `${theme}: opacity ${o} on --${stop}`).toBeGreaterThanOrEqual(UI);
+      }
+    }
+  });
+
   // The three colours measured and rejected in note 06 §4 must never come back as a
   // text or background colour. Built from parts so this file does not contain them.
   const FORBIDDEN = [["5F", "8567"], ["64", "7f70"], ["8E", "8E8A"]].map(([a, b]) => `#${a}${b}`.toLowerCase());

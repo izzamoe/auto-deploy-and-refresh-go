@@ -11,8 +11,8 @@ import { useI18n } from "@/i18n";
 function Boxes() {
   return (
     <svg aria-hidden="true" focusable="false" viewBox="0 0 96 64" className="h-14 w-20">
-      <rect x="6" y="36" width="38" height="24" rx="6" fill="currentColor" fillOpacity="0.35" />
-      <rect x="50" y="36" width="38" height="24" rx="6" fill="currentColor" fillOpacity="0.6" />
+      <rect x="6" y="36" width="38" height="24" rx="6" fill="currentColor" fillOpacity="0.7" />
+      <rect x="50" y="36" width="38" height="24" rx="6" fill="currentColor" fillOpacity="0.85" />
       <rect x="28" y="8" width="38" height="24" rx="6" fill="currentColor" />
       <path d="M47 14v12M41 20h12" strokeWidth="2.5" strokeLinecap="round" className="stroke-gradient-from" />
     </svg>
