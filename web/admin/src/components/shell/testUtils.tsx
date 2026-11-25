@@ -17,7 +17,7 @@ export function Providers({ children, client }: { children: ReactNode; client?: 
   );
 }
 
-export type Reply = { status: number; body?: unknown };
+export type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
 export type Handler = (init: RequestInit & { url: string }) => Reply | Promise<Reply>;
 
 export interface FetchCall {
@@ -41,6 +41,7 @@ export function installFetch(routes: Record<string, Handler>) {
     return {
       ok: reply.status >= 200 && reply.status < 300,
       status: reply.status,
+      headers: new Headers(reply.headers),
       json: async () => {
         if (reply.body === undefined) throw new SyntaxError("no body");
         return reply.body;

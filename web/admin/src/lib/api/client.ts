@@ -33,6 +33,8 @@ export class ApiError extends Error {
   readonly code?: string;
   readonly fieldErrors: Schemas["FieldError"][];
   readonly requestId?: string;
+  /** Whole seconds from the `Retry-After` header (429), when present and valid. */
+  readonly retryAfterSeconds?: number;
 
   constructor(init: {
     kind: ErrorKind;
@@ -41,6 +43,7 @@ export class ApiError extends Error {
     message?: string;
     fieldErrors?: Schemas["FieldError"][];
     requestId?: string;
+    retryAfterSeconds?: number;
   }) {
     super(init.message ?? init.code ?? init.kind);
     this.name = "ApiError";
@@ -49,6 +52,7 @@ export class ApiError extends Error {
     this.code = init.code;
     this.fieldErrors = init.fieldErrors ?? [];
     this.requestId = init.requestId;
+    this.retryAfterSeconds = init.retryAfterSeconds;
   }
 }
 
@@ -87,6 +91,14 @@ export function sanitizeNext(raw: string | null | undefined, fallback = "/admin/
   if (!raw || !raw.startsWith("/admin/")) return fallback;
   if (/[\\\u0000-\u001f]/.test(raw) || raw.startsWith("//")) return fallback;
   if (raw.startsWith(LOGIN_PATH)) return fallback;
+  // `/admin/../evil` is "under /admin/" as text but the browser resolves it to /evil.
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return fallback;
+  }
+  if (decoded.split(/[?#]/)[0].split("/").some((seg) => seg === ".." || seg === ".")) return fallback;
   return raw;
 }
 
@@ -115,6 +127,13 @@ function buildUrl(path: string, query: RequestOptions["query"]): string {
   for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null) qs.set(k, String(v));
   const text = qs.toString();
   return text ? `${url}?${text}` : url;
+}
+
+/** `Retry-After` in delta-seconds form; an HTTP-date or garbage yields undefined. */
+export function parseRetryAfter(raw: string | null | undefined): number | undefined {
+  if (!raw || !/^\d+$/.test(raw.trim())) return undefined;
+  const n = Number(raw.trim());
+  return n > 0 ? n : undefined;
 }
 
 function isErrorBody(b: unknown): b is { code?: string; error?: string; errors?: Schemas["FieldError"][]; requestId?: string } {
@@ -165,6 +184,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
       message: typeof b?.error === "string" ? b.error : undefined,
       fieldErrors: Array.isArray(b?.errors) ? b.errors : [],
       requestId: typeof b?.requestId === "string" ? b.requestId : undefined,
+      retryAfterSeconds: parseRetryAfter(res.headers?.get?.("Retry-After")),
     });
     if (res.status === 401 && options.redirectOn401 !== false) {
       emit("session_expired");

@@ -69,6 +69,10 @@ export const en: Record<MessageKey, string> = {
   "login.submitting": "Signing in…",
   "login.failed": "Wrong username or password.",
   "login.expired": "Your session ended. Please sign in again.",
+  "login.rateLimited": "Too many sign-in attempts. Try again in {wait}.",
+  "login.waitSeconds": "{n} seconds",
+  "login.waitMinutes": "{n} minutes",
+  "login.logo": "auto-deploy logo",
 
   "notfound.title": "Page not found",
   "notfound.body": "The address you opened does not exist in the admin panel.",

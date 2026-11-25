@@ -71,6 +71,10 @@ export const id = {
   "login.submitting": "Masuk…",
   "login.failed": "Nama pengguna atau kata sandi salah.",
   "login.expired": "Sesi berakhir. Silakan masuk lagi.",
+  "login.rateLimited": "Terlalu banyak percobaan masuk. Coba lagi dalam {wait}.",
+  "login.waitSeconds": "{n} detik",
+  "login.waitMinutes": "{n} menit",
+  "login.logo": "Logo auto-deploy",
 
   "notfound.title": "Halaman tidak ditemukan",
   "notfound.body": "Alamat yang Anda buka tidak ada di panel admin.",

@@ -218,7 +218,7 @@ describe("retry policy and next sanitising", () => {
 
   it("sanitizeNext only accepts absolute paths under /admin/", () => {
     expect(sanitizeNext("/admin/apps/edit/?id=a1")).toBe("/admin/apps/edit/?id=a1");
-    for (const bad of ["https://evil.example/", "//evil.example/admin/", "/other/", "/admin/..\\x", "javascript:alert(1)", "", null, undefined, "/admin/login/?next=/admin/login/"]) {
+    for (const bad of ["https://evil.example/", "//evil.example/admin/", "/other/", "/admin/..\\x", "/admin/../evil", "/admin/%2e%2e/evil", "/admin/a/./b", "/admin/%zz", "javascript:alert(1)", "", null, undefined, "/admin/login/?next=/admin/login/"]) {
       expect(sanitizeNext(bad as string | null | undefined)).toBe("/admin/");
     }
   });
