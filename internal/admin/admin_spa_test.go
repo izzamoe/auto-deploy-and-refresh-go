@@ -48,7 +48,7 @@ func TestAdminSPARouteOrderingKeepsAPIJSON(t *testing.T) {
 	t.Parallel()
 	engine := newTestAdminSPAFullHertzEngine(t)
 
-	w := ut.PerformRequest(engine.Engine, http.MethodGet, "/admin/api/apps", nil, ut.Header{Key: "Cookie", Value: testAdminSessionCookie(t)})
+	w := ut.PerformRequest(engine.Engine, http.MethodGet, "/admin/api/v1/apps", nil, ut.Header{Key: "Cookie", Value: testAdminSessionCookie(t)})
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
@@ -69,7 +69,7 @@ func TestAdminSPARoutesKeepAPINotFoundJSON(t *testing.T) {
 	t.Parallel()
 	engine := newTestAdminSPAFullHertzEngine(t)
 
-	for _, path := range []string{"/admin/api", "/admin/api/does-not-exist"} {
+	for _, path := range []string{"/admin/api/v1", "/admin/api/v1/does-not-exist", "/admin/api", "/admin/api/does-not-exist"} {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			w := ut.PerformRequest(engine.Engine, http.MethodGet, path, nil, ut.Header{Key: "Cookie", Value: testAdminSessionCookie(t)})

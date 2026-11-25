@@ -126,7 +126,8 @@ func (h *HistoryAdminHandler) HistoryHandlerHertz(ctx context.Context, c *app.Re
 	}
 
 	if err := renderAdminTemplateHertz(c, h.templates["history.html"], data); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Internal error")
 	}
 }
 
@@ -160,7 +161,8 @@ func (h *HistoryAdminHandler) RetryHandlerHertz(ctx context.Context, c *app.Requ
 			h.respondRetryResultHertz(c, id, "Deploy already pending for this tag", true)
 			return
 		}
-		c.String(http.StatusInternalServerError, "Failed to create retry job: "+err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Failed to create retry job")
 		return
 	}
 
@@ -184,11 +186,13 @@ func (h *HistoryAdminHandler) respondRetryResultHertz(c *app.RequestContext, id,
 	}
 
 	if err := h.templates["history.html"].ExecuteTemplate(c.Response.BodyWriter(), "flash", data); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Internal error")
 		return
 	}
 	if err := h.templates["history.html"].ExecuteTemplate(c.Response.BodyWriter(), "history_table_region", data); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Internal error")
 	}
 }
 

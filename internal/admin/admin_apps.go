@@ -52,13 +52,15 @@ type appFormData struct {
 func (h *AppAdminHandler) renderAppFormHertz(c *app.RequestContext, data appFormData) {
 	if isAdminUIRequestHertz(c) && string(c.Request.Method()) == http.MethodPost {
 		if err := h.templates["app_form.html"].ExecuteTemplate(c.Response.BodyWriter(), "app-form", data); err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			logHandlerError(c, "legacy page handler failed", err)
+			c.String(http.StatusInternalServerError, "Internal error")
 		}
 		return
 	}
 
 	if err := renderAdminTemplateHertz(c, h.templates["app_form.html"], data); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Internal error")
 	}
 }
 
@@ -91,7 +93,8 @@ func (h *AppAdminHandler) ListAppsHertz(ctx context.Context, c *app.RequestConte
 	}
 
 	if err := renderAdminTemplateHertz(c, h.templates["apps_list.html"], data); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Internal error")
 	}
 }
 
@@ -294,7 +297,8 @@ func (h *AppAdminHandler) renderListInPlaceOrRedirectHertz(c *app.RequestContext
 	}
 
 	if err := renderAdminTemplateHertz(c, h.templates["apps_list.html"], data); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Internal error")
 	}
 }
 
@@ -364,7 +368,8 @@ func (h *AppAdminHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 			fail("Queue is full")
 			return
 		}
-		c.String(http.StatusInternalServerError, "Failed to queue deploy: "+err.Error())
+		logHandlerError(c, "legacy page handler failed", err)
+		c.String(http.StatusInternalServerError, "Failed to queue deploy")
 		return
 	}
 

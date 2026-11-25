@@ -31,7 +31,7 @@ func TestSelfLogsHertzReturnsServiceJournal(t *testing.T) {
 	defer restore()
 
 	engine := newTestSystemEngine(t, NewSystemLogsHandler("auto-deploy.service"))
-	w := ut.PerformRequest(engine, "GET", "/admin/api/system/logs", nil)
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/system/logs", nil)
 	resp := w.Result()
 
 	if resp.StatusCode() != http.StatusOK {
@@ -78,7 +78,7 @@ func TestSelfLogsHertzLinesParam(t *testing.T) {
 			defer restore()
 
 			engine := newTestSystemEngine(t, NewSystemLogsHandler("svc"))
-			w := ut.PerformRequest(engine, "GET", "/admin/api/system/logs"+tc.query, nil)
+			w := ut.PerformRequest(engine, "GET", "/admin/api/v1/system/logs"+tc.query, nil)
 			if w.Result().StatusCode() != http.StatusOK {
 				t.Fatalf("status = %d", w.Result().StatusCode())
 			}

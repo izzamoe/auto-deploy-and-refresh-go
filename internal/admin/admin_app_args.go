@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/izzamoe/auto-deploy/internal/store"
 
@@ -81,9 +82,15 @@ func (h *AppArgsHandler) SaveAppArgsHertz(ctx context.Context, c *app.RequestCon
 		return
 	}
 
+	if len(body.Args) > store.MaxServiceArgs {
+		writeAdminAPIValidationErrorHertz(c, []string{fmt.Sprintf("too many arguments: %d, max %d", len(body.Args), store.MaxServiceArgs)})
+		return
+	}
+
 	args := argsToJSON(body.Args)
 	if err := h.args.Set(id, args); err != nil {
-		writeAdminAPIValidationErrorHertz(c, []string{err.Error()})
+		logHandlerError(c, "save app args failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to save command-line arguments")
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "args": args})
@@ -93,7 +100,7 @@ func (h *AppArgsHandler) SaveAppArgsHertz(ctx context.Context, c *app.RequestCon
 // env routes it must be registered before RegisterAdminAPIRoutesHertz, whose
 // /admin/api/*path catch-all would otherwise shadow them.
 func RegisterAppArgsRoutesHertz(h *server.Hertz, handler *AppArgsHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/apps/:id/args", handler.GetAppArgsHertz)
 	api.PUT("/apps/:id/args", handler.SaveAppArgsHertz)
 }

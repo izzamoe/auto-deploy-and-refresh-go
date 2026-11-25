@@ -77,6 +77,9 @@ func (s *AppArgsStore) Get(appID string) ([]string, error) {
 
 // Set replaces the stored command-line arguments for appID. Every argument is
 // validated; an empty slice clears them.
+// MaxServiceArgs is the longest argument list the store accepts.
+const MaxServiceArgs = maxServiceArgs
+
 func (s *AppArgsStore) Set(appID string, args []string) error {
 	if len(args) > maxServiceArgs {
 		return fmt.Errorf("too many arguments: %d, max %d", len(args), maxServiceArgs)

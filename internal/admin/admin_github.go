@@ -151,7 +151,7 @@ func (h *GitHubConfigHandler) SaveGitHubConfigHertz(ctx context.Context, c *app.
 // Must be registered before RegisterAdminAPIRoutesHertz, whose
 // /admin/api/*path catch-all would otherwise shadow these specific routes.
 func RegisterGitHubRoutesHertz(h *server.Hertz, handler *GitHubConfigHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/github", handler.GetGitHubConfigHertz)
 	api.POST("/github", handler.SaveGitHubConfigHertz)
 }

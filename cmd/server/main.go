@@ -272,6 +272,9 @@ func main() {
 	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, authMW)
 	admin.RegisterSystemRoutesHertz(h, systemLogsHandler, authMW)
 	admin.RegisterAdminProgressRoutesHertz(h, progressAdminHandler, authMW)
+	// Pre-v1 paths stay for ONE release as deprecated aliases of the v1 routes (Q-7);
+	// register them after every v1 route.
+	admin.RegisterLegacyAPIAliases(h, authMW)
 	admin.RegisterAdminSPARoutesHertz(h, publicPage)
 	go func() {
 		slog.Info("starting", "addr", serviceCfg.ListenAddr)

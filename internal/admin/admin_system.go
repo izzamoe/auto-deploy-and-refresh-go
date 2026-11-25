@@ -68,6 +68,6 @@ func (h *SystemLogsHandler) SelfLogsHertz(ctx context.Context, c *app.RequestCon
 
 // RegisterSystemRoutesHertz registers the system (self) log route under auth.
 func RegisterSystemRoutesHertz(h *server.Hertz, handler *SystemLogsHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/system/logs", handler.SelfLogsHertz)
 }

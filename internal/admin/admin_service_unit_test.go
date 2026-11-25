@@ -76,7 +76,7 @@ func TestPreviewServiceUnitHertzIncludesStoredArgs(t *testing.T) {
 		t.Fatalf("Set args: %v", err)
 	}
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/apps/"+a.ID+"/service-unit/preview", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/v1/apps/"+a.ID+"/service-unit/preview", ""))
 	if rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -101,7 +101,7 @@ func TestApplyServiceUnitHertzWritesArgs(t *testing.T) {
 		t.Fatalf("Set args: %v", err)
 	}
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+a.ID+"/service-unit/apply", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps/"+a.ID+"/service-unit/apply", ""))
 	if rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -130,7 +130,7 @@ func TestPreviewServiceUnitHertzReturnsUnitText(t *testing.T) {
 	h, appStore, jwt := newTestServiceUnitAdminHertz(t)
 	a := createTestServiceUnitApp(t, appStore, "myapp.service")
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/apps/"+a.ID+"/service-unit/preview", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/v1/apps/"+a.ID+"/service-unit/preview", ""))
 	if rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -150,7 +150,7 @@ func TestPreviewServiceUnitHertzNotFound(t *testing.T) {
 	stubServiceUnitEnv(t)
 	h, _, jwt := newTestServiceUnitAdminHertz(t)
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/apps/missing/service-unit/preview", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "GET", "/admin/api/v1/apps/missing/service-unit/preview", ""))
 	if rr.Response.StatusCode() != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Response.StatusCode())
 	}
@@ -162,7 +162,7 @@ func TestApplyServiceUnitHertzSuccess(t *testing.T) {
 	h, appStore, jwt := newTestServiceUnitAdminHertz(t)
 	a := createTestServiceUnitApp(t, appStore, "myapp.service")
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+a.ID+"/service-unit/apply", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps/"+a.ID+"/service-unit/apply", ""))
 	if rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -190,7 +190,7 @@ func TestApplyServiceUnitHertzRefusesHandWritten(t *testing.T) {
 		t.Fatalf("write hand-written unit file: %v", err)
 	}
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/"+a.ID+"/service-unit/apply", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps/"+a.ID+"/service-unit/apply", ""))
 	if rr.Response.StatusCode() != http.StatusConflict {
 		t.Fatalf("expected 409, got %d body=%s", rr.Response.StatusCode(), string(rr.Response.Body()))
 	}
@@ -212,7 +212,7 @@ func TestApplyServiceUnitHertzNotFound(t *testing.T) {
 	stubServiceUnitEnv(t)
 	h, _, jwt := newTestServiceUnitAdminHertz(t)
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/apps/missing/service-unit/apply", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, "POST", "/admin/api/v1/apps/missing/service-unit/apply", ""))
 	if rr.Response.StatusCode() != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Response.StatusCode())
 	}
@@ -225,7 +225,7 @@ func TestServiceUnitRoutesRequireAuth(t *testing.T) {
 	a := createTestServiceUnitApp(t, appStore, "myapp.service")
 
 	c := app.NewContext(0)
-	c.Request.SetRequestURI("/admin/api/apps/" + a.ID + "/service-unit/preview")
+	c.Request.SetRequestURI("/admin/api/v1/apps/" + a.ID + "/service-unit/preview")
 	c.Request.SetMethod("GET")
 
 	h.ServeHTTP(context.Background(), c)

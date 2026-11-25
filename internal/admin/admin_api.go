@@ -3,11 +3,13 @@ package admin
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/httpx"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
@@ -27,11 +29,9 @@ func NewAdminAPIHandler(store *store.AppStore, queue *store.DeployQueue, tracker
 	return &AdminAPIHandler{store: store, queue: queue, tracker: tracker, cancel: cancel}
 }
 
-type adminAPIErrorResponse struct {
-	Status string   `json:"status"`
-	Error  string   `json:"error"`
-	Errors []string `json:"errors,omitempty"`
-}
+// adminAPIErrorResponse is the one error envelope of the admin API (FR-021):
+// {status:"error", code, error, errors:[{field?, code, message}], requestId}.
+type adminAPIErrorResponse = httpx.APIError
 
 type adminAPIStatusResponse struct {
 	Status  string `json:"status"`
@@ -468,7 +468,8 @@ func (h *AdminAPIHandler) ManualDeployAppHertz(ctx context.Context, c *app.Reque
 			writeAdminAPIErrorHertz(c, consts.StatusServiceUnavailable, "Queue is full")
 			return
 		}
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to queue deploy: "+err.Error())
+		logHandlerError(c, "queue manual deploy failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to queue deploy")
 		return
 	}
 
@@ -586,7 +587,8 @@ func (h *AdminAPIHandler) RetryHistoryJobHertz(ctx context.Context, c *app.Reque
 			writeAdminAPIErrorHertz(c, consts.StatusConflict, "Deploy already pending for this tag")
 			return
 		}
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to create retry job: "+err.Error())
+		logHandlerError(c, "create retry job failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to create retry job")
 		return
 	}
 
@@ -600,7 +602,8 @@ func (h *AdminAPIHandler) CancelJobHertz(ctx context.Context, c *app.RequestCont
 
 	result, err := h.cancel.RequestJobCancel(c.Param("job_id"))
 	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, err.Error())
+		logHandlerError(c, "request job cancel failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to request cancel")
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelJobResponse(result)})
@@ -617,14 +620,21 @@ func (h *AdminAPIHandler) CancelAppHertz(ctx context.Context, c *app.RequestCont
 	}
 	result, err := h.cancel.RequestAppCancel(appID)
 	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, err.Error())
+		logHandlerError(c, "request app cancel failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to request cancel")
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]any{"status": "ok", "result": cancelAppResponse(result)})
 }
 
 func (h *AdminAPIHandler) NotFoundHertz(ctx context.Context, c *app.RequestContext) {
-	writeAdminAPIErrorHertz(c, consts.StatusNotFound, "Not found")
+	writeError(c, consts.StatusNotFound, httpx.CodeNotFound, "Not found")
+}
+
+// logHandlerError records an internal failure with the request ID so the operator can
+// correlate it with the generic error the client received.
+func logHandlerError(c *app.RequestContext, what string, err error) {
+	slog.Error(what, "err", err, "request_id", httpx.FromContext(c))
 }
 
 func requireAdminAPIJSONRequestHertz(c *app.RequestContext) bool {
@@ -638,18 +648,60 @@ func requireAdminAPIJSONRequestHertz(c *app.RequestContext) bool {
 
 func decodeAdminAPIJSONHertz(c *app.RequestContext, dst any) bool {
 	if err := c.BindJSON(dst); err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "Invalid JSON body")
+		writeError(c, consts.StatusBadRequest, httpx.CodeInvalidJSON, "Invalid JSON body")
 		return false
 	}
 	return true
 }
 
-func writeAdminAPIValidationErrorHertz(c *app.RequestContext, errs []string) {
-	c.JSON(consts.StatusBadRequest, adminAPIErrorResponse{Status: "error", Error: "Validation failed", Errors: errs})
+// writeError writes the contract error envelope. msg must be a safe, fixed message:
+// never the text of an internal error (FR-022); log the detail with the request ID
+// instead (TestNoRawErrorInResponses enforces this on the whole package).
+func writeError(c *app.RequestContext, status int, code, msg string, fields ...httpx.FieldError) {
+	httpx.WriteError(c, status, code, msg, fields...)
+}
+
+// codeForStatus is the default contract code of an HTTP status.
+func codeForStatus(status int) string {
+	switch status {
+	case consts.StatusBadRequest:
+		return httpx.CodeValidationFailed
+	case consts.StatusUnauthorized:
+		return httpx.CodeUnauthorized
+	case consts.StatusForbidden:
+		return httpx.CodeForbidden
+	case consts.StatusNotFound:
+		return httpx.CodeNotFound
+	case consts.StatusMethodNotAllowed:
+		return httpx.CodeMethodNotAllowed
+	case consts.StatusConflict:
+		return httpx.CodeDuplicate
+	case consts.StatusRequestEntityTooLarge:
+		return httpx.CodePayloadTooLarge
+	case consts.StatusUnsupportedMediaType:
+		return httpx.CodeUnsupportedMediaType
+	case consts.StatusTooManyRequests:
+		return httpx.CodeRateLimited
+	case consts.StatusBadGateway:
+		return httpx.CodeUpstreamError
+	case consts.StatusServiceUnavailable:
+		return httpx.CodeQueueFull
+	}
+	return httpx.CodeInternalError
 }
 
 func writeAdminAPIErrorHertz(c *app.RequestContext, status int, msg string) {
-	c.JSON(status, adminAPIErrorResponse{Status: "error", Error: msg})
+	writeError(c, status, codeForStatus(status), msg)
+}
+
+// writeAdminAPIValidationErrorHertz answers 400 validation_failed; each message
+// becomes one entry of errors[].
+func writeAdminAPIValidationErrorHertz(c *app.RequestContext, errs []string) {
+	fields := make([]httpx.FieldError, 0, len(errs))
+	for _, e := range errs {
+		fields = append(fields, httpx.FieldError{Code: httpx.CodeValidationFailed, Message: e})
+	}
+	writeError(c, consts.StatusBadRequest, httpx.CodeValidationFailed, "Validation failed", fields...)
 }
 
 // JobLogsHertz returns the service logs captured for a job when its deploy
@@ -665,7 +717,7 @@ func (h *AdminAPIHandler) JobLogsHertz(ctx context.Context, c *app.RequestContex
 }
 
 func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/apps", handler.ListAppsHertz)
 	api.POST("/apps", handler.CreateAppHertz)
 	api.GET("/apps/:id", handler.GetAppHertz)
@@ -679,15 +731,19 @@ func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth
 	api.GET("/jobs/:job_id/logs", handler.JobLogsHertz)
 	api.POST("/apps/:app_id/cancel", handler.CancelAppHertz)
 
+	// Anything else under the API prefix is a JSON 404 (code not_found), never the SPA
+	// HTML. The bare /admin/api prefix is the pre-v1 alias namespace (Q-7).
 	notFound := handler.NotFoundHertz
-	h.GET("/admin/api", auth, notFound)
-	h.POST("/admin/api", auth, notFound)
-	h.PUT("/admin/api", auth, notFound)
-	h.PATCH("/admin/api", auth, notFound)
-	h.DELETE("/admin/api", auth, notFound)
-	h.GET("/admin/api/*path", auth, notFound)
-	h.POST("/admin/api/*path", auth, notFound)
-	h.PUT("/admin/api/*path", auth, notFound)
-	h.PATCH("/admin/api/*path", auth, notFound)
-	h.DELETE("/admin/api/*path", auth, notFound)
+	for _, prefix := range []string{"/admin/api/v1", "/admin/api"} {
+		h.GET(prefix, auth, notFound)
+		h.POST(prefix, auth, notFound)
+		h.PUT(prefix, auth, notFound)
+		h.PATCH(prefix, auth, notFound)
+		h.DELETE(prefix, auth, notFound)
+		h.GET(prefix+"/*path", auth, notFound)
+		h.POST(prefix+"/*path", auth, notFound)
+		h.PUT(prefix+"/*path", auth, notFound)
+		h.PATCH(prefix+"/*path", auth, notFound)
+		h.DELETE(prefix+"/*path", auth, notFound)
+	}
 }

@@ -65,7 +65,8 @@ func (h *ServiceUnitAdminHandler) PreviewServiceUnitHertz(ctx context.Context, c
 
 	unit, err := deploy.PreviewServiceUnit(*appRecord)
 	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, err.Error())
+		logHandlerError(c, "preview service unit failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "The service unit cannot be generated for this app; check its binary path, arguments and environment")
 		return
 	}
 
@@ -84,10 +85,11 @@ func (h *ServiceUnitAdminHandler) ApplyServiceUnitHertz(ctx context.Context, c *
 
 	if err := deploy.ApplyServiceUnit(*appRecord); err != nil {
 		if deploy.IsRefuseOverwriteError(err) {
-			writeAdminAPIErrorHertz(c, consts.StatusConflict, err.Error())
+			writeAdminAPIErrorHertz(c, consts.StatusConflict, "A unit file that this tool did not generate already exists; refusing to overwrite it")
 			return
 		}
-		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, err.Error())
+		logHandlerError(c, "apply service unit failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to apply the service unit")
 		return
 	}
 
@@ -124,9 +126,14 @@ func (h *ServiceUnitAdminHandler) ControlServiceHertz(ctx context.Context, c *ap
 		return
 	}
 	action := c.Param("action")
+	if !allowedServiceActions[action] {
+		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "Unsupported service action")
+		return
+	}
 	out, err := deploy.ControlService(appRecord.ServiceName, action)
 	if err != nil {
-		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, err.Error())
+		logHandlerError(c, "service control failed", err)
+		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "The service action failed; check the service logs")
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]any{
@@ -136,8 +143,11 @@ func (h *ServiceUnitAdminHandler) ControlServiceHertz(ctx context.Context, c *ap
 	})
 }
 
+// allowedServiceActions mirrors the systemctl actions deploy.ControlService accepts.
+var allowedServiceActions = map[string]bool{"start": true, "stop": true, "restart": true}
+
 func RegisterServiceUnitRoutesHertz(h *server.Hertz, handler *ServiceUnitAdminHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/apps/:id/service-unit/preview", handler.PreviewServiceUnitHertz)
 	api.POST("/apps/:id/service-unit/apply", handler.ApplyServiceUnitHertz)
 	api.GET("/apps/:id/logs", handler.LiveLogsHertz)

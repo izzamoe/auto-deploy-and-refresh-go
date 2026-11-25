@@ -15,7 +15,7 @@ import (
 func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
 	t.Parallel()
 	middleware := testHertzSessionAuth(t)
-	c := newHertzTestContext(http.MethodGet, "/admin/api/apps", nil, nil)
+	c := newHertzTestContext(http.MethodGet, "/admin/api/v1/apps", nil, nil)
 
 	middleware(context.Background(), c)
 
@@ -32,7 +32,7 @@ func TestHertzAdminAuthRequiresCredentials(t *testing.T) {
 func TestHertzAdminAuthRejectsAdminPasswordViaBasic(t *testing.T) {
 	t.Parallel()
 	middleware := testHertzSessionAuth(t)
-	c := newHertzTestContext(http.MethodGet, "/admin/api/apps", nil, nil)
+	c := newHertzTestContext(http.MethodGet, "/admin/api/v1/apps", nil, nil)
 	c.Request.SetBasicAuth("admin", "secret")
 
 	middleware(context.Background(), c)

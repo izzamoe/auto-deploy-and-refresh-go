@@ -94,7 +94,7 @@ func TestTelegramConfigGetReturnsZeroValueWhenUnset(t *testing.T) {
 	handler, _, _ := newTestTelegramConfigHandler(t)
 	h, jwt := newTestTelegramServer(t, handler)
 
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodGet, "/admin/api/telegram", ""))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodGet, "/admin/api/v1/telegram", ""))
 	if rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
@@ -112,7 +112,7 @@ func TestTelegramConfigSaveMasksBotTokenOnGet(t *testing.T) {
 	h, jwt := newTestTelegramServer(t, handler)
 
 	saveBody := `{"appId":12345,"appHash":"abcdef0123456789","botToken":"123456:ABC-DEF-TOKEN","chatUsername":"@mychannel","enabled":true}`
-	saveRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", saveBody))
+	saveRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", saveBody))
 	if saveRR.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 save, got %d body=%s", saveRR.Response.StatusCode(), saveRR.Response.Body())
 	}
@@ -126,7 +126,7 @@ func TestTelegramConfigSaveMasksBotTokenOnGet(t *testing.T) {
 		t.Fatalf("unexpected masked token: %q", saved.Config.BotToken)
 	}
 
-	getRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodGet, "/admin/api/telegram", ""))
+	getRR := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodGet, "/admin/api/v1/telegram", ""))
 	got := decodeAdminAPIResponseHertz[struct {
 		Config telegramConfigResponse `json:"config"`
 	}](t, getRR)
@@ -144,13 +144,13 @@ func TestTelegramConfigSaveKeepsExistingTokenWhenBlank(t *testing.T) {
 	h, jwt := newTestTelegramServer(t, handler)
 
 	first := `{"appId":1,"appHash":"hash1","botToken":"secret-token-1","chatUsername":"@one","enabled":true}`
-	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", first)); rr.Response.StatusCode() != http.StatusOK {
+	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", first)); rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("first save failed: %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
 
 	// Second save omits botToken entirely (blank) but changes chatUsername.
 	second := `{"appId":1,"appHash":"hash1","botToken":"","chatUsername":"@two","enabled":true}`
-	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", second)); rr.Response.StatusCode() != http.StatusOK {
+	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", second)); rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("second save failed: %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
 
@@ -172,7 +172,7 @@ func TestTelegramConfigSaveRejectsIncompleteEnabledConfig(t *testing.T) {
 	h, jwt := newTestTelegramServer(t, handler)
 
 	body := `{"appId":0,"appHash":"","botToken":"","chatUsername":"","enabled":true}`
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", body))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", body))
 	if rr.Response.StatusCode() != http.StatusBadRequest {
 		t.Fatalf("expected 400 for incomplete enabled config, got %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
@@ -184,7 +184,7 @@ func TestTelegramConfigSaveAllowsIncompleteDisabledConfig(t *testing.T) {
 	h, jwt := newTestTelegramServer(t, handler)
 
 	body := `{"appId":0,"appHash":"","botToken":"","chatUsername":"","enabled":false}`
-	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", body))
+	rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", body))
 	if rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("expected 200 for incomplete disabled config, got %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
@@ -196,7 +196,7 @@ func TestTelegramConfigSaveStartsManagerWhenEnabledAndAttachesNotifier(t *testin
 	h, jwt := newTestTelegramServer(t, handler)
 
 	body := `{"appId":1,"appHash":"hash","botToken":"token","chatUsername":"@ops","enabled":true}`
-	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", body)); rr.Response.StatusCode() != http.StatusOK {
+	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", body)); rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("save failed: %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
 
@@ -221,7 +221,7 @@ func TestTelegramConfigSaveStopsManagerAndFallsBackToNopWhenDisabled(t *testing.
 	h, jwt := newTestTelegramServer(t, handler)
 
 	enableBody := `{"appId":1,"appHash":"hash","botToken":"token","chatUsername":"@ops","enabled":true}`
-	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", enableBody)); rr.Response.StatusCode() != http.StatusOK {
+	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", enableBody)); rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("enable save failed: %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
 	fake, ok := notifier.last().(*fakeTelegramManager)
@@ -230,7 +230,7 @@ func TestTelegramConfigSaveStopsManagerAndFallsBackToNopWhenDisabled(t *testing.
 	}
 
 	disableBody := `{"appId":1,"appHash":"hash","botToken":"","chatUsername":"@ops","enabled":false}`
-	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/telegram", disableBody)); rr.Response.StatusCode() != http.StatusOK {
+	if rr := serveAdminAPIHertz(t, h, adminAPIRequestHertz(jwt, http.MethodPost, "/admin/api/v1/telegram", disableBody)); rr.Response.StatusCode() != http.StatusOK {
 		t.Fatalf("disable save failed: %d body=%s", rr.Response.StatusCode(), rr.Response.Body())
 	}
 

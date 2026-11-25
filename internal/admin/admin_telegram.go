@@ -242,7 +242,7 @@ func validateTelegramConfig(cfg store.TelegramConfig) []string {
 // routes. Must be registered before RegisterAdminAPIRoutesHertz, whose
 // /admin/api/*path catch-all would otherwise shadow these specific routes.
 func RegisterTelegramRoutesHertz(h *server.Hertz, handler *TelegramConfigHandler, auth app.HandlerFunc) {
-	api := h.Group("/admin/api", auth)
+	api := h.Group("/admin/api/v1", auth)
 	api.GET("/telegram", handler.GetTelegramConfigHertz)
 	api.POST("/telegram", handler.SaveTelegramConfigHertz)
 }

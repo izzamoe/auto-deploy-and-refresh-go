@@ -59,7 +59,7 @@ func TestListAppReleasesHertzFiltersToMatchingArtifact(t *testing.T) {
 	handler := NewReleasesHandler(appStore, lister)
 	engine := newTestReleasesEngine(t, handler)
 
-	w := ut.PerformRequest(engine, "GET", "/admin/api/apps/"+createdApp.ID+"/releases", nil)
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/apps/"+createdApp.ID+"/releases", nil)
 	resp := w.Result()
 
 	if resp.StatusCode() != http.StatusOK {
@@ -78,7 +78,7 @@ func TestListAppReleasesHertzAppNotFound(t *testing.T) {
 	handler := NewReleasesHandler(appStore, &fakeReleaseLister{})
 	engine := newTestReleasesEngine(t, handler)
 
-	w := ut.PerformRequest(engine, "GET", "/admin/api/apps/does-not-exist/releases", nil)
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/apps/does-not-exist/releases", nil)
 	resp := w.Result()
 
 	if resp.StatusCode() != http.StatusNotFound {
@@ -98,7 +98,7 @@ func TestListAppReleasesHertzGitHubErrorReturns502WithoutLeakingDetails(t *testi
 	handler := NewReleasesHandler(appStore, lister)
 	engine := newTestReleasesEngine(t, handler)
 
-	w := ut.PerformRequest(engine, "GET", "/admin/api/apps/"+createdApp.ID+"/releases", nil)
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/apps/"+createdApp.ID+"/releases", nil)
 	resp := w.Result()
 
 	if resp.StatusCode() != http.StatusBadGateway {
@@ -124,7 +124,7 @@ func TestListAppReleasesHertzSurfacesGitHubStatusHint(t *testing.T) {
 	handler := NewReleasesHandler(appStore, lister)
 	engine := newTestReleasesEngine(t, handler)
 
-	w := ut.PerformRequest(engine, "GET", "/admin/api/apps/"+createdApp.ID+"/releases", nil)
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/apps/"+createdApp.ID+"/releases", nil)
 	resp := w.Result()
 
 	if resp.StatusCode() != http.StatusBadGateway {
@@ -150,7 +150,7 @@ func TestListAppReleasesHertzNoMatchingReleasesReturnsEmptyArray(t *testing.T) {
 	handler := NewReleasesHandler(appStore, lister)
 	engine := newTestReleasesEngine(t, handler)
 
-	w := ut.PerformRequest(engine, "GET", "/admin/api/apps/"+createdApp.ID+"/releases", nil)
+	w := ut.PerformRequest(engine, "GET", "/admin/api/v1/apps/"+createdApp.ID+"/releases", nil)
 	resp := w.Result()
 
 	if resp.StatusCode() != http.StatusOK {
