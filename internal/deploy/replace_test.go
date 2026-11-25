@@ -88,7 +88,7 @@ func TestReplace_BinaryPathNeverMissing(t *testing.T) {
 	healthyServiceStub(t)
 	p := installReplaceProbe(t, app.BinaryPath)
 
-	if _, err := DeployWithControl(app, "job-b18-a", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-b18-a", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy: %v", err)
 	}
 	if len(p.missing) > 0 {
@@ -107,7 +107,7 @@ func TestReplace_FsyncsFileBeforeRenameAndDirAfter(t *testing.T) {
 	healthyServiceStub(t)
 	p := installReplaceProbe(t, app.BinaryPath)
 
-	if _, err := DeployWithControl(app, "job-b18-b", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-b18-b", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy: %v", err)
 	}
 	syncTmp := p.index("syncfile:binary.tmp")
@@ -138,7 +138,7 @@ func TestReplace_BackupIsAHardLink(t *testing.T) {
 	healthyServiceStub(t)
 	p := installReplaceProbe(t, app.BinaryPath)
 
-	if _, err := DeployWithControl(app, "job-b18-c", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-b18-c", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy: %v", err)
 	}
 	if !p.sameFile {
@@ -159,7 +159,7 @@ func TestReplace_BackupFallsBackToCopy(t *testing.T) {
 	p := installReplaceProbe(t, app.BinaryPath)
 	linkFile = func(string, string) error { return &os.LinkError{Op: "link", Err: syscall.EXDEV} }
 
-	if _, err := DeployWithControl(app, "job-b18-d", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-b18-d", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy with copy fallback: %v", err)
 	}
 	assertFileBytes(t, app.BinaryPath+".bak", original)
@@ -192,7 +192,7 @@ func TestReplace_MarkerLifecycle(t *testing.T) {
 			}
 			return []byte("active\n"), nil
 		})
-		if _, err := DeployWithControl(app, "job-b18-e", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+		if _, err := DeployArtifact(app, "job-b18-e", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		if !seen {
@@ -216,7 +216,7 @@ func TestReplace_MarkerLifecycle(t *testing.T) {
 			}
 			return []byte("active\n"), nil
 		})
-		_, err := DeployWithControl(app, "job-b18-f", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+		_, err := DeployArtifact(app, "job-b18-f", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 		if err == nil {
 			t.Fatal("expected failure")
 		}
@@ -242,7 +242,7 @@ func TestReplace_MarkerLifecycle(t *testing.T) {
 			return orig(oldpath, newpath)
 		}
 		t.Cleanup(func() { renameFile = orig })
-		if _, err := DeployWithControl(app, "job-b18-g", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err == nil {
+		if _, err := DeployArtifact(app, "job-b18-g", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err == nil {
 			t.Fatal("expected failure")
 		}
 		if _, err := os.Stat(deployingMarkerPath(app.BinaryPath)); err != nil {
@@ -257,7 +257,7 @@ func TestReplace_MarkerLifecycle(t *testing.T) {
 		stubDeploySleep(t)
 		stubSystemctl(t, func(string, ...string) ([]byte, error) { return []byte("active\n"), nil })
 		stubChmod(t, func(string, os.FileMode) error { return errors.New("chmod denied") })
-		if _, err := DeployWithControl(app, "job-b18-h", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err == nil {
+		if _, err := DeployArtifact(app, "job-b18-h", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err == nil {
 			t.Fatal("expected failure")
 		}
 		assertPathMissing(t, deployingMarkerPath(app.BinaryPath))

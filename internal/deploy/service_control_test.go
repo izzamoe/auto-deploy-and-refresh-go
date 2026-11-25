@@ -201,7 +201,7 @@ func TestSystemctl_UnitNameIsAlwaysAfterDoubleDash(t *testing.T) {
 	if err := os.WriteFile(app.BinaryPath, elfBinary("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DeployWithControl(app, "job-b22", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-b22", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new")), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -1,13 +1,9 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"net/http"
-	"strings"
 	"testing"
-
-	"github.com/izzamoe/auto-deploy/internal/config"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -62,47 +58,6 @@ func TestHertzAdminAuthAcceptsCorrectCredentials(t *testing.T) {
 	}
 	if body := string(c.Response.Body()); body != "success" {
 		t.Errorf("Expected body 'success', got %q", body)
-	}
-}
-
-func TestAdminLayoutRendersAppsTableSelector(t *testing.T) {
-	t.Parallel()
-	cfg := &config.ServiceConfig{}
-	adminHandler, err := NewAdminHandler(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create admin handler: %v", err)
-	}
-
-	var buf bytes.Buffer
-	data := map[string]any{}
-	err = adminHandler.templates["apps_list.html"].ExecuteTemplate(&buf, "base.html", data)
-	if err != nil {
-		t.Fatalf("Failed to execute template: %v", err)
-	}
-
-	output := buf.String()
-	if !strings.Contains(output, `id="apps-table"`) {
-		t.Errorf("Expected template output to contain 'id=\"apps-table\"', got %s", output)
-	}
-}
-
-func TestAdminLayoutRendersNavigationLinks(t *testing.T) {
-	t.Parallel()
-	cfg := &config.ServiceConfig{}
-	adminHandler, err := NewAdminHandler(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create admin handler: %v", err)
-	}
-
-	var buf bytes.Buffer
-	err = adminHandler.templates["apps_list.html"].ExecuteTemplate(&buf, "base.html", nil)
-	if err != nil {
-		t.Fatalf("Failed to execute base template: %v", err)
-	}
-
-	output := buf.String()
-	if !strings.Contains(output, `href="/admin/apps"`) {
-		t.Errorf("Expected template output to contain navigation link 'href=\"/admin/apps\"', got %s", output)
 	}
 }
 

@@ -173,10 +173,6 @@ func resolveArtifactDownload(ctx context.Context, resolver ArtifactResolver, rep
 	return resolver.ArtifactDownload(ctx, repo, tag, artifact)
 }
 
-func downloadBinary(url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *http.Client) (store.DownloadSummary, error) {
-	return downloadBinaryContext(context.Background(), url, tmpPath, tracker, appID, client, nil, maxArtifactBytes)
-}
-
 func downloadBinaryContext(ctx context.Context, url, tmpPath string, tracker *progress.ProgressTracker, appID string, client *http.Client, headers map[string]string, maxBytes int64) (store.DownloadSummary, error) {
 	slog.Info("downloading", "url", url)
 	resp, err := download.DownloadWithRetryContext(ctx, client, url, headers, nil)
@@ -277,16 +273,10 @@ func validateDownloadedArtifact(path string) error {
 	return nil
 }
 
-// DeployWithControl deploys app's release from the public GitHub download URL
-// (no authentication). Kept for callers that do not need private-repo support;
-// it delegates to DeployArtifact with a nil resolver.
-func DeployWithControl(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService) (store.DownloadSummary, error) {
-	return DeployArtifact(app, jobID, tag, tracker, client, control, nil)
-}
-
-// DeployArtifact is DeployWithControl with an ArtifactResolver, which lets the
-// download authenticate against the GitHub API (required for assets in private
-// repositories). A nil resolver reproduces DeployWithControl's public-URL path.
+// DeployArtifact deploys app's release. The ArtifactResolver lets the download
+// authenticate against the GitHub API (required for assets in private
+// repositories); a nil resolver downloads from the public GitHub URL without
+// authentication.
 func DeployArtifact(app *store.App, jobID, tag string, tracker *progress.ProgressTracker, client *http.Client, control *cancel.CancelService, resolver ArtifactResolver) (store.DownloadSummary, error) {
 	return DeployArtifactContext(context.Background(), app, jobID, tag, tracker, client, control, resolver)
 }

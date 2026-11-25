@@ -34,7 +34,7 @@ func TestDeploy_RestartFailureRollsBackAndRestartsOldBinary(t *testing.T) {
 	})
 	tracker := progress.NewProgressTracker()
 
-	_, err := DeployWithControl(app, "job-b9", "v2", tracker, deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-b9", "v2", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected the deploy to fail")
 	}
@@ -71,7 +71,7 @@ func TestDeploy_RestartFailureRollbackRestartAlsoFails(t *testing.T) {
 		return []byte("failed\n"), nil
 	})
 
-	_, err := DeployWithControl(app, "job-b9b", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-b9b", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected the deploy to fail")
 	}
@@ -97,7 +97,7 @@ func TestDeploy_RestartFailureFirstDeployHasNoBackupToRestore(t *testing.T) {
 		return []byte("failed\n"), nil
 	})
 
-	_, err := DeployWithControl(app, "job-b9c", "v1", progress.NewProgressTracker(), deployClientWithBody(elfBinary("first")), nil)
+	_, err := DeployArtifact(app, "job-b9c", "v1", progress.NewProgressTracker(), deployClientWithBody(elfBinary("first")), nil, nil)
 	if err == nil {
 		t.Fatal("expected the deploy to fail")
 	}
@@ -128,7 +128,7 @@ func TestDeploy_RestartFailureRollbackRenameFails(t *testing.T) {
 		return os.Rename(oldpath, newpath)
 	})
 
-	_, err := DeployWithControl(app, "job-b9d", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-b9d", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "rollback rename failed") {
 		t.Fatalf("error = %v, want rollback rename failure reported", err)
 	}

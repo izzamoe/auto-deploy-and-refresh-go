@@ -56,7 +56,7 @@ func TestWorkerCancelDuringDownloadCleansTempAndMarksCanceled(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := DeployWithControl(app, jobID, "v-download", tracker, dlClient, control)
+		_, err := DeployArtifact(app, jobID, "v-download", tracker, dlClient, control, nil)
 		done <- err
 	}()
 
@@ -106,7 +106,7 @@ func TestWorkerCancelAfterBackupRestoresBackupAndMarksCanceled(t *testing.T) {
 	})
 
 	app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
-	_, err := DeployWithControl(app, jobID, "v-backup", progress.NewProgressTracker(), staticELFClient(), control)
+	_, err := DeployArtifact(app, jobID, "v-backup", progress.NewProgressTracker(), staticELFClient(), control, nil)
 	if !errors.Is(err, errDeployCanceled) {
 		t.Fatalf("deploy error = %v, want errDeployCanceled", err)
 	}
@@ -146,7 +146,7 @@ func TestWorkerCancelDuringHealthcheckRollbackFailureMarksFailed(t *testing.T) {
 	}
 
 	app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
-	_, err := DeployWithControl(app, jobID, "v-health", progress.NewProgressTracker(), staticELFClient(), control)
+	_, err := DeployArtifact(app, jobID, "v-health", progress.NewProgressTracker(), staticELFClient(), control, nil)
 	if err == nil || errors.Is(err, errDeployCanceled) {
 		t.Fatalf("deploy error = %v, want rollback failure", err)
 	}

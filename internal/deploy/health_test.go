@@ -78,7 +78,7 @@ func TestHealth_ActiveOnceThenFailedIsNotSuccess(t *testing.T) {
 	h := &healthScript{activeSeq: []string{"active", "failed"}}
 	stubHealth(t, h)
 
-	_, err := DeployWithControl(a, "job-b17-a", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(a, "job-b17-a", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("B17: deploy reported success although the service was active only once and then failed")
 	}
@@ -96,7 +96,7 @@ func TestHealth_NRestartsIncreaseFails(t *testing.T) {
 	h := &healthScript{activeSeq: []string{"active"}, restartsSeq: []string{"0", "0", "1", "2", "3"}}
 	stubHealth(t, h)
 
-	_, err := DeployWithControl(a, "job-b17-b", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(a, "job-b17-b", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("B17: deploy reported success although NRestarts kept increasing")
 	}
@@ -116,7 +116,7 @@ func TestHealth_StableServiceSucceedsAfterThreeActiveSamples(t *testing.T) {
 	h := &healthScript{activeSeq: []string{"active"}, restartsSeq: []string{"0"}}
 	stubHealth(t, h)
 
-	if _, err := DeployWithControl(a, "job-b17-c", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(a, "job-b17-c", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("a stable service must pass: %v", err)
 	}
 	if h.activeN < 3 {
@@ -148,7 +148,7 @@ func TestHealth_HealthURLBecomesReady(t *testing.T) {
 	}
 	t.Cleanup(func() { healthHTTPGet = orig })
 
-	if _, err := DeployWithControl(a, "job-b17-url", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(a, "job-b17-url", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy with a URL that becomes ready must succeed: %v", err)
 	}
 	if calls != 3 {
@@ -169,7 +169,7 @@ func TestHealth_HealthURLNeverReadyRollsBack(t *testing.T) {
 	healthHTTPGet = func(string) (int, error) { return 500, nil }
 	t.Cleanup(func() { healthHTTPGet = orig })
 
-	_, err := DeployWithControl(a, "job-b17-url2", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(a, "job-b17-url2", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "health URL") {
 		t.Fatalf("err = %v, want a health URL failure", err)
 	}
@@ -186,7 +186,7 @@ func TestHealth_NeverActiveGivesUpAfter30Seconds(t *testing.T) {
 	}
 	h := &healthScript{activeSeq: []string{"activating"}}
 	stubHealth(t, h)
-	_, err := DeployWithControl(a, "job-b17-never", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(a, "job-b17-never", "v2", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("a service stuck in activating must fail the deploy")
 	}

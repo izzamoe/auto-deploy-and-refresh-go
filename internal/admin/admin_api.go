@@ -1003,3 +1003,30 @@ func RegisterAdminAPIRoutesHertz(h *server.Hertz, handler *AdminAPIHandler, auth
 		h.DELETE(prefix+"/*path", auth, notFound)
 	}
 }
+
+// isActiveDeployStatus reports whether a job status still has a live tracker entry.
+func isActiveDeployStatus(status string) bool {
+	return status == "pending" || status == "in_progress" || status == "cancel_requested"
+}
+
+func activeSnapshotForApp(tracker *progress.ProgressTracker, app store.AppWithLastDeploy) (*progress.ProgressSnapshot, bool) {
+	if tracker == nil || !isActiveDeployStatus(app.LastDeployStatus) || app.LastJobID == "" {
+		return nil, false
+	}
+	snapshot, ok := tracker.Snapshot(app.ID)
+	if !ok || snapshot.JobID != app.LastJobID {
+		return nil, false
+	}
+	return snapshot, true
+}
+
+func activeSnapshotForHistoryJob(tracker *progress.ProgressTracker, appID string, job store.JobRecord) (*progress.ProgressSnapshot, bool) {
+	if tracker == nil || !isActiveDeployStatus(job.Status) {
+		return nil, false
+	}
+	snapshot, ok := tracker.Snapshot(appID)
+	if !ok || snapshot.JobID != job.ID {
+		return nil, false
+	}
+	return snapshot, true
+}

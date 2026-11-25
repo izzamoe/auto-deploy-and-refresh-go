@@ -85,7 +85,7 @@ func TestDeploy_AllExitPathsFinalizeTracker(t *testing.T) {
 			app := &store.App{ID: "app1", BinaryPath: binaryPath, ServiceName: "app.service", GithubRepo: "owner/repo", ArtifactName: "artifact"}
 			done := make(chan error, 1)
 			go func() {
-				_, err := DeployWithControl(app, jobID, "v-"+point, tracker, client, control)
+				_, err := DeployArtifact(app, jobID, "v-"+point, tracker, client, control, nil)
 				done <- err
 			}()
 			select {

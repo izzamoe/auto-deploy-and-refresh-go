@@ -180,14 +180,6 @@ func main() {
 	if err := telegramHandler.Reload(); err != nil {
 		slog.Warn("telegram config reload failed", "err", err)
 	}
-	adminHandler, err := admin.NewAdminHandler(serviceCfg)
-	if err != nil {
-		slog.Error("admin handler init failed", "err", err)
-		db.Close()
-		os.Exit(1)
-	}
-	templates := adminHandler.Templates()
-	progressAdminHandler := admin.NewProgressAdminHandler(tracker, appStore, q, templates)
 	adminAPIHandler := admin.NewAdminAPIHandler(appStore, q, tracker, cancelService)
 	// Sessions (FR-003..FR-006): persistent signing key, server-side session rows,
 	// token_version revocation. Tokens: hashed API tokens for automation (FR-014).
@@ -298,7 +290,6 @@ func main() {
 	admin.RegisterReleasesRoutesHertz(h, releasesHandler, authMW)
 	admin.RegisterServiceUnitRoutesHertz(h, serviceUnitHandler, authMW)
 	admin.RegisterSystemRoutesHertz(h, systemLogsHandler, authMW)
-	admin.RegisterAdminProgressRoutesHertz(h, progressAdminHandler, authMW)
 	// Pre-v1 paths stay for ONE release as deprecated aliases of the v1 routes (Q-7);
 	// register them after every v1 route.
 	admin.RegisterLegacyAPIAliases(h, authMW)

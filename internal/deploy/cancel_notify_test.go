@@ -44,7 +44,7 @@ func TestDeploy_CancelDuringDownloadIsNotifiedNotPolled(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		_, err := DeployWithControl(app, jobID, "v-cancel", progress.NewProgressTracker(), client, control)
+		_, err := DeployArtifact(app, jobID, "v-cancel", progress.NewProgressTracker(), client, control, nil)
 		done <- result{err, time.Now()}
 	}()
 	time.Sleep(300 * time.Millisecond) // the download is in flight

@@ -35,7 +35,7 @@ func TestDeploy_RefusesUnsafeAppBeforeTouchingAnything(t *testing.T) {
 			downloads := 0
 			client := fakeBodyClientCounting(&downloads)
 
-			_, err := DeployWithControl(app, "job-unsafe", "v1", tracker, client, nil)
+			_, err := DeployArtifact(app, "job-unsafe", "v1", tracker, client, nil, nil)
 			if err == nil || !strings.Contains(err.Error(), "edit app: "+tc.field+" is invalid") {
 				t.Fatalf("error = %v, want 'edit app: %s is invalid ...'", err, tc.field)
 			}

@@ -348,9 +348,9 @@ func TestDeployDownloadProgress(t *testing.T) {
 	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
+	summary, err := downloadBinaryContext(context.Background(), srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient, nil, maxArtifactBytes)
 	if err != nil {
-		t.Fatalf("downloadBinary: %v", err)
+		t.Fatalf("downloadBinaryContext: %v", err)
 	}
 
 	if summary.Bytes != int64(len(body)) {
@@ -399,9 +399,9 @@ func TestDeployDownloadRetry(t *testing.T) {
 	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	summary, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
+	summary, err := downloadBinaryContext(context.Background(), srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient, nil, maxArtifactBytes)
 	if err != nil {
-		t.Fatalf("downloadBinary after retries: %v", err)
+		t.Fatalf("downloadBinaryContext after retries: %v", err)
 	}
 
 	if summary.Bytes != 5 {
@@ -427,7 +427,7 @@ func TestDeployDownloadFailure(t *testing.T) {
 	dlClient := &http.Client{}
 
 	tmpPath := filepath.Join(tmpDir, "download.tmp")
-	_, err := downloadBinary(srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient)
+	_, err := downloadBinaryContext(context.Background(), srv.URL+"/artifact", tmpPath, tracker, app.ID, dlClient, nil, maxArtifactBytes)
 	if err == nil {
 		t.Fatal("expected error from 404 server")
 	}
@@ -454,7 +454,7 @@ func TestDeployCleanupOnValidationFailure(t *testing.T) {
 	app := testApp(tmpDir)
 	tracker := progress.NewProgressTracker()
 
-	_, err := DeployWithControl(app, "job-elf-fail", "v1.0.0", tracker, dlClient, nil)
+	_, err := DeployArtifact(app, "job-elf-fail", "v1.0.0", tracker, dlClient, nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on ELF validation")
 	}
@@ -545,7 +545,7 @@ func TestDeployInvalidELFLeavesOriginalBinaryUntouched(t *testing.T) {
 		return nil, nil
 	})
 
-	_, err := DeployWithControl(app, "job-invalid-elf", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte("not-an-elf")), nil)
+	_, err := DeployArtifact(app, "job-invalid-elf", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte("not-an-elf")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on invalid ELF")
 	}
@@ -574,7 +574,7 @@ func TestDeployShortArtifactLeavesOriginalBinaryUntouched(t *testing.T) {
 		return nil
 	})
 
-	_, err := DeployWithControl(app, "job-short-artifact", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte{0x7f, 'E', 'L'}), nil)
+	_, err := DeployArtifact(app, "job-short-artifact", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody([]byte{0x7f, 'E', 'L'}), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on short artifact")
 	}
@@ -605,7 +605,7 @@ func TestDeployReplaceFailureAfterBackupRestoresOriginalBinary(t *testing.T) {
 		return os.Rename(oldpath, newpath)
 	})
 
-	_, err := DeployWithControl(app, "job-replace-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-replace-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail on replacement")
 	}
@@ -637,7 +637,7 @@ func TestDeployHealthFailureWithBackupRestoresPreviousBinary(t *testing.T) {
 		}
 	})
 
-	_, err := DeployWithControl(app, "job-health-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-health-fail", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail health checks")
 	}
@@ -666,7 +666,7 @@ func TestDeployHealthFailureNoBackupReturnsExplicitFailureWithoutRollbackClaim(t
 		}
 	})
 
-	_, err := DeployWithControl(app, "job-health-no-backup", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(deployed), nil)
+	_, err := DeployArtifact(app, "job-health-no-backup", "v1.0.0", progress.NewProgressTracker(), deployClientWithBody(deployed), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail health checks without backup")
 	}
@@ -731,7 +731,7 @@ func TestDeploySuccessStageLifecycle(t *testing.T) {
 		}
 	})
 
-	if _, err := DeployWithControl(app, "job-success", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-success", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy: %v", err)
 	}
 
@@ -771,7 +771,7 @@ func TestDeployCreatesMissingBinaryDirectory(t *testing.T) {
 		}
 	})
 
-	if _, err := DeployWithControl(app, "job-first-deploy", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil); err != nil {
+	if _, err := DeployArtifact(app, "job-first-deploy", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil); err != nil {
 		t.Fatalf("deploy into missing directory: %v", err)
 	}
 
@@ -835,7 +835,7 @@ func TestDeployFailureStageLifecycle(t *testing.T) {
 		}
 	})
 
-	_, err := DeployWithControl(app, "job-failed", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-failed", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail health checks")
 	}
@@ -880,7 +880,7 @@ func TestDeployChmodFailureSetsFailedAfterValidating(t *testing.T) {
 		return fmt.Errorf("forced chmod failure")
 	})
 
-	_, err := DeployWithControl(app, "job-chmod-fail", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil)
+	_, err := DeployArtifact(app, "job-chmod-fail", "v1.0.0", tracker, deployClientWithBody(elfBinary("new-binary")), nil, nil)
 	if err == nil {
 		t.Fatal("expected deploy to fail chmod")
 	}

@@ -475,3 +475,26 @@ func RegisterAdminEventRoutesHertz(h *server.Hertz, hub *AdminEventHub, auth app
 func (h *AdminEventHub) BroadcastCancelEvent(event cancel.CancelEvent) {
 	h.Broadcast(AdminEvent{Type: event.Type, AppID: event.AppID, JobID: event.JobID, Payload: event.Payload})
 }
+
+func progressStatusForStage(stage string) string {
+	switch stage {
+	case progress.ProgressStageQueued:
+		return progress.ProgressStatusPending
+	case progress.ProgressStageSucceeded:
+		return progress.ProgressStatusSucceeded
+	case progress.ProgressStageFailed:
+		return progress.ProgressStatusFailed
+	default:
+		return progress.ProgressStatusInProgress
+	}
+}
+
+func progressPercentInt(percent float64) int64 {
+	if percent < 0 {
+		return -1
+	}
+	if percent > 100 {
+		return 100
+	}
+	return int64(percent)
+}
