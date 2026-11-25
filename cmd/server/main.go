@@ -45,6 +45,11 @@ func main() {
 	// Optional profiling endpoint. Off unless PPROF_ADDR is set; bind to a
 	// loopback address (e.g. "localhost:6060") so it is never exposed publicly.
 	if pprofAddr := os.Getenv("PPROF_ADDR"); pprofAddr != "" {
+		// FR-056: refuse to start rather than expose unauthenticated profiling.
+		if err := config.ValidatePprofAddr(pprofAddr); err != nil {
+			slog.Error("invalid PPROF_ADDR; refusing to start", "err", err)
+			os.Exit(1)
+		}
 		go func() {
 			slog.Info("pprof listening", "addr", pprofAddr)
 			srv := &http.Server{Addr: pprofAddr, ReadHeaderTimeout: 5 * time.Second}
