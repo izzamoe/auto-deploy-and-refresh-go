@@ -274,7 +274,7 @@ func main() {
 		server.WithExitWaitTime(30*time.Second),
 		server.WithNetwork("tcp"),
 	)
-	admin.SetupMiddleware(h)
+	admin.SetupMiddlewareWithOptions(h, admin.SecurityHeadersConfig{HSTS: serviceCfg.CookieSecure})
 	// publicPage lets the static admin shell load without a session (Q-17: it holds no
 	// data; every data endpoint and the event socket sit behind authMW).
 	publicPage := func(ctx context.Context, c *app.RequestContext) { c.Next(ctx) }

@@ -107,5 +107,7 @@ func (h *adminSPAHandler) serveIndexHertz(ctx context.Context, c *app.RequestCon
 	}
 
 	c.Header("Cache-Control", "no-cache")
+	// FR-054: inline bootstrap scripts are allowed by hash, never by 'unsafe-inline'.
+	c.Header("Content-Security-Policy", BuildCSP(InlineScriptHashes(content)))
 	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 }
