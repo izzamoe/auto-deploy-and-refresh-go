@@ -60,6 +60,26 @@ export interface I18n {
   errorMessage: (code: string | undefined, status?: number) => string;
   formatDateTime: (value: Date | string | number) => string;
   formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string;
+  /** "25 Nov" for a YYYY-MM-DD bucket date (calendar date, no timezone shift). */
+  formatDay: (isoDate: string) => string;
+  /** "3 menit lalu" / "in 2 hours" relative to `now` (injectable for tests). */
+  formatRelative: (value: Date | string | number, now?: number) => string;
+}
+
+const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["day", 86_400_000],
+  ["hour", 3_600_000],
+  ["minute", 60_000],
+  ["second", 1_000],
+];
+
+export function relativeTime(tag: string, then: number, now: number): string {
+  const rtf = new Intl.RelativeTimeFormat(tag, { numeric: "auto" });
+  const diff = then - now;
+  for (const [unit, ms] of RELATIVE_UNITS) {
+    if (Math.abs(diff) >= ms || unit === "second") return rtf.format(Math.round(diff / ms), unit);
+  }
+  return "";
 }
 
 function build(locale: Locale, ready: boolean, setLocale: (l: Locale) => void): I18n {
@@ -73,6 +93,8 @@ function build(locale: Locale, ready: boolean, setLocale: (l: Locale) => void): 
     errorMessage: (code, status) => translateError(locale, code, status),
     formatDateTime: (value) => dateFormat.format(value instanceof Date ? value : new Date(value)),
     formatNumber: (value, options) => new Intl.NumberFormat(tag, options).format(value),
+    formatDay: (isoDate) => new Intl.DateTimeFormat(tag, { day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(`${isoDate}T00:00:00Z`)),
+    formatRelative: (value, now = Date.now()) => relativeTime(tag, new Date(value).getTime(), now),
   };
 }
 
