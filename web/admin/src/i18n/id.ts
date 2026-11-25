@@ -14,6 +14,10 @@ import { idForm } from "./id/form";
 // never imports this file at runtime (it would pull every page's text into the shared bundle).
 import { idHistory } from "./id/history";
 
+import { idSyslogs } from "./id/syslogs";
+
+import { idSettings } from "./id/settings";
+
 export const id = {
   ...idCore,
   ...idDashboard,
@@ -21,6 +25,8 @@ export const id = {
   ...idUnit,
   ...idForm,
   ...idHistory,
+  ...idSyslogs,
+  ...idSettings,
 } as const;
 
 export type MessageKey = keyof typeof id;
