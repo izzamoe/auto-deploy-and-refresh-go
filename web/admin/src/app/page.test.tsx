@@ -72,7 +72,7 @@ describe("Dashboard (T087, FR-100, FR-026, FR-108)", () => {
     expect(within(recent).getByText("v1.2.0")).toBeInTheDocument();
     expect(within(recent).getByText("Berhasil")).toBeInTheDocument();
     expect(within(recent).getByText("Gagal")).toBeInTheDocument();
-    expect(within(recent).getByRole("link", { name: "Lihat riwayat web-api" })).toHaveAttribute("href", expect.stringMatching(/^\/history\/?\?appId=a1$/));
+    expect(within(recent).getByRole("link", { name: /^web-api.*Lihat riwayat$/ })).toHaveAttribute("href", expect.stringMatching(/^\/history\/?\?appId=a1$/));
     // account + add-app
     expect(screen.getByTestId("account-username")).toHaveTextContent("budi");
     expect(screen.getByRole("link", { name: "Tambah app" })).toHaveAttribute("href", expect.stringMatching(/^\/apps\/new\/?$/));

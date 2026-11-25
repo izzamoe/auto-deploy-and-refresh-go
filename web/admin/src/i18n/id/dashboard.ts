@@ -49,7 +49,7 @@ export const idDashboard = {
   "dashboard.addApp.action": "Tambah app",
   "dashboard.recent.title": "Deploy terbaru",
   "dashboard.recent.empty": "Belum ada deploy.",
-  "dashboard.recent.open": "Lihat riwayat {app}",
+  "dashboard.recent.open": "Lihat riwayat",
   "dashboard.recent.all": "Semua riwayat",
   "dashboard.security.title": "Keamanan",
   "dashboard.security.password": "Kata sandi bawaan sudah diganti",

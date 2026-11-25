@@ -193,7 +193,7 @@ export const en: Record<MessageKey, string> = {
   "dashboard.addApp.action": "Add app",
   "dashboard.recent.title": "Latest deploys",
   "dashboard.recent.empty": "No deploys yet.",
-  "dashboard.recent.open": "View history of {app}",
+  "dashboard.recent.open": "View history",
   "dashboard.recent.all": "All history",
   "dashboard.security.title": "Security",
   "dashboard.security.password": "Initial password was changed",

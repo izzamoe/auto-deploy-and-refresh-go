@@ -11,6 +11,7 @@ module.exports = defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
+  timeout: 60_000,
   reporter: 'line',
   globalSetup: require.resolve('./playwright/global-setup'),
   use: {
@@ -19,13 +20,17 @@ module.exports = defineConfig({
     screenshot: 'only-on-failure',
     video: 'off'
   },
-  // One project per gate named in the plan (FR-136): the CI selects them with
-  // --project. Spec files for routing/session/a11y/visual arrive with the UI (Fase 5/7).
+  // One project per gate named in the plan (FR-136): the CI selects them with --project.
+  // smoke/routing/session/a11y run against the build; visual compares screenshots against a
+  // baseline that is NOT committed (Q-25): create it with --update-snapshots first.
   projects: [
-    { name: 'smoke', testMatch: /admin-smoke\.spec\.js$/ },
-    { name: 'routing', testMatch: /routing\.spec\.[jt]s$/ },
-    { name: 'session', testMatch: /session-expiry\.spec\.[jt]s$/ },
-    { name: 'a11y', testMatch: /a11y\.spec\.[jt]s$/ },
-    { name: 'visual', testMatch: /visual\.spec\.[jt]s$/ }
-  ]
+    { name: 'smoke', testMatch: /admin-smoke\.spec\.ts$/ },
+    { name: 'routing', testMatch: /routing\.spec\.ts$/ },
+    { name: 'session', testMatch: /session-expiry\.spec\.ts$/, timeout: 180_000 },
+    { name: 'a11y', testMatch: /a11y\.spec\.ts$/, timeout: 120_000 },
+    { name: 'visual', testMatch: /visual\.spec\.ts$/, timeout: 120_000 }
+  ],
+  expect: {
+    toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled' }
+  }
 });

@@ -42,7 +42,6 @@ export function RecentDeploys({ jobs }: { jobs: Schemas["Job"][] }) {
               <li key={job.id}>
                 <Link
                   href={`/history/?appId=${encodeURIComponent(job.appId)}`}
-                  aria-label={t("dashboard.recent.open", { app })}
                   className="flex items-center gap-3 rounded-2xl bg-secondary px-4 py-3 transition-colors hover:bg-accent"
                 >
                   <span aria-hidden="true" className={cn("h-9 w-1.5 shrink-0 rounded-pill", BAR[job.status] ?? "bg-muted-foreground")} />
@@ -56,6 +55,8 @@ export function RecentDeploys({ jobs }: { jobs: Schemas["Job"][] }) {
                     <span className="max-w-28 truncate rounded-pill bg-card px-2.5 py-0.5 text-xs font-medium">{job.tag}</span>
                     <StatusPill status={job.status} />
                   </span>
+                  {/* No aria-label: the name must contain the visible text (WCAG 2.5.3); the purpose is appended. */}
+                  <span className="sr-only">{t("dashboard.recent.open")}</span>
                 </Link>
               </li>
             );
