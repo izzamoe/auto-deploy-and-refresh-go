@@ -257,6 +257,62 @@ describe("provider topic life cycle", () => {
     expect(listApps.mock.calls.length - 1).toBeLessThanOrEqual(1);
   });
 
+  describe("K-1: account resync (subscription.md §4 amendment)", () => {
+    function accountPage() {
+      const getSession = vi.fn(async () => ({ username: "admin" }));
+      const listTokens = vi.fn(async () => ({ tokens: [] as unknown[] }));
+      function AccountPage() {
+        useTopic("account");
+        useQuery({ queryKey: ["session"], queryFn: getSession, staleTime: Infinity });
+        useQuery({ queryKey: ["tokens"], queryFn: listTokens, staleTime: Infinity });
+        return null;
+      }
+      return { getSession, listTokens, AccountPage };
+    }
+
+    it("resync account reason=epoch refetches tokens only", async () => {
+      const { getSession, listTokens, AccountPage } = accountPage();
+      mount(createElement(AccountPage));
+      await act(async () => { latest().open(); latest().emit(hello("E", 4)); });
+      await act(async () => { ack(latest()); await vi.advanceTimersByTimeAsync(10); });
+      expect(getSession).toHaveBeenCalledTimes(1);
+      expect(listTokens).toHaveBeenCalledTimes(1);
+
+      // 1) a resync{epoch} frame for the account topic.
+      await act(async () => { latest().emit(v3("resync", { payload: { topics: ["account"], reason: "epoch" } })); await vi.advanceTimersByTimeAsync(10); });
+      expect(listTokens).toHaveBeenCalledTimes(2);
+      expect(getSession).toHaveBeenCalledTimes(1);
+
+      // 2) a real server restart: the socket drops and the new hello carries another epoch.
+      act(() => latest().drop(1006));
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(FakeSocket.all.length).toBeGreaterThanOrEqual(2);
+      await act(async () => { latest().open(); latest().emit(hello("F", 0)); });
+      await act(async () => { ack(latest()); await vi.advanceTimersByTimeAsync(10); });
+      expect(listTokens).toHaveBeenCalledTimes(3);
+      expect(getSession).toHaveBeenCalledTimes(1);
+      expect(status).toBe("live");
+    });
+
+    it("resync account reason=overflow refetches session and tokens", async () => {
+      const { getSession, listTokens, AccountPage } = accountPage();
+      mount(createElement(AccountPage));
+      await act(async () => { latest().open(); latest().emit(hello("E", 4)); });
+      await act(async () => { ack(latest()); await vi.advanceTimersByTimeAsync(10); });
+      expect(getSession).toHaveBeenCalledTimes(1);
+      expect(listTokens).toHaveBeenCalledTimes(1);
+
+      await act(async () => { latest().emit(v3("resync", { payload: { topics: ["account"], reason: "overflow" } })); await vi.advanceTimersByTimeAsync(10); });
+      expect(getSession).toHaveBeenCalledTimes(2);
+      expect(listTokens).toHaveBeenCalledTimes(2);
+
+      // gap behaves like overflow: both again, exactly once each.
+      await act(async () => { latest().emit(v3("resync", { payload: { topics: ["account"], reason: "gap" } })); await vi.advanceTimersByTimeAsync(10); });
+      expect(getSession).toHaveBeenCalledTimes(3);
+      expect(listTokens).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it("offline: no reconnect attempts until the browser is online again, then ONE immediate reconnect", async () => {
     let online = true;
     vi.stubGlobal("navigator", { ...navigator, get onLine() { return online; } });

@@ -68,6 +68,8 @@ export function resyncTopic(client: QueryClient, store: EventStore, topic: Topic
     case "settings":
       return Promise.all([client.invalidateQueries({ queryKey: ["github"], refetchType: "active" }), client.invalidateQueries({ queryKey: ["telegram"], refetchType: "active" })]);
     case "account":
+      // K-1 (subscription.md §4): a server restart (epoch) does not change the profile; only tokens.
+      if (ctx.reason === "epoch") return client.invalidateQueries({ queryKey: ["tokens"], refetchType: "active" });
       return Promise.all([client.invalidateQueries({ queryKey: ["tokens"], refetchType: "active" }), client.invalidateQueries({ queryKey: ["session"], refetchType: "active" })]);
     case "logs:system":
       // The page reloads its REST snapshot (1 REST) and continues after the new cursor.
