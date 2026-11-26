@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"sync"
@@ -135,6 +136,7 @@ func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) 
 const (
 	closeSessionEnded        websocket.StatusCode = 4401
 	closeLagging             websocket.StatusCode = 4408 // 002: the client could not keep up
+	closeAbuse               websocket.StatusCode = 4429 // 002: repeated op policy violations
 	closeProtocolUnsupported websocket.StatusCode = 4409
 )
 
@@ -620,6 +622,7 @@ type v3Conn struct {
 
 	progressTimer *time.Timer
 	progressBuf   [][]byte
+	limits        *events.Limiter
 }
 
 func (vc *v3Conn) write(payload []byte) bool { return writeAdminEventPayload(vc.ctx, vc.c, payload) }
@@ -637,7 +640,7 @@ func (vc *v3Conn) writeFrame(typ string, payload any) bool {
 func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal events.Principal, sessionExpiresAt *time.Time) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal)}
+	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal), limits: events.NewLimiter(h.now())}
 	h.bus.Register(vc.client)
 	defer h.bus.Unregister(vc.client)
 
@@ -657,7 +660,7 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal
 
 	// The read loop: client ops are text frames of at most MaxFrameBytes (events-ws.v3.md
 	// section 4). It hands every frame to the writer loop, which handles it in order.
-	c.SetReadLimit(events.MaxFrameBytes)
+	c.SetReadLimit(events.MaxReadBytes)
 	incoming := make(chan []byte)
 	readDone := make(chan struct{})
 	go func() {
@@ -747,6 +750,7 @@ func (vc *v3Conn) flush() bool {
 	now := vc.h.now()
 	if overflowed, lagging := vc.client.TakeOverflow(now); overflowed {
 		if lagging {
+			vc.audit("closed_4408")
 			_ = vc.c.Close(closeLagging, "lagging")
 			return false
 		}
@@ -782,9 +786,31 @@ func (vc *v3Conn) progressDue() <-chan time.Time {
 }
 
 // handleOp applies one client frame and writes the replies; false ends the connection.
+//
+// Abuse policy (FR-016, events-ws.v3.md section 6): a frame over 4096 B, an op over the
+// 20 per 10 s bucket, a sub listing more than 16 topics and every 5th invalid JSON frame are
+// violations; each gets its error frame and the third within 60 s closes the socket with
+// 4429. Refusals are audited without the frame content (FR-026).
 func (vc *v3Conn) handleOp(data []byte) bool {
+	now := vc.h.now()
+	if len(data) > events.MaxFrameBytes {
+		return vc.violate(now, events.OpError{Code: events.CodeFrameTooLarge})
+	}
 	op, perr := events.ParseOp(data)
+	ref := op.Ref
 	if perr != nil {
+		ref = perr.Ref
+	}
+	if !vc.limits.Allow(now) {
+		return vc.violate(now, events.OpError{Ref: ref, Code: events.CodeRateLimited})
+	}
+	if perr != nil {
+		switch {
+		case perr.Code == events.CodeTooManyTopics:
+			return vc.violate(now, *perr)
+		case perr.InvalidJSON && vc.limits.InvalidJSON():
+			return vc.violate(now, *perr)
+		}
 		return vc.writeError(*perr)
 	}
 	for _, e := range op.Errors {
@@ -815,6 +841,7 @@ func (vc *v3Conn) handleOp(data []byte) bool {
 func (vc *v3Conn) subscribe(op events.Op) bool {
 	res := vc.h.bus.Subscribe(vc.client, op.Subs, op.Resume)
 	for _, t := range res.Refused {
+		vc.audit(string(events.CodeForbiddenTopic), "topic", string(t))
 		if !vc.writeError(events.OpError{Ref: op.Ref, Code: events.CodeForbiddenTopic, Topic: string(t)}) {
 			return false
 		}
@@ -878,4 +905,25 @@ func (h *AdminEventHub) PublishTopic(topic, eventType, appID, jobID, userID stri
 
 func (vc *v3Conn) writeError(e events.OpError) bool {
 	return vc.writeFrame(adminEventTypeError, adminEventErrorPayload{Ref: e.Ref, Code: e.Code, Topic: e.Topic})
+}
+
+// violate answers a policy violation with its error frame and counts it; the third within
+// 60 s closes the socket with 4429.
+func (vc *v3Conn) violate(now time.Time, e events.OpError) bool {
+	vc.audit(string(e.Code))
+	if !vc.writeError(e) {
+		return false
+	}
+	if vc.limits.Violation(now) {
+		vc.audit("closed_4429")
+		_ = vc.c.Close(closeAbuse, "policy violation")
+		return false
+	}
+	return true
+}
+
+// audit logs a policy decision for this socket: the reason and the client id, never the
+// frame content (FR-026).
+func (vc *v3Conn) audit(reason string, attrs ...any) {
+	slog.Warn("events: websocket policy", append([]any{"event", "ws_policy", "reason", reason, "clientId", vc.client.ID}, attrs...)...)
 }

@@ -121,6 +121,9 @@ func ParseOp(data []byte) (Op, *OpError) {
 	if json.Unmarshal(topics, &items) != nil || len(items) == 0 {
 		return Op{}, bad
 	}
+	if len(items) > MaxTopics {
+		return Op{}, &OpError{Ref: op.Ref, Code: CodeTooManyTopics}
+	}
 	if op.Kind == "unsub" {
 		for _, it := range items {
 			var name string
