@@ -1,0 +1,628 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auto-deploy.invalid/events-ws.v3.schema.json",
+  "title": "Admin event WebSocket, protocol 3 (specs/002-realtime-event-driven/contracts/events-ws.v3.md sections 1-2, subscription.md section 1)",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/subscribed" },
+    { "$ref": "#/$defs/unsubscribed" },
+    { "$ref": "#/$defs/resumed" },
+    { "$ref": "#/$defs/resync" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/summary" },
+    { "$ref": "#/$defs/notice" },
+    { "$ref": "#/$defs/snapshot" },
+    { "$ref": "#/$defs/jobStatus" },
+    { "$ref": "#/$defs/cancelRequested" },
+    { "$ref": "#/$defs/appUpserted" },
+    { "$ref": "#/$defs/appDeleted" },
+    { "$ref": "#/$defs/appConfigChanged" },
+    { "$ref": "#/$defs/serviceStatus" },
+    { "$ref": "#/$defs/statsChanged" },
+    { "$ref": "#/$defs/settingsChanged" },
+    { "$ref": "#/$defs/accountChanged" },
+    { "$ref": "#/$defs/logsLines" },
+    { "$ref": "#/$defs/logsGap" },
+    { "$ref": "#/$defs/compactProgress" }
+  ],
+  "$defs": {
+    "JobStatus": {
+      "enum": ["pending", "in_progress", "cancel_requested", "succeeded", "failed", "canceled"]
+    },
+    "ServiceState": {
+      "enum": ["active", "inactive", "failed", "activating", "deactivating", "reloading", "unknown"]
+    },
+    "TopicName": {
+      "enum": ["summary", "jobs", "apps", "service", "stats", "settings", "account", "logs:system"]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "id": { "type": "string", "pattern": "^evt-[0-9]+$" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "count": { "type": "integer", "minimum": 0 },
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "ref": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,16}$" },
+    "origin": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "emptyObject": { "type": "object", "additionalProperties": false },
+
+    "hello": {
+      "type": "object",
+      "required": ["protocol", "id", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "const": "hello" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["serverVersion", "heartbeatSeconds", "epoch", "seq", "clientId", "limits"],
+          "additionalProperties": false,
+          "properties": {
+            "serverVersion": { "$ref": "#/$defs/nonEmpty" },
+            "sessionExpiresAt": { "$ref": "#/$defs/timestamp" },
+            "heartbeatSeconds": { "type": "integer", "minimum": 1 },
+            "epoch": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+            "seq": { "$ref": "#/$defs/count" },
+            "clientId": { "type": "string", "pattern": "^c-[0-9a-f]{8}$" },
+            "limits": {
+              "type": "object",
+              "required": ["maxTopics", "maxOpsPer10s", "maxFrameBytes"],
+              "additionalProperties": false,
+              "properties": {
+                "maxTopics": { "const": 16 },
+                "maxOpsPer10s": { "const": 20 },
+                "maxFrameBytes": { "const": 4096 }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "heartbeat": {
+      "type": "object",
+      "required": ["protocol", "id", "type", "ts"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "const": "heartbeat" },
+        "ts": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+
+    "subscribed": {
+      "type": "object",
+      "required": ["protocol", "id", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "const": "subscribed" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["ref", "topics"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "$ref": "#/$defs/ref" },
+            "topics": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "$ref": "#/$defs/TopicName" },
+                  "state": { "type": "object" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "unsubscribed": {
+      "type": "object",
+      "required": ["protocol", "id", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "const": "unsubscribed" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["ref", "topics"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "$ref": "#/$defs/ref" },
+            "topics": { "type": "array", "items": { "$ref": "#/$defs/TopicName" } }
+          }
+        }
+      }
+    },
+
+    "resumed": {
+      "type": "object",
+      "required": ["protocol", "id", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "const": "resumed" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["ref", "fromSeq", "toSeq", "replayed"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "$ref": "#/$defs/ref" },
+            "fromSeq": { "$ref": "#/$defs/count", "description": "the resume.seq of the sub: replayed events have seq > fromSeq" },
+            "toSeq": { "$ref": "#/$defs/count", "description": "the bus seq when the replay was taken" },
+            "replayed": { "$ref": "#/$defs/count" }
+          }
+        }
+      }
+    },
+
+    "resync": {
+      "type": "object",
+      "required": ["protocol", "id", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "const": "resync" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["topics", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "$ref": "#/$defs/ref" },
+            "topics": { "type": "array", "items": { "$ref": "#/$defs/TopicName" } },
+            "reason": { "enum": ["epoch", "gap", "overflow"] }
+          }
+        }
+      }
+    },
+
+    "error": {
+      "type": "object",
+      "required": ["protocol", "id", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "const": "error" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["code"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "$ref": "#/$defs/ref" },
+            "code": { "enum": ["unknown_topic", "forbidden_topic", "bad_op", "too_many_topics", "rate_limited", "frame_too_large"] },
+            "topic": { "type": "string", "maxLength": 64 }
+          }
+        }
+      }
+    },
+
+    "summary": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "summary" },
+        "type": { "const": "summary" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["appsTotal", "appsEnabled", "running", "queued"],
+          "additionalProperties": false,
+          "properties": {
+            "appsTotal": { "$ref": "#/$defs/count" },
+            "appsEnabled": { "$ref": "#/$defs/count" },
+            "running": { "$ref": "#/$defs/count" },
+            "queued": { "$ref": "#/$defs/count" }
+          }
+        }
+      }
+    },
+
+    "notice": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "summary" },
+        "type": { "const": "notice" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["level", "message"],
+          "additionalProperties": false,
+          "properties": {
+            "level": { "enum": ["info", "warning", "error"] },
+            "code": { "type": "string" },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "snapshot": {
+      "description": "sent to one client on sub jobs{progress:true}; not a bus event, so no seq",
+      "type": "object",
+      "required": ["protocol", "id", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "topic": { "const": "jobs" },
+        "type": { "const": "snapshot" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["jobs"],
+          "additionalProperties": false,
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["appId", "jobId", "tag", "status", "phase", "percent", "downloadedBytes", "totalBytes", "speedBps", "updatedAt"],
+                "additionalProperties": false,
+                "properties": {
+                  "appId": { "$ref": "#/$defs/nonEmpty" },
+                  "jobId": { "$ref": "#/$defs/nonEmpty" },
+                  "tag": { "type": "string" },
+                  "status": { "$ref": "#/$defs/JobStatus" },
+                  "phase": { "type": "string" },
+                  "percent": { "type": "integer", "minimum": -1, "maximum": 100 },
+                  "downloadedBytes": { "type": "integer", "minimum": 0 },
+                  "totalBytes": { "type": "integer", "minimum": -1 },
+                  "speedBps": { "type": "integer", "minimum": 0 },
+                  "updatedAt": { "$ref": "#/$defs/timestamp" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "jobStatus": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "jobId", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "jobs" },
+        "type": { "const": "job_status" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "appId": { "$ref": "#/$defs/nonEmpty" },
+        "jobId": { "$ref": "#/$defs/nonEmpty" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {
+            "status": { "$ref": "#/$defs/JobStatus" },
+            "previousStatus": { "$ref": "#/$defs/JobStatus" },
+            "tag": { "type": "string" },
+            "trigger": { "type": "string" },
+            "rolledBack": { "type": "boolean" },
+            "errorCode": { "type": "string" },
+            "message": { "type": "string" },
+            "startedAt": { "$ref": "#/$defs/timestamp" },
+            "finishedAt": { "$ref": "#/$defs/timestamp" }
+          }
+        }
+      }
+    },
+
+    "cancelRequested": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "jobId", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "jobs" },
+        "type": { "const": "cancel_requested" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "appId": { "$ref": "#/$defs/nonEmpty" },
+        "jobId": { "$ref": "#/$defs/nonEmpty" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {
+            "status": { "$ref": "#/$defs/JobStatus" },
+            "previousStatus": { "type": "string" },
+            "outcome": { "type": "string" },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "App": {
+      "description": "OpenAPI App (api/admin-api.v1.openapi.yaml) without secrets and WITHOUT liveProgress",
+      "type": "object",
+      "required": ["id", "name", "binaryPath", "serviceName", "githubRepo", "artifactName", "enabled", "createdAt", "updatedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmpty" },
+        "name": { "type": "string" },
+        "binaryPath": { "type": "string" },
+        "serviceName": { "type": "string" },
+        "githubRepo": { "type": "string" },
+        "artifactName": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "runAsUser": { "type": "string" },
+        "hardening": { "type": "boolean" },
+        "healthUrl": { "type": "string" },
+        "requireDigest": { "type": "boolean" },
+        "isSelf": { "type": "boolean" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "lastDeployTag": { "type": "string" },
+        "lastDeployStatus": { "type": "string" },
+        "lastDeployTime": { "$ref": "#/$defs/timestamp" },
+        "lastJobId": { "type": "string" },
+        "lastJobStatus": { "$ref": "#/$defs/JobStatus" },
+        "lastDownloadBytes": { "type": "integer" },
+        "lastDownloadSpeedBps": { "type": "number" }
+      }
+    },
+
+    "appUpserted": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "appId", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "apps" },
+        "type": { "const": "app.upserted" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "appId": { "$ref": "#/$defs/nonEmpty" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["app"],
+          "additionalProperties": false,
+          "properties": { "app": { "$ref": "#/$defs/App" } }
+        }
+      }
+    },
+
+    "appDeleted": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "appId", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "apps" },
+        "type": { "const": "app.deleted" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "appId": { "$ref": "#/$defs/nonEmpty" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": { "$ref": "#/$defs/emptyObject" }
+      }
+    },
+
+    "appConfigChanged": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "appId", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "apps" },
+        "type": { "const": "app.config_changed" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "appId": { "$ref": "#/$defs/nonEmpty" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["part", "updatedAt"],
+          "additionalProperties": false,
+          "properties": {
+            "part": { "enum": ["env", "args", "unit"] },
+            "updatedAt": { "$ref": "#/$defs/timestamp" }
+          }
+        }
+      }
+    },
+
+    "serviceStatus": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "appId", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "service" },
+        "type": { "const": "service.status" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "appId": { "$ref": "#/$defs/nonEmpty" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["state"],
+          "additionalProperties": false,
+          "properties": { "state": { "$ref": "#/$defs/ServiceState" } }
+        }
+      }
+    },
+
+    "statsChanged": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "stats" },
+        "type": { "const": "stats.changed" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["reasons"],
+          "additionalProperties": false,
+          "properties": {
+            "reasons": { "type": "array", "minItems": 1, "items": { "enum": ["job", "app", "window"] } }
+          }
+        }
+      }
+    },
+
+    "settingsChanged": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "settings" },
+        "type": { "const": "settings.changed" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["section"],
+          "additionalProperties": false,
+          "properties": { "section": { "enum": ["github", "telegram"] } }
+        }
+      }
+    },
+
+    "accountChanged": {
+      "type": "object",
+      "required": ["protocol", "id", "seq", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "topic": { "const": "account" },
+        "type": { "const": "account.changed" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "payload": {
+          "type": "object",
+          "required": ["section"],
+          "additionalProperties": false,
+          "properties": { "section": { "enum": ["profile", "tokens", "sessions"] } }
+        }
+      }
+    },
+
+    "logsLines": {
+      "description": "stream: no seq, not in the ring buffer (events-ws.v3.md 2.2)",
+      "type": "object",
+      "required": ["protocol", "id", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "topic": { "const": "logs:system" },
+        "type": { "const": "logs.lines" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["lines", "cursor"],
+          "additionalProperties": false,
+          "properties": {
+            "lines": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "object",
+                "required": ["ts", "priority", "message"],
+                "additionalProperties": false,
+                "properties": {
+                  "ts": { "$ref": "#/$defs/timestamp" },
+                  "priority": { "type": "integer", "minimum": 0, "maximum": 7 },
+                  "message": { "type": "string", "maxLength": 4096 }
+                }
+              }
+            },
+            "cursor": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "logsGap": {
+      "type": "object",
+      "required": ["protocol", "id", "topic", "type", "ts", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "3" },
+        "id": { "$ref": "#/$defs/id" },
+        "topic": { "const": "logs:system" },
+        "type": { "const": "logs.gap" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "required": ["dropped", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "dropped": { "$ref": "#/$defs/count" },
+            "reason": { "enum": ["rate", "cursor_behind"] }
+          }
+        }
+      }
+    },
+
+    "compactProgress": {
+      "type": "object",
+      "required": ["v", "t", "i", "ts", "a", "j", "ph", "st", "db", "bps", "msg"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": "3" },
+        "t": { "const": "p" },
+        "i": { "$ref": "#/$defs/id" },
+        "ts": { "$ref": "#/$defs/timestamp" },
+        "a": { "$ref": "#/$defs/nonEmpty" },
+        "j": { "$ref": "#/$defs/nonEmpty" },
+        "ph": { "type": "string" },
+        "st": { "$ref": "#/$defs/JobStatus" },
+        "pct": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "db": { "type": "integer", "minimum": 0 },
+        "tb": { "type": "integer", "minimum": 1 },
+        "bps": { "type": "integer", "minimum": 0 },
+        "msg": { "type": "string" }
+      }
+    }
+  }
+}
