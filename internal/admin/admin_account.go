@@ -12,6 +12,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/izzamoe/auto-deploy/internal/auth"
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/httpx"
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
@@ -38,6 +39,7 @@ type AccountHandler struct {
 	// once the password has been changed (Q-3). Empty disables the cleanup.
 	initialPasswordPath string
 	failures            *auth.Window
+	eventPublisher
 }
 
 // NewAccountHandler builds the handler.
@@ -91,6 +93,9 @@ func (h *AccountHandler) ChangePasswordHertz(ctx context.Context, c *app.Request
 	}
 	auth.AuditRequest(c, auth.EventPasswordChanged, user.ID)
 	h.removeInitialPasswordFile()
+	// Published after the commit and before the revocation signal of reissue; this user's
+	// other sockets close 4401 and the actor's tab gets it live or by resume (RV2-9).
+	h.publish(c, events.AccountChanged(user.ID, events.SectionProfile))
 	h.reissue(c, p.SessionID, user.ID)
 	c.JSON(200, map[string]string{"status": "ok", "message": "Password updated"})
 }
@@ -127,6 +132,7 @@ func (h *AccountHandler) ChangeUsernameHertz(ctx context.Context, c *app.Request
 		return
 	}
 	auth.AuditRequest(c, auth.EventUsernameChanged, user.ID)
+	h.publish(c, events.AccountChanged(user.ID, events.SectionProfile))
 	h.reissue(c, p.SessionID, user.ID)
 	c.JSON(200, map[string]string{"status": "ok", "message": "Username updated"})
 }

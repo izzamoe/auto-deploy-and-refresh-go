@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/store"
 	"github.com/izzamoe/auto-deploy/internal/telegram"
 
@@ -46,6 +47,7 @@ type TelegramConfigHandler struct {
 
 	mu      sync.Mutex
 	manager telegramManagerLifecycle
+	eventPublisher
 }
 
 // NewTelegramConfigHandler creates a handler bound to cfgStore. baseCtx is
@@ -248,6 +250,8 @@ func (h *TelegramConfigHandler) SaveTelegramConfigHertz(ctx context.Context, c *
 	}
 
 	h.apply(newCfg)
+	// Other tabs refetch the section; bot token and appHash are never sent (FR-005).
+	h.publish(c, events.SettingsChanged(events.SectionTelegram))
 
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "config": telegramConfigResponseFrom(newCfg)})
 }

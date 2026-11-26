@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/izzamoe/auto-deploy/internal/auth"
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/httpx"
 	"github.com/izzamoe/auto-deploy/internal/store"
 )
@@ -21,6 +22,7 @@ const maxTokenNameLen = 64
 // cookie: the middleware refuses API tokens on /tokens (Q-6).
 type TokensHandler struct {
 	tokens *store.APITokenStore
+	eventPublisher
 }
 
 // NewTokensHandler builds the handler.
@@ -96,6 +98,8 @@ func (h *TokensHandler) CreateHertz(ctx context.Context, c *app.RequestContext) 
 			row := store.APIToken{ID: id, UserID: p.UserID, Name: name, TokenHash: hash, Prefix: prefix, CreatedAt: time.Now().UTC()}
 			if err = h.tokens.Create(&row); err == nil {
 				auth.AuditRequest(c, auth.EventTokenCreated, p.UserID, "tokenId", id, "tokenName", name)
+				// Only this user's tabs, and never the token value (FR-005, FR-017).
+				h.publish(c, events.AccountChanged(p.UserID, events.SectionTokens))
 				c.JSON(201, apiTokenCreatedJSON{apiTokenJSON: toTokenJSON(row), Token: full})
 				return
 			}
@@ -123,6 +127,7 @@ func (h *TokensHandler) RevokeHertz(ctx context.Context, c *app.RequestContext) 
 		return
 	}
 	auth.AuditRequest(c, auth.EventTokenRevoked, p.UserID, "tokenId", id)
+	h.publish(c, events.AccountChanged(p.UserID, events.SectionTokens))
 	c.Status(204)
 }
 

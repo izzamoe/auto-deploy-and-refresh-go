@@ -268,6 +268,10 @@ func main() {
 	appEnvHandler.SetEventPublisher(adminEventHub)
 	appArgsHandler.SetEventPublisher(adminEventHub)
 	serviceUnitHandler.SetEventPublisher(adminEventHub)
+	githubConfigHandler.SetEventPublisher(adminEventHub)
+	telegramHandler.SetEventPublisher(adminEventHub)
+	tokensHandler.SetEventPublisher(adminEventHub)
+	accountHandler.SetEventPublisher(adminEventHub)
 	h := server.New(
 		server.WithHostPorts(serviceCfg.ListenAddr),
 		server.WithReadTimeout(45*time.Second),
