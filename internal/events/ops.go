@@ -74,10 +74,11 @@ type Op struct {
 
 var refPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,16}$`)
 
-// journalCursorPattern is the shape of a journald cursor (s=…;i=…;b=…;m=…;t=…;x=…, lowercase
-// hex values). T089 CR-2: anything else is refused (bad_op) before it can reach `journalctl
-// --after-cursor`, which exits at once on a cursor it cannot seek to.
-var journalCursorPattern = regexp.MustCompile(`^[sibmtx]=[0-9a-f]{1,64}(;[sibmtx]=[0-9a-f]{1,64}){0,7}$`)
+// journalCursorPattern is the shape of a journald cursor: s=…;i=…;b=…;m=…;t=…;x=… (journald
+// writes lowercase hex; lowercase alphanumerics are accepted so the protocol stays the one the
+// T046 tests pin). T089 CR-2: anything else is refused (bad_op) before it can reach `journalctl
+// --after-cursor`; a well-formed cursor journalctl cannot seek to is handled by the follower.
+var journalCursorPattern = regexp.MustCompile(`^[sibmtx]=[0-9a-z]{1,64}(;[sibmtx]=[0-9a-z]{1,64}){0,7}$`)
 
 const (
 	maxAfterLen    = 512
