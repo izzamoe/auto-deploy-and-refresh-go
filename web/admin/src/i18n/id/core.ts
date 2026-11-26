@@ -138,7 +138,6 @@ export const idCore = {
   "shell.notifications.count.one": "{count} notifikasi belum dibaca",
   "shell.notifications.dismiss": "Hapus notifikasi",
   "shell.reload": "Muat ulang halaman",
-  "shell.stats.error": "Statistik tidak dapat dimuat.",
   "notification.noticeFallback": "Pemberitahuan sistem",
   "account.forced.title": "Ganti kata sandi bawaan",
   "account.forced.body": "Demi keamanan, ganti kata sandi terlebih dahulu sebelum memakai panel admin.",

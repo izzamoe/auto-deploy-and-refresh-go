@@ -149,7 +149,6 @@ export const en: Record<MessageKey, string> = {
   "shell.notifications.count.one": "{count} unread notification",
   "shell.notifications.dismiss": "Dismiss notification",
   "shell.reload": "Reload page",
-  "shell.stats.error": "Statistics could not be loaded.",
   "notification.noticeFallback": "System notice",
 
   "account.forced.title": "Change the default password",
@@ -418,7 +417,6 @@ export const en: Record<MessageKey, string> = {
   "syslogs.subtitle": "The systemd journal of auto-deploy itself, for diagnosing the service.",
   "syslogs.service": "Service: {name}",
   "syslogs.loadError": "The system logs could not be loaded.",
-  "syslogs.autoRefresh": "Auto-refresh (10 s)",
   "syslogs.live": "Live",
   "syslogs.live.on": "New lines appear as they are written.",
   "syslogs.pause": "Pause",
@@ -427,7 +425,6 @@ export const en: Record<MessageKey, string> = {
   "syslogs.newLines": "{n} new lines",
   "syslogs.newLines.one": "{n} new line",
   "syslogs.gap": "{n} lines were skipped (rate limit).",
-  "syslogs.behind": "Part of the log was missed; reloading the latest lines.",
   "syslogs.unavailable": "The live log is not available on this server.",
   "syslogs.region": "System log content",
 

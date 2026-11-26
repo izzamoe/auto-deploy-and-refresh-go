@@ -7,7 +7,6 @@ export const idSyslogs = {
   "syslogs.subtitle": "Journal systemd dari auto-deploy sendiri, untuk mendiagnosis layanan.",
   "syslogs.service": "Service: {name}",
   "syslogs.loadError": "Log sistem tidak dapat dimuat.",
-  "syslogs.autoRefresh": "Muat ulang otomatis (10 detik)",
   "syslogs.live": "Langsung",
   "syslogs.live.on": "Baris baru tampil saat ditulis.",
   "syslogs.pause": "Jeda",
@@ -16,7 +15,6 @@ export const idSyslogs = {
   "syslogs.newLines": "{n} baris baru",
   "syslogs.newLines.one": "{n} baris baru",
   "syslogs.gap": "{n} baris terlewati (batas laju).",
-  "syslogs.behind": "Sebagian log terlewat; memuat ulang baris terbaru.",
   "syslogs.unavailable": "Log langsung tidak tersedia di server ini.",
   "syslogs.region": "Isi log sistem",
 } as const;

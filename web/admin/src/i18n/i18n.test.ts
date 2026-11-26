@@ -253,6 +253,43 @@ describe("no literal UI strings in components", () => {
   });
 });
 
+describe("002 realtime messages (T060, FR-023, NFR-010)", () => {
+  const REALTIME_KEYS = [
+    "shell.connection.online", "shell.connection.reconnecting", "shell.connection.resyncing", "shell.connection.offline", "shell.connection.label",
+    "shell.summary.pending",
+    "live.region", "live.app.enabled", "live.app.disabled", "live.app.added", "live.app.deleted", "live.service", "live.connection.lost", "live.connection.back",
+    "form.conflict.changed", "form.conflict.config", "form.conflict.deleted", "form.conflict.reload",
+    "settings.conflict.changed", "settings.conflict.reload",
+    "syslogs.live", "syslogs.live.on", "syslogs.pause", "syslogs.resume", "syslogs.paused", "syslogs.newLines", "syslogs.newLines.one", "syslogs.gap", "syslogs.unavailable",
+  ] as const;
+
+  it("every realtime message exists in id and en, non-empty, with the same placeholders", () => {
+    for (const key of REALTIME_KEYS) {
+      expect(id[key as MessageKey], `id ${key}`).toBeTruthy();
+      expect(en[key as MessageKey], `en ${key}`).toBeTruthy();
+      expect(placeholders(en[key as MessageKey]), key).toEqual(placeholders(id[key as MessageKey]));
+    }
+  });
+
+  it("the four connection states read differently in both languages (text, not colour alone)", () => {
+    for (const dict of [id, en]) {
+      const texts = ["shell.connection.online", "shell.connection.reconnecting", "shell.connection.resyncing", "shell.connection.offline"].map((k) => dict[k as MessageKey]);
+      expect(new Set(texts).size).toBe(4);
+    }
+  });
+
+  it("announcements name the app and the service state", () => {
+    expect(translate("id", "live.app.disabled", { name: "web" })).toBe("Aplikasi web dinonaktifkan di sesi lain.");
+    expect(translate("en", "live.app.disabled", { name: "web" })).toBe("App web was disabled in another session.");
+    expect(placeholders(id["live.service"])).toEqual(["name", "state"]);
+  });
+
+  it("the messages of the removed polling UI are gone (no auto-refresh, no /stats error in the header)", () => {
+    expect(Object.keys(id)).not.toContain("syslogs.autoRefresh");
+    expect(Object.keys(id)).not.toContain("shell.stats.error");
+  });
+});
+
 describe("lazy English dictionary (bundle budget Q-20)", () => {
   it("the en dictionary is fetched on demand and then used; before that translate falls back to id", async () => {
     const loaded = DICTIONARIES.en;
