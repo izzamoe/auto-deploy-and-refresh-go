@@ -632,6 +632,7 @@ func (vc *v3Conn) writeFrame(typ string, payload any) bool {
 	if err != nil {
 		return false
 	}
+	events.M().FrameSent(typ, len(raw))
 	return vc.write(raw)
 }
 
@@ -754,6 +755,7 @@ func (vc *v3Conn) flush() bool {
 			_ = vc.c.Close(closeLagging, "lagging")
 			return false
 		}
+		events.M().ResyncTotal.Add(events.ResyncOverflow, 1)
 		if !vc.writeFrame(adminEventTypeResync, adminEventResyncPayload{Topics: vc.client.TopicList(), Reason: events.ResyncOverflow}) {
 			return false
 		}
@@ -763,6 +765,7 @@ func (vc *v3Conn) flush() bool {
 	frames, wait := vc.client.TakeProgress(now, vc.progressBuf[:0])
 	vc.progressBuf = frames[:0]
 	for _, f := range frames {
+		events.M().FrameSent(adminEventCompactProgress, len(f))
 		if !vc.write(f) {
 			return false
 		}
@@ -889,6 +892,7 @@ func (vc *v3Conn) writeSnapshot() bool {
 	if err != nil {
 		return false
 	}
+	events.M().FrameSent(adminEventTypeSnapshot, len(raw))
 	return vc.write(raw)
 }
 
@@ -904,6 +908,7 @@ func (h *AdminEventHub) PublishTopic(topic, eventType, appID, jobID, userID stri
 }
 
 func (vc *v3Conn) writeError(e events.OpError) bool {
+	events.M().OpsRejected.Add(string(e.Code), 1)
 	return vc.writeFrame(adminEventTypeError, adminEventErrorPayload{Ref: e.Ref, Code: e.Code, Topic: e.Topic})
 }
 

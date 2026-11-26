@@ -94,6 +94,7 @@ func (c *Client) setTopics(subs []TopicSub, unsubs []Topic) (added []Topic) {
 	for _, s := range subs {
 		if _, ok := c.topics[s.Topic]; !ok {
 			added = append(added, s.Topic)
+			M().Subscriptions.Add(string(s.Topic), 1)
 		}
 		c.topics[s.Topic] = s.Opts
 		if s.Topic == TopicJobs && !s.Opts.Progress {
@@ -101,7 +102,10 @@ func (c *Client) setTopics(subs []TopicSub, unsubs []Topic) (added []Topic) {
 		}
 	}
 	for _, t := range unsubs {
-		delete(c.topics, t)
+		if _, ok := c.topics[t]; ok {
+			delete(c.topics, t)
+			M().Subscriptions.Add(string(t), -1)
+		}
 		if t == TopicJobs {
 			dropProgress = true
 		}
@@ -114,12 +118,14 @@ func (c *Client) setTopics(subs []TopicSub, unsubs []Topic) (added []Topic) {
 
 // enqueue never blocks: when the queue is full the frame is dropped, the client is flagged
 // for overflow and its writer is woken (it then resyncs the client, FR-013).
-func (c *Client) enqueue(frame []byte) {
+func (c *Client) enqueue(frame []byte) bool {
 	select {
 	case c.queue <- frame:
+		return true
 	default:
 		c.overflow.Store(true)
 		c.signal()
+		return false
 	}
 }
 
@@ -150,6 +156,7 @@ func (c *Client) TakeOverflow(now time.Time) (overflowed, lagging bool) {
 	if !c.overflow.CompareAndSwap(true, false) {
 		return false, false
 	}
+	M().OverflowTotal.Add(1)
 	for drained := false; !drained; {
 		select {
 		case <-c.queue:

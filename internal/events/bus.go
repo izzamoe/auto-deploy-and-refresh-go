@@ -80,13 +80,18 @@ func (b *Bus) Seq() uint64 {
 func (b *Bus) Register(c *Client) {
 	b.mu.Lock()
 	b.clients[c] = struct{}{}
+	M().Connections.Add(1)
 	b.mu.Unlock()
 }
 
 // Unregister removes the client from the fan-out.
 func (b *Bus) Unregister(c *Client) {
 	b.mu.Lock()
-	delete(b.clients, c)
+	if _, ok := b.clients[c]; ok {
+		delete(b.clients, c)
+		M().Connections.Add(-1)
+		c.setTopics(nil, c.TopicList()) // the subscriptions gauge drops with the socket
+	}
 	b.mu.Unlock()
 }
 
@@ -119,13 +124,15 @@ func (b *Bus) Publish(e Event) (uint64, error) {
 	}
 	if seq != 0 {
 		b.seq = seq
-		b.ring.push(entry{seq: seq, topic: e.Topic, userID: e.UserID, frame: frame})
+		b.ring.push(entry{seq: seq, topic: e.Topic, typ: e.Type, userID: e.UserID, frame: frame})
 	}
 	for c := range b.clients {
 		if _, ok := c.topics[e.Topic]; !ok || !Visible(c.Principal, e.Topic, e.UserID) {
 			continue
 		}
-		c.enqueue(frame)
+		if c.enqueue(frame) {
+			M().FrameSent(e.Type, len(frame))
+		}
 	}
 	return seq, nil
 }
@@ -203,9 +210,11 @@ func (b *Bus) Subscribe(c *Client, subs []TopicSub, resume *Resume) SubscribeRes
 	switch {
 	case resume.Epoch != b.epoch:
 		res.Resync, res.ResyncTopics = ResyncEpoch, all
+		M().ResyncTotal.Add(ResyncEpoch, 1)
 		return res
 	case !b.canReplayLocked(resume.Seq):
 		res.Resync, res.ResyncTopics = ResyncGap, all
+		M().ResyncTotal.Add(ResyncGap, 1)
 		return res
 	}
 	added := make(map[Topic]bool, len(res.Added))
@@ -215,8 +224,10 @@ func (b *Bus) Subscribe(c *Client, subs []TopicSub, resume *Resume) SubscribeRes
 	b.ring.since(resume.Seq, func(e *entry) {
 		if added[e.topic] && Visible(c.Principal, e.topic, e.userID) {
 			res.Replay = append(res.Replay, e.frame)
+			M().FrameSent(e.typ, len(e.frame))
 		}
 	})
+	M().ReplayTotal.Add(int64(len(res.Replay)))
 	res.Resumed, res.FromSeq, res.ToSeq = true, resume.Seq, b.seq
 	return res
 }

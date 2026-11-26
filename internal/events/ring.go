@@ -10,6 +10,7 @@ const (
 type entry struct {
 	seq    uint64
 	topic  Topic
+	typ    string
 	userID string
 	frame  []byte
 }
