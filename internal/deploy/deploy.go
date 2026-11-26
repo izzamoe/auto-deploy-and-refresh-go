@@ -116,6 +116,42 @@ func CaptureServiceLogsBounded(serviceName string, lines, maxBytes int) (log str
 	return store.CapLogTail(CaptureServiceLogsLines(serviceName, lines), maxBytes)
 }
 
+// journalCursorPrefix starts the line `journalctl --show-cursor` prints after the entries.
+const journalCursorPrefix = "-- cursor: "
+
+// CaptureServiceLogsWithCursor is CaptureServiceLogsBounded plus the journal cursor of the
+// last entry (`--show-cursor`, specs/002 FR-009): the output keeps journalctl's default text
+// format; the trailing "-- cursor: …" line is taken out of the log and returned as cursor
+// ("" when journalctl printed none). The stream of logs:system continues after it.
+func CaptureServiceLogsWithCursor(serviceName string, lines, maxBytes int) (log string, truncated bool, cursor string) {
+	if strings.TrimSpace(serviceName) == "" {
+		return "", false, ""
+	}
+	args := []string{"-u", serviceName, "--no-pager"}
+	if lines > 0 {
+		args = append(args, "-n", strconv.Itoa(lines))
+	} else {
+		args = append(args, "--no-tail")
+	}
+	args = append(args, "--show-cursor")
+	out, err := runJournalctl(args...)
+	text := string(out)
+	if err != nil && len(out) == 0 {
+		text = fmt.Sprintf("failed to read logs for %s: %v", serviceName, err)
+	}
+	trimmed := strings.TrimRight(text, "\n")
+	if i := strings.LastIndex(trimmed, "\n"); strings.HasPrefix(trimmed[i+1:], journalCursorPrefix) {
+		cursor = strings.TrimSpace(strings.TrimPrefix(trimmed[i+1:], journalCursorPrefix))
+		if i < 0 {
+			text = ""
+		} else {
+			text = trimmed[:i+1]
+		}
+	}
+	log, truncated = store.CapLogTail(text, maxBytes)
+	return log, truncated, cursor
+}
+
 // CaptureServiceLogsSince returns serviceName's systemd journal limited to
 // entries emitted at or after since. Unlike CaptureServiceLogs (which returns
 // an arbitrary tail of recent output), this scopes the result to a single

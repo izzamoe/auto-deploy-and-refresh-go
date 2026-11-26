@@ -95,6 +95,10 @@ type AdminEventHub struct {
 	svcMu   sync.Mutex
 	svc     events.ServiceWatcher
 	svcOpts deploy.ServiceWatcherOptions
+	// journal is the shared follower of topic logs:system (Q-5=A), nil until
+	// SetSystemLogUnit/SetJournalFollower.
+	journalMu sync.Mutex
+	journal   events.JournalFollower
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -663,6 +667,9 @@ type v3Conn struct {
 	// watcher, journal follower), with the option they were acquired with; all are
 	// released when the socket ends, however it ends.
 	held map[events.Topic]string
+	// logsJoin is what the journal follower gave this socket's new logs:system
+	// subscription; written after the subscribed ack.
+	logsJoin *events.LogsJoin
 }
 
 // watchedTopic reports whether subscribing to t holds a shared watcher, and its key.
@@ -672,6 +679,8 @@ func watchedTopic(s events.TopicSub) (string, bool) {
 		return s.Opts.TZ, true
 	case events.TopicService:
 		return "", true
+	case events.TopicLogs:
+		return s.Opts.After, true
 	}
 	return "", false
 }
@@ -693,6 +702,13 @@ func (vc *v3Conn) hold(s events.TopicSub) {
 		vc.held = make(map[events.Topic]string)
 	}
 	vc.held[s.Topic] = key
+	if s.Topic == events.TopicLogs {
+		if f := vc.h.journalFollower(); f != nil {
+			join := f.Acquire(key)
+			vc.logsJoin = &join
+		}
+		return
+	}
 	vc.h.acquireTopic(s.Topic, key)
 }
 
@@ -733,6 +749,10 @@ func (h *AdminEventHub) releaseTopic(t events.Topic, key string) {
 	case events.TopicService:
 		if w := h.serviceWatcher(); w != nil {
 			w.Release()
+		}
+	case events.TopicLogs:
+		if f := h.journalFollower(); f != nil {
+			f.Release()
 		}
 	}
 }
@@ -993,12 +1013,46 @@ func (vc *v3Conn) subscribe(op events.Op) bool {
 			return false
 		}
 	}
+	if join := vc.logsJoin; join != nil {
+		vc.logsJoin = nil
+		if !vc.writeLogsJoin(*join) {
+			return false
+		}
+	}
 	for _, s := range res.Accepted {
 		if s.Topic == events.TopicJobs && s.Opts.Progress {
 			return vc.writeSnapshot()
 		}
 	}
 	return true
+}
+
+// writeLogsJoin sends this socket what it missed of logs:system before the live stream: the
+// recent lines after its cursor, or logs.gap{cursor_behind} (stream frames: no seq).
+func (vc *v3Conn) writeLogsJoin(join events.LogsJoin) bool {
+	if join.Behind {
+		ev := events.LogsGap(0, events.GapCursorBehind)
+		return vc.writeTopicFrame(ev.Topic, ev.Type, ev.Payload)
+	}
+	for _, b := range join.Batches {
+		if !vc.writeTopicFrame(events.TopicLogs, events.TypeLogsLines, b) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeTopicFrame writes a stream frame of a topic to this socket only.
+func (vc *v3Conn) writeTopicFrame(topic events.Topic, typ string, payload any) bool {
+	raw, err := json.Marshal(adminEventV3{
+		Protocol: adminEventProtocolV3, ID: vc.h.newEventID(), Topic: string(topic), Type: typ,
+		Timestamp: vc.h.now().UTC(), Payload: payload,
+	})
+	if err != nil {
+		return false
+	}
+	events.M().FrameSent(typ, len(raw))
+	return vc.write(raw)
 }
 
 // topicState is the state a subscribed ack carries for the topic (events-ws.v3.md
@@ -1115,6 +1169,76 @@ func (h *AdminEventHub) SetServiceWatchOptions(opts deploy.ServiceWatcherOptions
 	h.svcMu.Lock()
 	h.svcOpts = opts
 	h.svcMu.Unlock()
+}
+
+// SetSystemLogUnit creates the shared journal follower of topic logs:system for the unit of
+// auto-deploy itself (SELF_SERVICE_NAME). Its batches and gaps are stream frames of the
+// bus; a follower that cannot start (no journalctl) is announced once as a notice.
+func (h *AdminEventHub) SetSystemLogUnit(unit string) {
+	f := deploy.NewJournalFollower(deploy.JournalFollowerOptions{Unit: unit}, func(lines []deploy.JournalLine, cursor string) {
+		_, _ = h.bus.Publish(events.LogsLines(logLines(lines), cursor))
+	}, func(dropped int, reason string) {
+		_, _ = h.bus.Publish(events.LogsGap(dropped, reason))
+	}, func(err error) {
+		slog.Warn("events: the system log stream cannot start", "err", err)
+		_, _ = h.bus.Publish(events.Event{Topic: events.TopicSummary, Type: events.TypeNotice, Payload: noticePayload{
+			Level: "warning", Code: "logs_unavailable", Message: "The live system log is not available on this server.",
+		}})
+	})
+	h.SetJournalFollower(journalAdapter{f})
+}
+
+// SetJournalFollower replaces the journal follower of topic logs:system (tests).
+func (h *AdminEventHub) SetJournalFollower(f events.JournalFollower) {
+	h.journalMu.Lock()
+	h.journal = f
+	h.journalMu.Unlock()
+}
+
+func (h *AdminEventHub) journalFollower() events.JournalFollower {
+	h.journalMu.Lock()
+	defer h.journalMu.Unlock()
+	return h.journal
+}
+
+// Close stops the shared watchers that run a process (the journal follower) and waits for
+// them; called at server shutdown.
+func (h *AdminEventHub) Close() {
+	if f := h.journalFollower(); f != nil {
+		f.Close()
+	}
+}
+
+// noticePayload is the payload of a summary notice (events-ws.v3.md 2.2).
+type noticePayload struct {
+	Level   string `json:"level"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
+// journalAdapter turns the deploy follower into the follower of topic logs:system.
+type journalAdapter struct{ f *deploy.JournalFollower }
+
+func (a journalAdapter) Acquire(after string) events.LogsJoin {
+	join := a.f.Acquire(after)
+	out := events.LogsJoin{Behind: join.Behind}
+	for start := 0; start < len(join.Replay); start += events.MaxLogBatch {
+		end := min(start+events.MaxLogBatch, len(join.Replay))
+		part := join.Replay[start:end]
+		out.Batches = append(out.Batches, events.LogsLinesPayload{Lines: logLines(part), Cursor: part[len(part)-1].Cursor})
+	}
+	return out
+}
+
+func (a journalAdapter) Release() { a.f.Release() }
+func (a journalAdapter) Close()   { a.f.Close() }
+
+func logLines(lines []deploy.JournalLine) []events.LogLine {
+	out := make([]events.LogLine, len(lines))
+	for i, l := range lines {
+		out[i] = events.LogLine{TS: l.TS, Priority: l.Priority, Message: l.Message}
+	}
+	return out
 }
 
 // SetServiceWatcher replaces the systemd watcher of topic service (tests).

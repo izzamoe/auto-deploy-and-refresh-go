@@ -378,3 +378,114 @@ func TestServiceTopic_WatcherReferencedPerSocket(t *testing.T) {
 		t.Fatalf("RefreshService reached the watcher as %v", w.refreshes)
 	}
 }
+
+// ---------------------------------------------------------------------------------------
+// T046 (RV-23): topic logs:system and the release of every shared watcher.
+
+// countingJournal stands in for the shared journal follower.
+type countingJournal struct {
+	mu     sync.Mutex
+	refs   int
+	afters []string
+	join   events.LogsJoin
+	closed bool
+}
+
+func (j *countingJournal) Acquire(after string) events.LogsJoin {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.refs++
+	j.afters = append(j.afters, after)
+	return j.join
+}
+
+func (j *countingJournal) Release() {
+	j.mu.Lock()
+	j.refs--
+	j.mu.Unlock()
+}
+
+func (j *countingJournal) Close() {
+	j.mu.Lock()
+	j.closed = true
+	j.mu.Unlock()
+}
+
+func (j *countingJournal) count() int {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.refs
+}
+
+// A socket that disappears without a close frame (tab killed, network gone) releases the
+// service watcher and the journal follower it held, like a clean close.
+func TestServiceTopic_RefReleasedOnAbruptClose(t *testing.T) {
+	e := newTopicEnv(t)
+	w := &countingWatcher{}
+	j := &countingJournal{}
+	e.hub.SetServiceWatcher(w)
+	e.hub.SetJournalFollower(j)
+
+	s := e.dial(t)
+	s.send(t, `{"op":"sub","ref":"r1","topics":[{"name":"service"},{"name":"logs:system","after":"s=abc"},{"name":"stats","tz":"Asia/Jakarta"}]}`)
+	s.expect(t, "subscribed", ackOf("r1"))
+	waitRefs(t, w, 1, "service subscribed")
+	if j.count() != 1 {
+		t.Fatalf("journal refs = %d, want 1", j.count())
+	}
+	j.mu.Lock()
+	if len(j.afters) != 1 || j.afters[0] != "s=abc" {
+		t.Fatalf("the follower got after=%v, want the socket's cursor s=abc", j.afters)
+	}
+	j.mu.Unlock()
+
+	_ = s.conn.CloseNow() // no close frame
+	waitRefs(t, w, 0, "after an abrupt close")
+	deadline := time.Now().Add(2 * time.Second)
+	for j.count() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("journal refs = %d after an abrupt close, want 0", j.count())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	e.hub.Close()
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.closed {
+		t.Fatal("hub.Close did not stop the journal follower")
+	}
+}
+
+// A late joiner with a cursor the shared follower still has gets the lines after it; with a
+// forgotten cursor it gets logs.gap{cursor_behind} (no second process). Both are stream
+// frames: no seq.
+func TestServiceTopic_LogsJoinFrames(t *testing.T) {
+	e := newTopicEnv(t)
+	j := &countingJournal{join: events.LogsJoin{Batches: []events.LogsLinesPayload{{
+		Lines:  []events.LogLine{{TS: time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC), Priority: 6, Message: "missed"}},
+		Cursor: "s=new",
+	}}}}
+	e.hub.SetJournalFollower(j)
+	s := e.dial(t)
+	s.send(t, `{"op":"sub","ref":"r1","topics":[{"name":"logs:system","after":"s=old"}]}`)
+	s.expect(t, "subscribed", ackOf("r1"))
+	f := s.expect(t, "replayed logs.lines", func(f topicFrame) bool { return f.Type == "logs.lines" })
+	if f.Topic != "logs:system" || f.Seq != 0 || f.Payload["cursor"] != "s=new" || !strings.Contains(string(f.Raw), `"message":"missed"`) {
+		t.Fatalf("replay frame = %s", f.Raw)
+	}
+
+	j.mu.Lock()
+	j.join = events.LogsJoin{Behind: true}
+	j.mu.Unlock()
+	s2 := e.dial(t)
+	s2.send(t, `{"op":"sub","ref":"r1","topics":[{"name":"logs:system","after":"s=ancient"}]}`)
+	s2.expect(t, "subscribed", ackOf("r1"))
+	g := s2.expect(t, "logs.gap", func(f topicFrame) bool { return f.Type == "logs.gap" })
+	if g.Topic != "logs:system" || g.Seq != 0 || g.Payload["reason"] != "cursor_behind" {
+		t.Fatalf("gap frame = %s", g.Raw)
+	}
+	if j.count() != 2 {
+		t.Fatalf("journal refs = %d, want 2 (one shared follower for both sockets)", j.count())
+	}
+}

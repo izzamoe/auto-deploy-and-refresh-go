@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/izzamoe/auto-deploy/internal/events"
 )
 
 // ServiceWatcher is the shared observer of the systemd state of every app's service
@@ -159,6 +161,11 @@ func (w *ServiceWatcher) loop(stop <-chan struct{}, refresh <-chan struct{}) {
 func (w *ServiceWatcher) round() {
 	w.roundMu.Lock()
 	defer w.roundMu.Unlock()
+	start := time.Now()
+	defer func() {
+		events.M().ServiceWatchRuns.Add(1)
+		events.M().ServiceWatchMsTotal.Add(time.Since(start).Milliseconds())
+	}()
 
 	units := map[string]string{}
 	if w.units != nil {

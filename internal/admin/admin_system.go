@@ -61,12 +61,18 @@ func NewSystemLogsHandler(selfServiceName string) *SystemLogsHandler {
 // optional "lines" query parameter behaves as documented on parseLogLinesParam.
 func (h *SystemLogsHandler) SelfLogsHertz(ctx context.Context, c *app.RequestContext) {
 	lines := parseLogLinesParam(c)
-	logText, truncated := deploy.CaptureServiceLogsBounded(h.selfServiceName, lines, store.MaxLiveLogBytes)
-	c.JSON(consts.StatusOK, map[string]any{
+	// The snapshot keeps journalctl's default text format; --show-cursor adds the cursor
+	// of its last entry, from which `sub logs:system {after}` continues (FR-009, additive).
+	logText, truncated, cursor := deploy.CaptureServiceLogsWithCursor(h.selfServiceName, lines, store.MaxLiveLogBytes)
+	resp := map[string]any{
 		"service":   h.selfServiceName,
 		"log":       logText,
 		"truncated": truncated,
-	})
+	}
+	if cursor != "" {
+		resp["cursor"] = cursor
+	}
+	c.JSON(consts.StatusOK, resp)
 }
 
 // RegisterSystemRoutesHertz registers the system (self) log route under auth.

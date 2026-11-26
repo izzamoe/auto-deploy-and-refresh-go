@@ -165,6 +165,8 @@ func main() {
 	adminEventHub.SetDeployQueue(q) // topic summary = the apps/active fields of GET /stats (T042)
 	// Topic service: one shared `systemctl is-active` round per interval while subscribed (Q-3=A).
 	adminEventHub.SetServiceWatchOptions(deploy.ServiceWatcherOptions{Interval: serviceCfg.ServiceWatchInterval})
+	// Topic logs:system: one shared `journalctl -f -o json` while subscribed (Q-5=A).
+	adminEventHub.SetSystemLogUnit(serviceCfg.SelfServiceName)
 	q.SetJobObserver(adminEventHub)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -325,6 +327,7 @@ func main() {
 	if err := h.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
+	adminEventHub.Close() // stop and reap the journalctl of the live log stream
 }
 
 // sessionRetention is how long expired or revoked session rows are kept.
