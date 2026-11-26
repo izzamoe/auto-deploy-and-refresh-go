@@ -91,18 +91,26 @@ describe("AppShell structure", () => {
 });
 
 describe("Header", () => {
-  it("greets the user and shows the live counts from /stats", async () => {
-    installFetch(okRoutes());
+  it("greets the user and shows the live counts from topic summary, then pushed updates, without ever requesting /stats (002 T053)", async () => {
+    const api = installFetch(okRoutes());
     mountShell();
     expect(await screen.findByTestId("greeting")).toHaveTextContent("Halo, budi");
-    await waitFor(() => expect(screen.getByTestId("subtitle")).toHaveTextContent("3 aplikasi aktif · 2 berjalan"));
+    const ws = FakeWebSocket.instances[0];
+    await act(async () => goLive(ws, { summary: { appsTotal: 5, appsEnabled: 3, running: 2, queued: 1 } }));
+    expect(ws.subscribedTopics()).toContain("summary");
+    expect(screen.getByTestId("subtitle")).toHaveTextContent("3 aplikasi aktif · 2 berjalan");
+    await sendEvent({ protocol: "3", id: "evt-9", seq: 9, topic: "summary", type: "summary", ts: "2026-11-25T01:00:00Z", payload: { appsTotal: 5, appsEnabled: 4, running: 0, queued: 0 } });
+    expect(screen.getByTestId("subtitle")).toHaveTextContent("4 aplikasi aktif · 0 berjalan");
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(api.count("GET", "/admin/api/v1/stats")).toBe(0);
   });
 
-  it("a failing /stats does not break the shell", async () => {
-    installFetch({ ...okRoutes(), "GET /admin/api/v1/stats": () => ({ status: 500, body: errorBody("internal_error") }) });
+  it("before any summary state the header shows a neutral placeholder; the shell still renders and /stats is never requested", async () => {
+    const api = installFetch({ ...okRoutes(), "GET /admin/api/v1/stats": () => ({ status: 500, body: errorBody("internal_error") }) });
     mountShell();
-    await waitFor(() => expect(screen.getByTestId("subtitle")).toHaveTextContent("Statistik tidak dapat dimuat."));
+    await waitFor(() => expect(screen.getByTestId("subtitle")).toHaveTextContent("Menunggu data langsung…"));
     expect(screen.getByTestId("page")).toBeInTheDocument();
+    expect(api.count("GET", "/admin/api/v1/stats")).toBe(0);
   });
 
   it("searching goes to the apps page with the term; an empty search goes to the plain list", async () => {

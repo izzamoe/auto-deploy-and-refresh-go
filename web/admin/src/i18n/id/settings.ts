@@ -12,6 +12,8 @@ export const idSettings = {
   "github.token.hint": "Kosongkan untuk mempertahankan token yang tersimpan. Token tidak pernah ditampilkan penuh.",
   "github.save": "Simpan token",
   "github.saved": "Token GitHub disimpan.",
+  "settings.conflict.changed": "Pengaturan ini diubah di sesi lain. Isian Anda tetap.",
+  "settings.conflict.reload": "Muat ulang",
   "github.clear": "Hapus token",
   "github.clear.title": "Hapus token GitHub?",
   "github.clear.body": "Token yang tersimpan dihapus. Permintaan ke GitHub akan tanpa autentikasi: batas laju lebih rendah dan repo privat tidak dapat diakses.",

@@ -1,20 +1,21 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { useI18n } from "@/i18n";
-import { api } from "@/lib/api/client";
-import { useConnection } from "@/lib/events/provider";
+import { useConnection, useSummary, useTopic } from "@/lib/events/provider";
 import { LOGO_SRC } from "@/lib/paths";
-import { queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { NotificationsPanel } from "./NotificationsPanel";
 import { useSession } from "./SessionGate";
 
-/** Greeting with live counts, app search and the notification bell (plan §E). */
+/**
+ * Greeting with live counts, app search and the notification bell (plan §E). The counts come
+ * from topic `summary` (state in the subscribed ack, then pushed): no /stats request, no
+ * polling (002 FR-001, FR-002).
+ */
 export function Header() {
   const { t } = useI18n();
   const session = useSession();
@@ -22,11 +23,8 @@ export function Header() {
   const connection = useConnection();
   const [q, setQ] = useState("");
 
-  const stats = useQuery({
-    queryKey: queryKeys.stats,
-    queryFn: ({ signal }) => api.getStats({}, { signal }),
-    refetchInterval: 30_000,
-  });
+  useTopic("summary");
+  const summary = useSummary();
 
   function search(e: FormEvent) {
     e.preventDefault();
@@ -44,11 +42,7 @@ export function Header() {
           {t("shell.greeting", { name: session.username })}
         </p>
         <p className="text-sm text-muted-foreground" data-testid="subtitle">
-          {stats.data
-            ? t("shell.subtitle", { active: stats.data.apps.enabled, running: stats.data.active.running })
-            : stats.isError
-              ? t("shell.stats.error")
-              : t("common.loading")}
+          {summary ? t("shell.subtitle", { active: summary.appsEnabled, running: summary.running }) : t("shell.summary.pending")}
         </p>
       </div>
 
