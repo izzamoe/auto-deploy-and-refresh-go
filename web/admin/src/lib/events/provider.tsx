@@ -157,10 +157,14 @@ export function AdminEventProvider({ children, socketFactory = defaultFactory, a
         if (fallbackTimer) clearTimeout(fallbackTimer);
         fallbackTimer = undefined;
         store.setFresh(true);
-      } else if (store.isFresh() && !fallbackTimer) {
+        store.setFallback(false);
+      } else if (!fallbackTimer && !store.isFallback()) {
+        // Not live (yet, or any more): after FALLBACK_AFTER_MS the page stops trusting events.
         fallbackTimer = setTimeout(() => {
           fallbackTimer = undefined;
-          if (store.getConnection().status !== "live") store.setFresh(false);
+          if (store.getConnection().status === "live") return;
+          store.setFresh(false);
+          store.setFallback(true);
         }, FALLBACK_AFTER_MS);
       }
     };
@@ -396,6 +400,12 @@ export function useTopicConfirmed(topic: Topic): boolean {
 export function useEventsFresh(): boolean {
   const store = useEventStore();
   return useSyncExternalStore(store.subscribeFresh, store.isFresh, store.isFresh);
+}
+
+/** The socket has not been live for more than 5 s (from page load, or since it dropped): Q-4 fallback. */
+export function useEventsFallback(): boolean {
+  const store = useEventStore();
+  return useSyncExternalStore(store.subscribeFresh, store.isFallback, store.isFallback);
 }
 
 export function useConnection(): ConnectionState {

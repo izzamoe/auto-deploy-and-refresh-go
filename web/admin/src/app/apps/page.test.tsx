@@ -41,6 +41,10 @@ function mount() {
   );
 }
 const sendEvent = (frame: object) => act(() => FakeWebSocket.instances[0].emit(frame));
+/** State of topic service in the subscribed ack (events-ws.v3.md §3). */
+const SERVICE = (statuses: Record<string, string>) => ({ service: { statuses: Object.entries(statuses).map(([appId, state]) => ({ appId, state })), observedAt: "2026-11-25T00:00:00Z" } });
+const statusCalls = (api: ReturnType<typeof installFetch>) => api.calls.filter((c) => c.method === "GET" && c.path.endsWith("/service/status")).map((c) => c.path);
+const NEW_APP = { id: "a3", name: "fresh", serviceName: "fresh.service", githubRepo: "acme/fresh", binaryPath: "/opt/fresh/bin", artifactName: "fresh", enabled: true, createdAt: "2026-11-25T00:00:00Z", updatedAt: "2026-11-25T00:00:00Z" };
 
 beforeEach(() => {
   resetAuthStateForTests();
@@ -61,6 +65,8 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     expect(within(card).getByRole("heading", { level: 2, name: "web-api" })).toBeInTheDocument();
     expect(within(card).getByText("acme/web-api")).toBeInTheDocument();
     expect(within(card).getByText("Aktif", { selector: "span.rounded-pill" })).toBeInTheDocument();
+    // 002 T055: the service states come with the `service` ack (no request per card).
+    await act(async () => goLive(FakeWebSocket.instances[0], SERVICE({ a1: "active", a2: "inactive" })));
     await waitFor(() => expect(screen.getByTestId("service-status-a1")).toHaveTextContent("Aktif"));
     await waitFor(() => expect(screen.getByTestId("service-status-a2")).toHaveTextContent("Tidak aktif"));
     const second = screen.getByTestId("app-card-a2");
@@ -87,7 +93,7 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     mount();
     const card = await screen.findByTestId("app-card-a1");
     await waitFor(() => expect(within(card).getByTestId("progress-badge")).toHaveTextContent("Berjalan"));
-    await act(async () => goLive(FakeWebSocket.instances[0]));
+    await act(async () => goLive(FakeWebSocket.instances[0], SERVICE({ a1: "active", a2: "inactive" })));
     const before = api.calls.length;
 
     sendEvent({ protocol: "3", id: "evt-1", seq: 1, topic: "jobs", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j1", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1.2.0" } });
@@ -95,6 +101,76 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 400)); }); // past the invalidation debounce
     expect(api.calls.slice(before)).toEqual([]); // neither GET /apps nor any service status
     expect(within(screen.getByTestId("app-card-a2")).getByTestId("progress-badge")).toHaveTextContent("Berhasil"); // the other app is untouched
+  });
+
+  it("service state from topic service (SC-005): the ack state and later service.status events, with no request per card, also after 10 minutes", async () => {
+    const api = installFetch(routes());
+    mount();
+    await screen.findByTestId("app-card-a1");
+    const ws = FakeWebSocket.instances[0];
+    await act(async () => goLive(ws, SERVICE({ a1: "active", a2: "inactive" })));
+    expect(ws.subscribedTopics()).toEqual(expect.arrayContaining(["apps", "jobs", "service"]));
+    await waitFor(() => expect(screen.getByTestId("service-status-a1")).toHaveTextContent("Aktif"));
+    sendEvent({ protocol: "3", id: "evt-5", seq: 5, topic: "service", type: "service.status", ts: new Date().toISOString(), appId: "a1", payload: { state: "failed" } });
+    await waitFor(() => expect(screen.getByTestId("service-status-a1")).toHaveAttribute("data-state", "failed"));
+    expect(screen.getByTestId("service-status-a2")).toHaveAttribute("data-state", "inactive");
+    expect(statusCalls(api)).toEqual([]);
+  });
+
+  it("new app card gets one targeted status fetch, then events only", async () => {
+    const api = installFetch(routes({ "GET /admin/api/v1/apps/a3/service/status": () => ({ status: 200, body: { status: "activating" } }) }));
+    mount();
+    await screen.findByTestId("app-card-a1");
+    const ws = FakeWebSocket.instances[0];
+    // The watcher was already running when a3 was created: its first observation is not a
+    // change, so the ack (taken before) and the events say nothing about a3.
+    await act(async () => goLive(ws, SERVICE({ a1: "active", a2: "inactive" })));
+    await waitFor(() => expect(screen.getByTestId("service-status-a1")).toHaveTextContent("Aktif"));
+    expect(statusCalls(api)).toEqual([]);
+
+    sendEvent({ protocol: "3", id: "evt-6", seq: 6, topic: "apps", type: "app.upserted", ts: new Date().toISOString(), appId: "a3", payload: { app: NEW_APP } });
+    expect(await screen.findByTestId("app-card-a3")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("service-status-a3")).toHaveAttribute("data-state", "activating"));
+    expect(statusCalls(api)).toEqual(["/admin/api/v1/apps/a3/service/status"]); // ONE, only for the new card
+
+    // From now on only events: a re-render, an apps event, time passing: no more requests.
+    sendEvent({ protocol: "3", id: "evt-7", seq: 7, topic: "apps", type: "app.upserted", ts: new Date().toISOString(), appId: "a3", payload: { app: { ...NEW_APP, name: "fresh-2", updatedAt: "2026-11-25T00:00:01Z" } } });
+    sendEvent({ protocol: "3", id: "evt-8", seq: 8, topic: "service", type: "service.status", ts: new Date().toISOString(), appId: "a3", payload: { state: "active" } });
+    await waitFor(() => expect(screen.getByTestId("service-status-a3")).toHaveAttribute("data-state", "active"));
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
+    expect(statusCalls(api)).toEqual(["/admin/api/v1/apps/a3/service/status"]);
+    expect(api.count("GET", "/admin/api/v1/apps")).toBe(1); // the new card came from the event, not a refetch
+  });
+
+  it("an app of the first list without a state in the ack gets ONE targeted status fetch; the others none", async () => {
+    const api = installFetch(routes());
+    mount();
+    await screen.findByTestId("app-card-a1");
+    await act(async () => goLive(FakeWebSocket.instances[0], SERVICE({ a1: "active" })));
+    await waitFor(() => expect(screen.getByTestId("service-status-a2")).toHaveTextContent("Tidak aktif"));
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    expect(statusCalls(api)).toEqual(["/admin/api/v1/apps/a2/service/status"]);
+  });
+
+  it("before the socket is live no card requests its status (no burst on page load)", async () => {
+    const api = installFetch(routes());
+    mount();
+    await screen.findByTestId("app-card-a1");
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+    expect(statusCalls(api)).toEqual([]);
+    expect(screen.getByTestId("service-status-a1")).toHaveAttribute("data-state", "…");
+  });
+
+  it("toggle uses the response row: no GET /apps after the mutation", async () => {
+    const api = installFetch(routes({ "POST /admin/api/v1/apps/a1/toggle": () => ({ status: 200, body: { status: "updated", app: { ...APPS[0], enabled: false, updatedAt: "2026-11-25T01:00:00Z" } } }) }));
+    mount();
+    const card = await screen.findByTestId("app-card-a1");
+    await act(async () => goLive(FakeWebSocket.instances[0], SERVICE({ a1: "active", a2: "inactive" })));
+    fireEvent.click(within(card).getByRole("button", { name: "Nonaktifkan" }));
+    await waitFor(() => expect(within(screen.getByTestId("app-card-a1")).getByRole("button", { name: "Aktifkan" })).toBeInTheDocument());
+    const post = api.calls.find((c) => c.method === "POST" && c.path === "/admin/api/v1/apps/a1/toggle");
+    expect(post).toBeDefined();
+    expect(api.count("GET", "/admin/api/v1/apps")).toBe(1);
   });
 
   it("shows live progress from the socket and offers cancel while the job is active (B52, FR-073)", async () => {
@@ -152,6 +228,7 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     const api = installFetch(routes({ "POST /admin/api/v1/apps/a2/service/start": () => ({ status: 200, body: { status: "active", message: "ok" } }) }));
     mount();
     const card = await screen.findByTestId("app-card-a2");
+    await act(async () => goLive(FakeWebSocket.instances[0], SERVICE({ a1: "active", a2: "inactive" })));
     await waitFor(() => expect(screen.getByTestId("service-status-a2")).toHaveTextContent("Tidak aktif"));
     fireEvent.click(within(card).getByRole("button", { name: "Mulai" }));
     await waitFor(() => expect(api.count("POST", "/admin/api/v1/apps/a2/service/start")).toBe(1));

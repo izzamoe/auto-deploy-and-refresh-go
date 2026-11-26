@@ -82,6 +82,8 @@ export class EventStore {
   // ---- protocol 3: topic state (data-model.md §Stores topik) ------------------------------
   /** Events keep the cached data current: live, or not live for less than FALLBACK_AFTER_MS. */
   private fresh = false;
+  /** Not live for more than FALLBACK_AFTER_MS (since load or since it dropped). */
+  private fallback = false;
   /** Topics the server confirmed on the current socket. */
   private topics: ReadonlySet<Topic> = new Set();
   private summary: SummaryState | undefined;
@@ -100,6 +102,7 @@ export class EventStore {
   getProgressList = (): readonly JobProgress[] => this.progressList;
   getNotifications = (): readonly AppNotification[] => this.notifications;
   isFresh = (): boolean => this.fresh;
+  isFallback = (): boolean => this.fallback;
   getTopics = (): ReadonlySet<Topic> => this.topics;
   getSummary = (): SummaryState | undefined => this.summary;
   getService = (appId: string): ServiceState | undefined => this.service.get(appId);
@@ -165,6 +168,12 @@ export class EventStore {
   setFresh(fresh: boolean) {
     if (this.fresh === fresh) return;
     this.fresh = fresh;
+    this.freshListeners.forEach((l) => l());
+  }
+
+  setFallback(fallback: boolean) {
+    if (this.fallback === fallback) return;
+    this.fallback = fallback;
     this.freshListeners.forEach((l) => l());
   }
 

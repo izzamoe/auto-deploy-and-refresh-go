@@ -11,8 +11,8 @@ import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
 import { effectiveStatus } from "@/lib/events/store";
-import { useJobProgress } from "@/lib/events/provider";
-import { invalidateAfterJob, queryKeys } from "@/lib/query";
+import { useEventsFresh, useJobProgress } from "@/lib/events/provider";
+import { invalidateAfterJob, queryKeys, removeAppFromCache, upsertAppInCache } from "@/lib/query";
 import { CARD_TITLE } from "@/components/common/cardStyles";
 import { cn } from "@/lib/utils";
 import { ProgressBadge } from "./ProgressBadge";
@@ -34,6 +34,7 @@ export function AppCard({ app, onMessage }: Props) {
   const { t, formatRelative } = i18n;
   const client = useQueryClient();
   const live = useJobProgress(app.lastJobId);
+  const fresh = useEventsFresh();
   const status = effectiveStatus(app.lastJobStatus, app.lastDeployTime, live);
   const active = status !== undefined && ACTIVE.has(status);
 
@@ -46,9 +47,9 @@ export function AppCard({ app, onMessage }: Props) {
 
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.toggleApp(app.id, enabled),
-    onSuccess: (_r, enabled) => {
+    onSuccess: (res, enabled) => {
       onMessage("success", t(enabled ? "apps.enabled" : "apps.disabled"));
-      void client.invalidateQueries({ queryKey: queryKeys.apps });
+      upsertAppInCache(client, res.app); // the response is the new row: no refetch (002)
     },
     onError: fail,
   });
@@ -57,8 +58,8 @@ export function AppCard({ app, onMessage }: Props) {
     onSuccess: () => {
       onMessage("success", t("apps.delete.done"));
       setDeleteOpen(false);
-      void client.invalidateQueries({ queryKey: queryKeys.apps });
-      void client.invalidateQueries({ queryKey: queryKeys.stats });
+      removeAppFromCache(client, app.id);
+      void client.invalidateQueries({ queryKey: queryKeys.stats, refetchType: "none" });
     },
     onError: (err) => {
       setDeleteOpen(false);
@@ -70,7 +71,7 @@ export function AppCard({ app, onMessage }: Props) {
     onSuccess: () => {
       onMessage("success", t("apps.cancel.done"));
       setCancelOpen(false);
-      invalidateAfterJob(client, app.id);
+      if (!fresh) invalidateAfterJob(client, app.id); // live: cancel_requested / job_status update the card
     },
     onError: (err) => {
       setCancelOpen(false);

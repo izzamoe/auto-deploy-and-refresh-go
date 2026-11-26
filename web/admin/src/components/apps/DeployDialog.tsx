@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
+import { useEventsFresh } from "@/lib/events/provider";
 import { invalidateAfterJob, queryKeys } from "@/lib/query";
 
 interface Props {
@@ -26,6 +27,7 @@ export function DeployDialog({ appId, appName, open, onOpenChange, onQueued }: P
   const i18n = useI18n();
   const { t } = i18n;
   const client = useQueryClient();
+  const fresh = useEventsFresh();
   const [tag, setTag] = useState("");
 
   const releases = useQuery({
@@ -40,7 +42,7 @@ export function DeployDialog({ appId, appName, open, onOpenChange, onQueued }: P
   const deploy = useMutation({
     mutationFn: (value: string) => api.deployApp(appId, { tag: value }),
     onSuccess: (_res, value) => {
-      invalidateAfterJob(client, appId);
+      if (!fresh) invalidateAfterJob(client, appId); // live: job_status{pending} updates the card
       setTag("");
       onQueued(value);
       onOpenChange(false);
