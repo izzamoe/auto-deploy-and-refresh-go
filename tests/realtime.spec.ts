@@ -6,6 +6,7 @@
 //   focus     (T013, FR-014, SC-002): a focus event refetches nothing while live
 //   topics    (T018, FR-015, SC-011): /account/ (no `jobs` topic) receives no progress frame
 //   navigate  (T052, FR-014, RV-8): leave /apps/, change it elsewhere, come back -> shown with <= 1 REST
+//   bundle    (T073, FR-027, FR-028, SC-007): a cold load fetches no other route before intent
 import { expect, test } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { STATIC_ROUTES, STORAGE_STATE, adminURL, baseURL, browserHeaders, countApi, firstApp, ready, seedJob, setPrefs } from './helpers';
@@ -194,6 +195,73 @@ test.describe('topics', () => {
       expect(progressFrames, 'progress frames received by /account/ during a deploy').toBe(0);
     } finally {
       await context.close();
+    }
+  });
+});
+
+// T073 (FR-027, FR-028, SC-007, Q-8=A): a cold load fetches only its own route; another route is
+// prefetched only on intent (hover/focus/touch of its link), and only that route.
+/** The route an RSC payload belongs to: `/admin/apps/edit/__next._tree.txt` -> `/apps/edit/`. */
+function rscRoute(pathname: string): string {
+  const dir = pathname.replace(/^\/admin/, '').replace(/[^/]*$/, '');
+  return dir === '' ? '/' : dir;
+}
+
+async function coldLoad(browser: Browser, route: string) {
+  const context = await browser.newContext({ storageState: STORAGE_STATE, viewport: { width: 1280, height: 800 } });
+  await setPrefs(context, 'en', 'light');
+  const page = await context.newPage();
+  const rsc: string[] = [];
+  const afterLoad: Promise<{ path: string; bytes: number }>[] = [];
+  let loaded = false;
+  page.once('load', () => {
+    loaded = true;
+  });
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (u.pathname.startsWith('/admin/') && u.pathname.endsWith('.txt')) rsc.push(u.pathname);
+  });
+  page.on('response', (res) => {
+    const u = new URL(res.url());
+    if (!loaded || !u.pathname.endsWith('.js')) return;
+    afterLoad.push(res.body().then((b) => ({ path: u.pathname, bytes: b.length }), () => ({ path: u.pathname, bytes: 0 })));
+  });
+  await page.goto(adminURL(route), { waitUntil: 'load' });
+  await ready(page);
+  await page.waitForLoadState('networkidle');
+  await sleep(4_000);
+  return { context, page, rsc, afterLoad: () => Promise.all(afterLoad) };
+}
+
+test.describe('bundle', () => {
+  test("bundle: a cold load fetches no other route's chunks before intent", async ({ browser }) => {
+    for (const route of STATIC_ROUTES) {
+      const t = await coldLoad(browser, route);
+      try {
+        const foreign = t.rsc.filter((p) => rscRoute(p) !== route);
+        expect(foreign, `${route}: RSC payloads of other routes fetched before any intent`).toEqual([]);
+        const js = await t.afterLoad();
+        const bytes = js.reduce((n, f) => n + f.bytes, 0);
+        console.log(`[bundle] ${route}: ${t.rsc.length} RSC payload(s) of its own; ${js.length} JS file(s) after load, ${bytes} B raw ${js.map((f) => `${f.path}=${f.bytes}`).join(' ')}`);
+        if (route === '/') expect(bytes, `JS fetched after load on the dashboard (raw B): ${js.map((f) => `${f.path}=${f.bytes}`).join(', ')}`).toBeLessThanOrEqual(15_000); // SC-007d
+      } finally {
+        await t.context.close();
+      }
+    }
+  });
+
+  test('bundle: hovering a sidebar link prefetches that route only', async ({ browser }) => {
+    const t = await coldLoad(browser, '/');
+    try {
+      expect(t.rsc.filter((p) => rscRoute(p) !== '/'), 'nothing of another route before the hover').toEqual([]);
+      const before = t.rsc.length;
+      await t.page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'History' }).hover();
+      await expect.poll(() => t.rsc.length, { message: 'hovering the History link prefetches /history/', timeout: 5_000 }).toBeGreaterThan(before);
+      await sleep(2_000);
+      const fetched = t.rsc.slice(before);
+      expect(fetched.filter((p) => rscRoute(p) !== '/history/'), `RSC payloads after hovering History: ${fetched.join(', ')}`).toEqual([]);
+    } finally {
+      await t.context.close();
     }
   });
 });
