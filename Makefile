@@ -124,8 +124,9 @@ api-types-check: api-types-install
 
 # Browser tests (Playwright): the four gates run explicitly (RV3-13); the `visual` project
 # only when a local baseline exists (it is not committed, Q-25). `perf` (T104) is never run here.
+# 002 T087: `realtime` too, latency block included (local; the CI skips it, RV2-15).
 e2e:
-	npx playwright test --project=smoke --project=routing --project=session --project=a11y
+	npx playwright test --project=smoke --project=routing --project=session --project=a11y --project=realtime
 	@if ls tests/visual.spec.ts-snapshots/*.png >/dev/null 2>&1; then \
 		npx playwright test --project=visual; \
 	else \

@@ -112,8 +112,10 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Playwright smoke and accessibility
-        run: npx playwright test --project=smoke --project=a11y
+      # 002 (T087, RV-11/RV2-15): the realtime project runs here too, without its p95 latency
+      # block (measured locally: a shared 2-vCPU runner makes a timing threshold flaky).
+      - name: Playwright smoke, accessibility and realtime
+        run: npx playwright test --project=smoke --project=a11y --project=realtime --grep-invert "latency"
 
       - name: Upload Playwright results
         if: failure()
