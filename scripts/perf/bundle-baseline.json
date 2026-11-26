@@ -1,0 +1,106 @@
+{
+ "/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 240609,
+  "js_gzip_module": 201236,
+  "js_raw": 768225,
+  "scripts": 15
+ },
+ "/404.html": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 232790,
+  "js_gzip_module": 193417,
+  "js_raw": 742292,
+  "scripts": 14
+ },
+ "/404/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 232790,
+  "js_gzip_module": 193417,
+  "js_raw": 742292,
+  "scripts": 14
+ },
+ "/_not-found/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 232790,
+  "js_gzip_module": 193417,
+  "js_raw": 742292,
+  "scripts": 14
+ },
+ "/account/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 236840,
+  "js_gzip_module": 197467,
+  "js_raw": 756709,
+  "scripts": 15
+ },
+ "/apps/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 241624,
+  "js_gzip_module": 202251,
+  "js_raw": 769855,
+  "scripts": 16
+ },
+ "/apps/edit/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 244134,
+  "js_gzip_module": 204761,
+  "js_raw": 777469,
+  "scripts": 16
+ },
+ "/apps/new/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 243954,
+  "js_gzip_module": 204581,
+  "js_raw": 777161,
+  "scripts": 16
+ },
+ "/history/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 238727,
+  "js_gzip_module": 199354,
+  "js_raw": 760228,
+  "scripts": 15
+ },
+ "/login/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 234179,
+  "js_gzip_module": 194806,
+  "js_raw": 745484,
+  "scripts": 15
+ },
+ "/logs/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 235482,
+  "js_gzip_module": 196109,
+  "js_raw": 749002,
+  "scripts": 15
+ },
+ "/settings/github/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 235493,
+  "js_gzip_module": 196120,
+  "js_raw": 749637,
+  "scripts": 15
+ },
+ "/settings/telegram/": {
+  "css_gzip": 9402,
+  "inline_scripts": 8,
+  "js_gzip": 238059,
+  "js_gzip_module": 198686,
+  "js_raw": 757451,
+  "scripts": 15
+ }
+}
