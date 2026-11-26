@@ -261,14 +261,17 @@ func (f *JournalFollower) startLocked(after string) {
 	// in them gets logs.gap{cursor_behind}, not a replay with a hole.
 	f.recent = nil
 	events.M().LogsFollowActive.Set(1)
+	gen := f.startGen
 	go func() {
 		defer close(done)
-		f.run(ctx)
+		f.run(ctx, gen)
 	}()
 }
 
-// run keeps one follow process alive until ctx ends, restarting it with backoff.
-func (f *JournalFollower) run(ctx context.Context) {
+// run keeps one follow process alive until ctx ends, restarting it with backoff. gen is the
+// start generation it belongs to: once a stop or a new start moved it, this run no longer
+// writes the head or the recent lines (T089: its last flush can come after the next start).
+func (f *JournalFollower) run(ctx context.Context, gen uint64) {
 	backoff := f.opts.BackoffMin
 	reported := false
 	emptyExits := 0
@@ -287,7 +290,7 @@ func (f *JournalFollower) run(ctx context.Context) {
 			}
 			reported = true
 		} else {
-			readAny := f.consume(ctx, out)
+			readAny := f.consume(ctx, out, gen)
 			_ = out.Close()
 			werr := wait() // reap the process: never a zombie
 			if ctx.Err() != nil {
@@ -301,7 +304,7 @@ func (f *JournalFollower) run(ctx context.Context) {
 				// head cannot use that cursor (another journal, garbage): forget it, follow
 				// from the end, and tell the subscribers to reload the REST snapshot.
 				if head != "" {
-					f.dropHead(head)
+					f.dropHead(head, gen)
 				}
 				if emptyExits >= journalEmptyExitLimit && !reported && f.onError != nil {
 					if werr == nil {
@@ -328,20 +331,21 @@ func (f *JournalFollower) run(ctx context.Context) {
 
 // dropHead forgets a head cursor journalctl could not continue after (T089 CR-2) and
 // reports logs.gap{cursor_behind}: the subscribers reload the REST snapshot.
-func (f *JournalFollower) dropHead(head string) {
+func (f *JournalFollower) dropHead(head string, gen uint64) {
 	f.mu.Lock()
-	if f.head == head {
+	current := f.startGen == gen
+	if current && f.head == head {
 		f.head = ""
 	}
 	f.mu.Unlock()
-	if f.onGap != nil {
+	if current && f.onGap != nil {
 		f.onGap(0, JournalGapCursorBehind)
 	}
 }
 
 // consume reads JSON entries until EOF, flushing batches every Batch; it reports whether
 // any line was read.
-func (f *JournalFollower) consume(ctx context.Context, out io.Reader) bool {
+func (f *JournalFollower) consume(ctx context.Context, out io.Reader, gen uint64) bool {
 	lines := make(chan JournalLine, 64)
 	readDone := make(chan struct{})
 	go func() {
@@ -384,22 +388,27 @@ func (f *JournalFollower) consume(ctx context.Context, out io.Reader) bool {
 		if len(batch) == 0 {
 			if latest != "" {
 				f.mu.Lock()
-				f.head = latest
+				if f.startGen == gen {
+					f.head = latest
+				}
 				f.mu.Unlock()
 			}
 			return
 		}
 		cursor := batch[len(batch)-1].Cursor
 		f.mu.Lock()
-		if latest != "" {
-			f.head = latest
-		}
-		f.recent = append(f.recent, batch...)
-		if over := len(f.recent) - f.opts.Recent; over > 0 {
-			f.recent = append([]JournalLine(nil), f.recent[over:]...)
+		current := f.startGen == gen // a stopped process's last batch is not published
+		if current {
+			if latest != "" {
+				f.head = latest
+			}
+			f.recent = append(f.recent, batch...)
+			if over := len(f.recent) - f.opts.Recent; over > 0 {
+				f.recent = append([]JournalLine(nil), f.recent[over:]...)
+			}
 		}
 		f.mu.Unlock()
-		if f.onBatch != nil {
+		if current && f.onBatch != nil {
 			f.onBatch(batch, cursor)
 		}
 		batch, batchBytes = nil, 0
