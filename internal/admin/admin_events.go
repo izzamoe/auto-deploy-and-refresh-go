@@ -710,6 +710,9 @@ type v3Conn struct {
 	progressTimer *time.Timer
 	progressBuf   [][]byte
 	limits        *events.Limiter
+	// pingTimeout is adminEventPingTimeout read once when the socket opens, so a test that
+	// shortens the package variable and restores it never races with a running ping.
+	pingTimeout time.Duration
 	// held are the shared watchers this socket keeps running (stats clock zone, service
 	// watcher, journal follower), with the option they were acquired with; all are
 	// released when the socket ends, however it ends.
@@ -828,7 +831,7 @@ func (vc *v3Conn) writeFrame(typ string, payload any) bool {
 func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, tok *eventToken, principal events.Principal, sessionExpiresAt *time.Time) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal), limits: events.NewLimiter(h.now())}
+	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal), limits: events.NewLimiter(h.now()), pingTimeout: adminEventPingTimeout}
 	h.bus.Register(vc.client)
 	defer h.bus.Unregister(vc.client)
 	defer vc.unholdAll() // runs on every way out: close, error, 4401/4408/4429
@@ -943,7 +946,7 @@ func (vc *v3Conn) ping(failed chan<- struct{}) {
 	}
 	go func() {
 		defer vc.pinging.Store(false)
-		ctx, cancel := context.WithTimeout(vc.ctx, adminEventPingTimeout)
+		ctx, cancel := context.WithTimeout(vc.ctx, vc.pingTimeout)
 		defer cancel()
 		if err := vc.c.Ping(ctx); err != nil && vc.ctx.Err() == nil {
 			select {
