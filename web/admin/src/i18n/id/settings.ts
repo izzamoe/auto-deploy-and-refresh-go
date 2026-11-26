@@ -1,6 +1,6 @@
 // 'settings' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: namespaces.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idSettings = {
   "github.title": "GitHub",
@@ -49,3 +49,5 @@ export const idSettings = {
 } as const;
 
 registerMessages("id", idSettings);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("settings", () => import("../en/settings").then((m) => m.enSettings), idSettings);

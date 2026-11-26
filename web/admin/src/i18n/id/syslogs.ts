@@ -1,6 +1,6 @@
 // 'syslogs' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: namespaces.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idSyslogs = {
   "syslogs.title": "Log sistem",
@@ -20,3 +20,5 @@ export const idSyslogs = {
 } as const;
 
 registerMessages("id", idSyslogs);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("syslogs", () => import("../en/syslogs").then((m) => m.enSyslogs), idSyslogs);

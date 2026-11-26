@@ -1,6 +1,7 @@
 "use client";
 
 // The notifications dialog of the header bell, loaded on demand (T070, FR-027).
+import "@/i18n/id/notifications";
 import { X } from "lucide-react";
 import type { RefObject } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";

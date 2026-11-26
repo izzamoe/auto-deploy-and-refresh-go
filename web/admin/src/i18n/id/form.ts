@@ -1,6 +1,6 @@
 // 'form' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: i18n.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idForm = {
   "form.title.new": "Aplikasi baru",
@@ -80,3 +80,5 @@ export const idForm = {
 } as const;
 
 registerMessages("id", idForm);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("form", () => import("../en/form").then((m) => m.enForm), idForm);

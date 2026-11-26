@@ -1,6 +1,6 @@
 // 'unit' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: i18n.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idUnit = {
   "apps.unit": "Buat service unit",
@@ -12,3 +12,5 @@ export const idUnit = {
 } as const;
 
 registerMessages("id", idUnit);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("unit", () => import("../en/unit").then((m) => m.enUnit), idUnit);

@@ -20,6 +20,10 @@ import { idSettings } from "./id/settings";
 
 import { idAccount } from "./id/account";
 
+import { idLogin } from "./id/login";
+import { idNotifications } from "./id/notifications";
+import { idPassword } from "./id/password";
+
 export const id = {
   ...idCore,
   ...idDashboard,
@@ -30,6 +34,9 @@ export const id = {
   ...idSyslogs,
   ...idSettings,
   ...idAccount,
+  ...idLogin,
+  ...idNotifications,
+  ...idPassword,
 } as const;
 
 export type MessageKey = keyof typeof id;

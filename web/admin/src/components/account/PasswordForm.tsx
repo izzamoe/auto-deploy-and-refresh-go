@@ -1,6 +1,7 @@
 "use client";
 
 import "@/i18n/id/account";
+import "@/i18n/id/password";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import type { FormEvent } from "react";
