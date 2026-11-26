@@ -15,6 +15,8 @@ import { STATIC_ROUTES, adminURL, ready, setPrefs } from './helpers';
 
 const FCP_BUDGET_MS = 1500;
 const ROUNDS = 5;
+/** T076: allowed slowdown of a route's median FCP/LCP against the baseline. */
+const LCP_FCP_TOLERANCE_MS = 20;
 
 function median(values: number[]): number {
   const s = [...values].sort((a, b) => a - b);
@@ -118,4 +120,29 @@ test('FCP and LCP per route are recorded (median of 5 cold loads)', async ({ bro
   );
   console.log(`FCP/LCP per route (${ROUNDS} cold loads) -> ${file}\n${rows.join('\n')}`);
   expect(Object.keys(routes).length).toBe(STATIC_ROUTES.length);
+
+  // T076 (NFR-006): no regression against the baseline measured with this same test (T003
+  // `perf-before.json`): per route, median FCP and median LCP at most baseline + 20 ms, and every
+  // FCP under the 1500 ms budget. PERF_BASELINE=<file> picks another baseline, PERF_BASELINE=none
+  // skips the comparison (e.g. when recording a new baseline).
+  for (const [r, v] of Object.entries(routes)) {
+    expect(Math.max(...v.fcp), `${r}: slowest FCP (ms) of ${ROUNDS} cold loads`).toBeLessThan(FCP_BUDGET_MS);
+  }
+  const baselineFile = process.env.PERF_BASELINE ?? path.resolve(__dirname, '..', 'reference', 'executor', 'perf-before.json');
+  if (baselineFile === 'none' || !fs.existsSync(baselineFile)) {
+    console.log(`no FCP/LCP baseline (${baselineFile}): comparison skipped`);
+    return;
+  }
+  const baseline = JSON.parse(fs.readFileSync(baselineFile, 'utf8')) as { routes: Record<string, { fcpMedian: number; lcpMedian: number }> };
+  const regressions: string[] = [];
+  const table: string[] = [];
+  for (const [r, v] of Object.entries(routes)) {
+    const b = baseline.routes[r];
+    if (!b) continue;
+    table.push(`${r.padEnd(20)} FCP ${b.fcpMedian} -> ${v.fcpMedian} ms; LCP ${b.lcpMedian} -> ${v.lcpMedian} ms`);
+    if (v.fcpMedian > b.fcpMedian + LCP_FCP_TOLERANCE_MS) regressions.push(`${r}: FCP median ${v.fcpMedian} ms > baseline ${b.fcpMedian} + ${LCP_FCP_TOLERANCE_MS} ms`);
+    if (v.lcpMedian > b.lcpMedian + LCP_FCP_TOLERANCE_MS) regressions.push(`${r}: LCP median ${v.lcpMedian} ms > baseline ${b.lcpMedian} + ${LCP_FCP_TOLERANCE_MS} ms`);
+  }
+  console.log(`FCP/LCP median vs baseline ${baselineFile}:\n${table.join('\n')}`);
+  expect(regressions, 'routes slower than the baseline').toEqual([]);
 });
