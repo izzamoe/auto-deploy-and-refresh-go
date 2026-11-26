@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -51,7 +52,20 @@ type LegacyBootstrapConfig struct {
 	ArtifactName string
 }
 
+// LoadServiceConfig reads the service configuration; any invalid value is an error.
 func LoadServiceConfig() (*ServiceConfig, error) {
+	return loadServiceConfig(false)
+}
+
+// LoadServiceConfigForStart is LoadServiceConfig for the server start (T089 CR-9): an
+// invalid SERVICE_WATCH_INTERVAL is logged and replaced by the default (5 s) instead of
+// failing the start, so a typo in the env of a self-deploy cannot stop the new binary. A value
+// outside 2 s..60 s is still clamped; every other setting is as strict as LoadServiceConfig.
+func LoadServiceConfigForStart() (*ServiceConfig, error) {
+	return loadServiceConfig(true)
+}
+
+func loadServiceConfig(lenientWatch bool) (*ServiceConfig, error) {
 	queueMax, queueDBPath, err := parseQueueConfig(
 		envOrDefault("DEPLOY_QUEUE_MAX", "10"),
 		envOrDefault("DEPLOY_QUEUE_DB_PATH", "deploy-queue.db"),
@@ -72,7 +86,11 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 
 	watchInterval, err := ParseServiceWatchInterval(os.Getenv("SERVICE_WATCH_INTERVAL"))
 	if err != nil {
-		return nil, err
+		if !lenientWatch {
+			return nil, err
+		}
+		slog.Warn("config: invalid SERVICE_WATCH_INTERVAL ignored; using the default", "err", err, "default", DefaultServiceWatchInterval)
+		watchInterval = DefaultServiceWatchInterval
 	}
 
 	return &ServiceConfig{

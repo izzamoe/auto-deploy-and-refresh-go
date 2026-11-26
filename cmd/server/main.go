@@ -64,7 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 	hlog.SetLogger(hertzLogger)
-	serviceCfg, err := config.LoadServiceConfig()
+	serviceCfg, err := config.LoadServiceConfigForStart() // T089 CR-9: a bad SERVICE_WATCH_INTERVAL does not stop the start
 	if err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
