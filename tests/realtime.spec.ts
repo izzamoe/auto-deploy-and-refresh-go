@@ -78,7 +78,9 @@ test.describe('two tabs', () => {
       });
       expect(saved.status()).toBe(200);
       await expect(b.page.locator('#tg-chat'), 'tab B: Timed out (2 s) waiting for the Telegram chat saved in A').toHaveValue(chat, { timeout: 2_000 });
-      expect(b.api.list(), 'REST requests of tab B').toEqual([]);
+      // T011 amendment (Hermes, HANDOFF exception (c)): settings.changed carries only the section
+      // (events-ws.v3 §2.2), so B makes exactly one targeted request and nothing else (FR-004(c)).
+      expect(b.api.list(), 'REST requests of tab B').toEqual(['GET /admin/api/v1/telegram']);
     } finally {
       await a.context.close();
       await b.context.close();
@@ -96,7 +98,9 @@ test.describe('two tabs', () => {
       expect(created.status()).toBe(201);
       tokenId = (await created.json()).id;
       await expect(b.page.getByTestId('tokens-card'), 'tab B: Timed out (2 s) waiting for the token created in A').toContainText(name, { timeout: 2_000 });
-      expect(b.api.list(), 'REST requests of tab B').toEqual([]);
+      // T011 amendment (Hermes, HANDOFF exception (c)): account.changed carries only the section
+      // (events-ws.v3 §2.2), so B makes exactly one targeted request and nothing else (FR-004(c)).
+      expect(b.api.list(), 'REST requests of tab B').toEqual(['GET /admin/api/v1/tokens']);
     } finally {
       if (tokenId) await a.page.request.delete(`${baseURL()}/admin/api/v1/tokens/${tokenId}`, { headers: browserHeaders() });
       await a.context.close();
