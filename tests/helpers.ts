@@ -91,5 +91,23 @@ export async function signInThroughForm(page: Page): Promise<void> {
   await page.getByRole('button', { name: /^(Sign in|Masuk)$/ }).click();
 }
 
+/**
+ * Records every request of the page to the v1 API (002, T010): "<METHOD> <path+query>".
+ * `reset()` starts a new counting window; `list()` returns the requests since then.
+ */
+export function countApi(page: Page) {
+  let seen: string[] = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (u.pathname.startsWith('/admin/api/v1/')) seen.push(`${r.method()} ${u.pathname}${u.search}`);
+  });
+  return {
+    list: () => [...seen],
+    reset: () => {
+      seen = [];
+    },
+  };
+}
+
 /** The routes of the admin (static export, trailing slash). */
 export const STATIC_ROUTES = ['/', '/apps/', '/apps/new/', '/history/', '/settings/github/', '/settings/telegram/', '/logs/', '/account/'];
