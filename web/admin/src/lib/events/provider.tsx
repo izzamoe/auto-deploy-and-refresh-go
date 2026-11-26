@@ -10,7 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { PropsWithChildren } from "react";
-import { api, setAdminClientId, tabClientId } from "@/lib/api/client";
+import { api, inBackground, setAdminClientId, tabClientId } from "@/lib/api/client";
 import { createAppliers } from "./appliers";
 import { EventStore, FALLBACK_AFTER_MS } from "./store";
 import type { AppNotification, ConnectionState, ConnectionStatus } from "./store";
@@ -31,7 +31,12 @@ export interface SocketLike {
 
 export type SocketFactory = (url: string) => SocketLike;
 
-const defaultFactory: SocketFactory = (url) => new WebSocket(url) as unknown as SocketLike;
+/**
+ * Opens the real socket. The handshake carries `bg=1` (T089 CR-3, Q-2=A, FR-031): a reconnect
+ * of an idle tab must not extend its session (the server never renews on a WebSocket handshake).
+ */
+export const defaultSocketFactory: SocketFactory = (url) => new WebSocket(`${url}${url.includes("?") ? "&" : "?"}bg=1`) as unknown as SocketLike;
+const defaultFactory = defaultSocketFactory;
 
 export const BACKOFF_START_MS = 1_000;
 export const BACKOFF_MAX_MS = 30_000;
@@ -53,8 +58,16 @@ export function leaveTopic(client: QueryClient, topic: Topic) {
   for (const queryKey of TOPIC_QUERY_KEYS[topic] ?? []) void client.invalidateQueries({ queryKey, refetchType: "none" });
 }
 
-/** Resync (subscription.md §4 "Saat resync"): ONE targeted refetch of the active queries of the topic. */
+/**
+ * Resync (subscription.md §4 "Saat resync"): ONE targeted refetch of the active queries of the topic.
+ * The refetch is a background request (T089 CR-3): a reconnect or a server restart does not
+ * extend the session.
+ */
 export function resyncTopic(client: QueryClient, store: EventStore, topic: Topic, ctx: ResyncContext): Promise<unknown> | undefined {
+  return inBackground(() => resyncTopicNow(client, store, topic, ctx));
+}
+
+function resyncTopicNow(client: QueryClient, store: EventStore, topic: Topic, ctx: ResyncContext): Promise<unknown> | undefined {
   switch (topic) {
     case "summary":
     case "service":

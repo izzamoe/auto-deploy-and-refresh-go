@@ -10,7 +10,7 @@ import { renderNothing } from "@/components/common/lazy";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import type { MessageKey } from "@/i18n";
-import { api, describeError } from "@/lib/api/client";
+import { api, describeError, inBackground } from "@/lib/api/client";
 import { useEventStore, useEventsFallback, useServiceState, useTopicConfirmed } from "@/lib/events/provider";
 import { SERVICE_STATES } from "@/lib/events/types";
 import type { ServiceState } from "@/lib/events/types";
@@ -77,7 +77,7 @@ export function ServiceControls({ appId, appName, onMessage }: Props) {
   useEffect(() => {
     if (!mayAsk || asked.current) return;
     asked.current = true;
-    refresh();
+    inBackground(refresh); // not the user's request: it must not extend the session (T089 CR-3)
   }, [mayAsk]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const raw = live ?? "";

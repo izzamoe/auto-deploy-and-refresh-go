@@ -7,7 +7,7 @@ import { Pause, Play, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
-import { api, describeError } from "@/lib/api/client";
+import { api, describeError, inBackground } from "@/lib/api/client";
 import { useTopic, useTopicFrames } from "@/lib/events/provider";
 import type { LogLine, TopicFrame } from "@/lib/events/types";
 import { queryKeys } from "@/lib/query";
@@ -66,7 +66,9 @@ export function SystemLogsView() {
       else setLive(add);
     } else if (frame.kind === "logs.gap") {
       if (frame.reason === "rate") setGap((n) => n + frame.dropped);
-      else void logs.refetch(); // cursor_behind / resync: reload the snapshot, then continue after its cursor
+      // cursor_behind / resync: reload the snapshot, then continue after its cursor. An event asks
+      // for it, not the user: a background request (T089 CR-3).
+      else void inBackground(() => logs.refetch());
     } else if (frame.kind === "notice" && frame.code === "logs_unavailable") {
       setUnavailable(true);
     }

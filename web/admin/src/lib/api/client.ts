@@ -170,10 +170,30 @@ function isErrorBody(b: unknown): b is { code?: string; error?: string; errors?:
   return typeof b === "object" && b !== null && !Array.isArray(b);
 }
 
+// ---- background requests (T089 CR-3, Q-2=A, FR-031) ---------------------------------
+
+let backgroundDepth = 0;
+
+/**
+ * Runs `fn` as a request the panel makes on its own because of an event (a refetch after an
+ * invalidation event, a resync, a targeted status request): every GET started synchronously
+ * inside carries `X-Admin-Background: 1`, so an idle tab does not extend its session. User
+ * actions and page loads are never wrapped. The header grants nothing.
+ */
+export function inBackground<T>(fn: () => T): T {
+  backgroundDepth++;
+  try {
+    return fn();
+  } finally {
+    backgroundDepth--;
+  }
+}
+
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
   const mutating = method !== "GET";
   const headers: Record<string, string> = { Accept: "application/json" };
+  if (!mutating && backgroundDepth > 0) headers["X-Admin-Background"] = "1";
   let body: string | undefined;
   if (mutating) {
     headers["X-Admin-Request"] = "true";

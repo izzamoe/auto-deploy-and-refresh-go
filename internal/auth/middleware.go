@@ -89,7 +89,11 @@ func (m *middleware) handle(ctx context.Context, c *app.RequestContext) {
 
 	var cookieErr error
 	if raw := c.Cookie(m.cfg.Sessions.CookieName()); len(raw) > 0 {
-		v, err := m.cfg.Sessions.Verify(string(raw))
+		verify := m.cfg.Sessions.Verify
+		if backgroundRequest(c) {
+			verify = m.cfg.Sessions.VerifyNoRenew // T089 CR-3: an idle tab does not extend its session
+		}
+		v, err := verify(string(raw))
 		if err == nil {
 			m.serveSession(ctx, c, v, path)
 			return
@@ -287,6 +291,21 @@ func PrincipalFrom(c *app.RequestContext) (Principal, bool) {
 }
 
 func hasHeader(c *app.RequestContext, name string) bool { return len(c.GetHeader(name)) > 0 }
+
+// BackgroundHeader marks a request the panel makes on its own because of an event (a refetch
+// after stats.changed, a resync after a reconnect), not because of the user (T089 CR-3).
+const BackgroundHeader = "X-Admin-Background"
+
+// backgroundRequest reports whether the request must not renew the session (Q-2=A, FR-031):
+// it carries X-Admin-Background: 1, the query bg=1 (the event socket handshake, where a
+// browser cannot set headers), or it is a WebSocket handshake at all. The mark only turns
+// the renewal off; it grants nothing (the session is verified the same way).
+func backgroundRequest(c *app.RequestContext) bool {
+	if string(c.GetHeader(BackgroundHeader)) == "1" || string(c.Query("bg")) == "1" {
+		return true
+	}
+	return strings.EqualFold(string(c.GetHeader("Upgrade")), "websocket")
+}
 
 // basicPassword extracts the password of an `Authorization: Basic` value; the
 // username is ignored.

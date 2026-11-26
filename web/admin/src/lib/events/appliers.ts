@@ -8,6 +8,7 @@
 //     already updated from its own response: its invalidation is skipped (0 requests).
 // Deltas are idempotent (`updatedAt`), so a replayed or own delta is harmless.
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import { inBackground } from "@/lib/api/client";
 import { queryKeys, removeAppFromCache, setAppJobInCache, upsertAppInCache } from "@/lib/query";
 import { isTerminalStatus } from "./types";
 import type { TopicFrame } from "./types";
@@ -32,7 +33,8 @@ export function createAppliers(client: QueryClient): Appliers {
       id,
       setTimeout(() => {
         timers.delete(id);
-        void client.invalidateQueries({ queryKey, refetchType: "active" });
+        // An event, not the user, asks for this refetch: it must not extend the session (CR-3).
+        void inBackground(() => client.invalidateQueries({ queryKey, refetchType: "active" }));
       }, delay),
     );
   };
