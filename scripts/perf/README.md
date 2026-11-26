@@ -15,7 +15,7 @@ pohon kerja yang di-commit.
 
 | Skrip | Pakai | Keluaran |
 |---|---|---|
-| `poll-harness.mjs` | `node scripts/perf/poll-harness.mjs <binary> <N app> <detik> <out.json>` | request `/admin/api/v1/*` per rute: `initial`, `idle` (+`idlePerMin`), `focus`, `reconnect`, rincian per endpoint, frame WS saat diam; `base` = `git rev-parse --short HEAD` |
+| `poll-harness.mjs` | `node scripts/perf/poll-harness.mjs <binary> <N app> <detik> <out.json> [--restart]` | request `/admin/api/v1/*` per rute: `initial`, `idle` (+`idlePerMin`), `focus`, `reconnect`, rincian per endpoint, frame WS saat diam; `base` = `git rev-parse --short HEAD` |
 | `assert-poll.py` | `python3 -I scripts/perf/assert-poll.py <poll.json> --expect baseline\|target` | exit 1 + rute yang melanggar |
 | `transfer-harness.mjs` | `node scripts/perf/transfer-harness.mjs <binary> <out.json>` | byte per jenis (js/rsc/css/font/api) per fase (`load`, `afterload`, navigasi), FCP/LCP/TBT kasar |
 | `ws-load.mjs` | `[PPROF_ADDR=127.0.0.1:6061] node scripts/perf/ws-load.mjs <binary> <out.json> [2\|3]` | RSS, thread OS, CPU ms/30 s, frame/30 s, goroutine (bila `PPROF_ADDR`) untuk 0/1/10/50 koneksi |
@@ -29,9 +29,14 @@ pohon kerja yang di-commit.
   `idle`/`idlePerMin` = request selama jendela diam (semua tab dibekukan serentak);
   `focus` = request dalam 3 s setelah satu `visibilitychange` (setelah 6 s > `staleTime`);
   `reconnect` = request dalam 5 s setelah `setOffline(true)` 5 s -> `false`.
+  `restart` (hanya dengan `--restart`, T080/RV-20) = request semua tab sejak proses lama
+  dimatikan (SIGTERM) sampai 20 s setelah proses baru (DB dan port sama) menjawab.
 - `assert-poll --expect baseline`: idle/menit 2,0 (dasbor 4,0) ±0,5 dan `/apps/` initial = N+3
   (`research.md` §2). `--expect target`: idle, focus, reconnect = 0 dan `/apps/` initial ≤ 3
   (SC-001, SC-002, SC-003, SC-005).
+  Bila hasil memuat `restart`: request pemulihan per rute ≤ query aktif halaman tanpa
+  `session` dan tanpa status service per app (= endpoint berbeda pada muat awal rute itu
+  dikurangi keduanya), `/apps/` ≤ 2 (SC-003, server restart).
 - `measure-bundle`: `js_gz` = gzip semua `<script src>` (SC-007b); `gz_mod` = tanpa skrip
   `noModule` yang tidak diunduh peramban modern (SC-007a, "efektif").
 - `ws-load`: `rssKiB`/`threads` dari `/proc/<pid>/status`, CPU dari `/proc/<pid>/stat`

@@ -1,5 +1,5 @@
 // 002 harness: REST requests per minute per idle tab, per route, with N apps.
-// Usage: node scripts/perf/poll-harness.mjs <binary> <N apps> <window seconds> <out.json>
+// Usage: node scripts/perf/poll-harness.mjs <binary> <N apps> <window seconds> <out.json> [--restart]
 // Starts the binary on a free loopback port with a DB under $PERF_RUN_DIR/run-<N>-<ts>/
 // (default PERF_RUN_DIR = reference/executor, ignored by git: the run dir holds the
 // generated initial-admin-password), signs in (initial password -> new password), creates N
@@ -9,6 +9,9 @@
 //   focus:     dispatch one visibilitychange (visible) after staleTime and count requests in 3 s
 //   reconnect: context offline 5 s -> online, count requests in 5 s (WS reconnect + onlineManager)
 // Also counts WS frames received during the idle window.
+// --restart (T080, RV-20): after the per-route phases, stop the server (SIGTERM), start it
+// again on the same DB and port, and count the recovery requests of every tab during
+// RESTART_WINDOW_S seconds after the new process answers (SC-003 "server restart").
 // Moved from reference/spike/poll_harness.mjs (T002); only the run dir (PERF_RUN_DIR) and the
 // `base` field (git rev-parse --short HEAD) changed (RV-19).
 import { execFileSync, spawn } from "node:child_process";
@@ -19,7 +22,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
-const [binArg, nArg, winArg, outPath] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const RESTART = argv.includes("--restart");
+const [binArg, nArg, winArg, outPath] = argv.filter((a) => a !== "--restart");
+const RESTART_WINDOW_S = 20; // WS backoff 1 s, 2 s, 4 s ... (BACKOFF_START_MS): every tab is back well inside 20 s
 const bin = path.resolve(binArg); // the server runs with cwd = runDir: a relative path would not resolve
 const N = Number(nArg);
 const WINDOW_S = Number(winArg);
@@ -50,12 +56,16 @@ const base = `http://127.0.0.1:${port}`;
 const env = { ...process.env, LISTEN_ADDR: `127.0.0.1:${port}`, DEPLOY_QUEUE_DB_PATH: path.join(runDir, "db.sqlite"), COOKIE_SECURE: "false", WEBHOOK_SECRET: "bootstrap-secret-bootstrap-secret-xx", DEPLOY_BINARY_PATH: path.join(runDir, "boot-bin"), DEPLOY_SERVICE_NAME: "pw-boot.service", GITHUB_REPO: "example/boot", ARTIFACT_NAME: "boot" };
 delete env.ADMIN_USERNAME; delete env.ADMIN_PASSWORD;
 const log = fs.createWriteStream(path.join(runDir, "server.log"));
-const srv = spawn(bin, [], { env, cwd: runDir, stdio: ["ignore", "pipe", "pipe"] });
-srv.stdout.pipe(log); srv.stderr.pipe(log);
+const startServer = () => { const p = spawn(bin, [], { env, cwd: runDir, stdio: ["ignore", "pipe", "pipe"] }); p.stdout.pipe(log, { end: false }); p.stderr.pipe(log, { end: false }); return p; };
+let srv = startServer();
 const stop = () => { try { srv.kill("SIGTERM"); } catch {} };
 process.on("exit", stop);
+async function waitHealthy() {
+  for (let i = 0; i < 120; i++) { try { const r = await req("GET", `${base}/admin/api/v1/session`); if (r.status === 401) return true; } catch {} await sleep(250); }
+  return false;
+}
 
-for (let i = 0; i < 120; i++) { try { const r = await req("GET", `${base}/admin/api/v1/session`); if (r.status === 401) break; } catch {} await sleep(250); }
+await waitHealthy();
 const bh = { "X-Admin-Request": "true", "Sec-Fetch-Site": "same-origin", Origin: base };
 const initial = fs.readFileSync(path.join(runDir, "initial-admin-password"), "utf8").trim();
 const login = await req("POST", `${base}/admin/api/v1/session`, bh, { username: "admin", password: initial });
@@ -78,7 +88,7 @@ async function openRoute(route) {
   await ctx.addCookies([{ name: ck.name, value: ck.value, domain: "127.0.0.1", path: "/", httpOnly: true, secure: false, sameSite: "Strict" }]);
   await ctx.addInitScript(() => { localStorage.setItem("ad.locale", "id"); localStorage.setItem("theme", "light"); });
   const page = await ctx.newPage();
-  const st = { route, initial: [], idle: [], between: [], focus: [], reconnect: [], wsFrames: 0, wsOpened: 0, phase: "initial" };
+  const st = { route, initial: [], idle: [], between: [], focus: [], reconnect: [], restart: [], wsFrames: 0, wsOpened: 0, phase: "initial" };
   page.on("request", (r) => { const u = new URL(r.url()); if (u.pathname.startsWith("/admin/api/v1/")) st[st.phase]?.push(`${r.method()} ${u.pathname}${u.search}`); });
   page.on("websocket", (ws) => { st.wsOpened++; ws.on("framereceived", () => { if (st.phase === "idle") st.wsFrames++; }); });
   await page.goto(`${base}/admin${route}`, { waitUntil: "load" });
@@ -108,15 +118,30 @@ for (const o of opened) {
   await sleep(5000);
   o.st.phase = "done";
 }
+let restartInfo = null;
+if (RESTART) {
+  for (const o of opened) o.st.phase = "restart"; // every tab counts from the moment the old process goes away
+  const killedAt = Date.now();
+  const exited = new Promise((res) => srv.once("exit", res));
+  srv.kill("SIGTERM");
+  await exited;
+  const downMs = Date.now() - killedAt;
+  srv = startServer();
+  if (!(await waitHealthy())) throw new Error("server did not come back after the restart");
+  const upAt = Date.now();
+  await sleep(RESTART_WINDOW_S * 1000);
+  for (const o of opened) o.st.phase = "done";
+  restartInfo = { downMs, windowSeconds: (Date.now() - upAt) / 1000 };
+}
 for (const o of opened) {
   const s = o.st;
   const count = (arr) => arr.reduce((m, k) => { const key = k.replace(/\/apps\/[^/]+\/service\/status/, "/apps/:id/service/status"); m[key] = (m[key] || 0) + 1; return m; }, {});
-  results[s.route] = { initial: s.initial.length, idle: s.idle.length, idlePerMin: +(s.idle.length * 60 / idleSec).toFixed(2), idleBreakdown: count(s.idle), focus: s.focus.length, focusBreakdown: count(s.focus), reconnect: s.reconnect.length, reconnectBreakdown: count(s.reconnect), wsOpened: s.wsOpened, wsFramesIdle: s.wsFrames, initialBreakdown: count(s.initial) };
+  results[s.route] = { initial: s.initial.length, idle: s.idle.length, idlePerMin: +(s.idle.length * 60 / idleSec).toFixed(2), idleBreakdown: count(s.idle), focus: s.focus.length, focusBreakdown: count(s.focus), reconnect: s.reconnect.length, reconnectBreakdown: count(s.reconnect), ...(RESTART ? { restart: s.restart.length, restartBreakdown: count(s.restart) } : {}), wsOpened: s.wsOpened, wsFramesIdle: s.wsFrames, initialBreakdown: count(s.initial) };
   await o.ctx.close();
 }
 await browser.close();
 stop();
-const out = { n: appCount, windowSeconds: idleSec, measuredAt: new Date().toISOString(), base: baseRev, results };
+const out = { n: appCount, windowSeconds: idleSec, ...(restartInfo ? { restart: restartInfo } : {}), measuredAt: new Date().toISOString(), base: baseRev, results };
 fs.writeFileSync(outPath, JSON.stringify(out, null, 1));
 console.log(JSON.stringify(out, null, 1));
 process.exit(0);

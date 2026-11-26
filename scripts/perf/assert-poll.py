@@ -8,6 +8,10 @@ baseline (research.md section 2, STOP-1):
   "/apps/" initial requests = N + 3 (N = apps in the run).
 target (SC-001, SC-002, SC-003, SC-005):
   idle = 0, focus = 0, reconnect = 0 on every route; "/apps/" initial <= 3.
+  restart (only when the run used --restart, RV-20; SC-003 "server restart"): recovery
+  requests per route <= the page's active queries without the session and without the
+  per-app service status (= distinct endpoints of the route's initial load minus those two),
+  and "/apps/" <= 2.
 
 Exit 0 when every route matches; exit 1 and print every violating route otherwise.
 """
@@ -19,6 +23,17 @@ TOL = 0.5
 BASELINE_IDLE = {"/": 4.0}
 DEFAULT_IDLE = 2.0
 TARGET_APPS_INITIAL = 3
+TARGET_APPS_RESTART = 2
+EXCLUDED_FROM_ACTIVE = ("GET /admin/api/v1/session", "GET /admin/api/v1/apps/:id/service/status")
+
+
+def restart_limit(route, r):
+    """Active queries of the page without session and per-app service status (SC-003)."""
+    active = [k for k in r.get("initialBreakdown", {}) if not k.startswith(EXCLUDED_FROM_ACTIVE)]
+    limit = len(active)
+    if route == "/apps/":
+        limit = min(limit, TARGET_APPS_RESTART)
+    return limit
 
 
 def check_baseline(data):
@@ -43,6 +58,10 @@ def check_target(data):
         for key in ("idle", "focus", "reconnect"):
             if r[key] != 0:
                 problems.append(f"{route}: {key} {r[key]} != 0 ({r.get(key + 'Breakdown')})")
+        if "restart" in r:
+            limit = restart_limit(route, r)
+            if r["restart"] > limit:
+                problems.append(f"{route}: restart {r['restart']} > {limit} ({r.get('restartBreakdown')})")
     apps = data["results"].get("/apps/")
     if apps is None:
         problems.append("/apps/: missing from the result")
@@ -61,7 +80,8 @@ def main():
     problems = check_baseline(data) if args.expect == "baseline" else check_target(data)
     print(f"{args.poll_json}: N={data['n']} window={data['windowSeconds']} s base={data.get('base')} expect={args.expect}")
     for route, r in sorted(data["results"].items()):
-        print(f"  {route:22} initial={r['initial']:>3} idlePerMin={r['idlePerMin']:>5} focus={r['focus']:>3} reconnect={r['reconnect']:>3}")
+        extra = f" restart={r['restart']:>3} (<= {restart_limit(route, r)})" if "restart" in r else ""
+        print(f"  {route:22} initial={r['initial']:>3} idlePerMin={r['idlePerMin']:>5} focus={r['focus']:>3} reconnect={r['reconnect']:>3}{extra}")
     if problems:
         print(f"FAIL: {len(problems)} violation(s)")
         for p in problems:
