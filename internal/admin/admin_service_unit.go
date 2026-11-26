@@ -2,8 +2,10 @@ package admin
 
 import (
 	"context"
+	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/deploy"
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -19,6 +21,7 @@ type ServiceUnitAdminHandler struct {
 	store *store.AppStore
 	env   *store.AppEnvStore
 	args  *store.AppArgsStore
+	eventPublisher
 }
 
 func NewServiceUnitAdminHandler(store *store.AppStore, env *store.AppEnvStore, args *store.AppArgsStore) *ServiceUnitAdminHandler {
@@ -93,6 +96,9 @@ func (h *ServiceUnitAdminHandler) ApplyServiceUnitHertz(ctx context.Context, c *
 		return
 	}
 
+	// The unit content is never sent (FR-005); the service state may have changed too.
+	h.publish(c, events.AppConfigChanged(appRecord.ID, events.PartUnit, time.Now()))
+	h.refreshService(appRecord.ID)
 	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "ok", Message: "Service unit created and enabled"})
 }
 

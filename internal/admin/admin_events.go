@@ -923,6 +923,17 @@ func (h *AdminEventHub) PublishTopic(topic, eventType, appID, jobID, userID stri
 	_, _ = h.bus.Publish(events.Event{Topic: t, Type: eventType, AppID: appID, JobID: jobID, UserID: userID, Payload: payload})
 }
 
+// PublishEvent implements events.Publisher: a committed mutation (plan.md section 4)
+// becomes one protocol-3 state event. Protocol-2 sockets do not receive these (their
+// contract has no such types).
+func (h *AdminEventHub) PublishEvent(e events.Event) {
+	_, _ = h.bus.Publish(e)
+}
+
+// RefreshService implements events.Publisher: a systemd action may have changed the state
+// of the app's unit; the service watcher runs a round at once (T045).
+func (h *AdminEventHub) RefreshService(appID string) {}
+
 func (vc *v3Conn) writeError(e events.OpError) bool {
 	events.M().OpsRejected.Add(string(e.Code), 1)
 	return vc.writeFrame(adminEventTypeError, adminEventErrorPayload{Ref: e.Ref, Code: e.Code, Topic: e.Topic})

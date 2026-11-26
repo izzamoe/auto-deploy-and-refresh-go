@@ -3,7 +3,9 @@ package admin
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -18,6 +20,7 @@ import (
 type AppArgsHandler struct {
 	apps *store.AppStore
 	args *store.AppArgsStore
+	eventPublisher
 }
 
 func NewAppArgsHandler(apps *store.AppStore, args *store.AppArgsStore) *AppArgsHandler {
@@ -93,6 +96,8 @@ func (h *AppArgsHandler) SaveAppArgsHertz(ctx context.Context, c *app.RequestCon
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to save command-line arguments")
 		return
 	}
+	// Other tabs learn only THAT the args changed, never their content (FR-005).
+	h.publish(c, events.AppConfigChanged(id, events.PartArgs, time.Now()))
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "args": args})
 }
 

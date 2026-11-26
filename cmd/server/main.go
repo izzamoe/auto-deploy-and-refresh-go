@@ -258,6 +258,12 @@ func main() {
 	appArgsHandler := admin.NewAppArgsHandler(appStore, appArgsStore)
 	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore, appEnvStore, appArgsStore)
 	systemLogsHandler := admin.NewSystemLogsHandler(serviceCfg.SelfServiceName)
+	// Protocol-3 mutation events (specs/002 plan.md section 4): every handler publishes
+	// after its change is committed.
+	adminAPIHandler.SetEventPublisher(adminEventHub)
+	appEnvHandler.SetEventPublisher(adminEventHub)
+	appArgsHandler.SetEventPublisher(adminEventHub)
+	serviceUnitHandler.SetEventPublisher(adminEventHub)
 	h := server.New(
 		server.WithHostPorts(serviceCfg.ListenAddr),
 		server.WithReadTimeout(45*time.Second),

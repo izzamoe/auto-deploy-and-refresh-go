@@ -12,6 +12,7 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
 	"github.com/izzamoe/auto-deploy/internal/deploy"
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/httpx"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 	"github.com/izzamoe/auto-deploy/internal/store"
@@ -28,6 +29,36 @@ type AdminAPIHandler struct {
 	cancel  *cancel.CancelService
 	// now is the clock of /stats; tests freeze it.
 	now func() time.Time
+	eventPublisher
+}
+
+// eventPublisher gives a handler the protocol-3 publisher (plan.md section 4). Handlers
+// publish only after their change is committed; without a publisher nothing is sent.
+type eventPublisher struct {
+	events events.Publisher
+}
+
+// SetEventPublisher attaches the publisher of mutation events (the admin event hub).
+func (p *eventPublisher) SetEventPublisher(pub events.Publisher) { p.events = pub }
+
+// publish sends the events with the origin of the request: the clientId the tab put in
+// X-Admin-Client, when valid (contracts/admin-api.v1-revisi.md).
+func (p *eventPublisher) publish(c *app.RequestContext, evs ...events.Event) {
+	if p.events == nil {
+		return
+	}
+	origin := events.ValidOrigin(string(c.GetHeader(events.OriginHeader)))
+	for _, e := range evs {
+		e.Origin = origin
+		p.events.PublishEvent(e)
+	}
+}
+
+// refreshService asks for an immediate systemd state round for the app (service topic).
+func (p *eventPublisher) refreshService(appID string) {
+	if p.events != nil {
+		p.events.RefreshService(appID)
+	}
 }
 
 func NewAdminAPIHandler(store *store.AppStore, queue *store.DeployQueue, tracker *progress.ProgressTracker, cancel *cancel.CancelService) *AdminAPIHandler {
@@ -487,6 +518,7 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	auth.AuditRequest(c, auth.EventAppCreated, "", "appId", app.ID, "name", app.Name, "serviceName", app.ServiceName)
+	h.publish(c, events.AppUpserted(app.ID, appResponse(*app)), events.StatsChanged(events.ReasonApp))
 	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app), "webhookSecret": secret})
 }
 
@@ -519,6 +551,10 @@ func (h *AdminAPIHandler) RotateWebhookSecretHertz(ctx context.Context, c *app.R
 		return
 	}
 	auth.AuditRequest(c, auth.EventAppSecretRotated, "", "appId", id)
+	// Only updatedAt changes for other tabs: the new secret is in this response alone.
+	if rotated, err := h.store.Get(id); err == nil && rotated != nil {
+		h.publish(c, events.AppUpserted(id, appResponse(*rotated)))
+	}
 	c.JSON(consts.StatusOK, map[string]any{"secret": secret})
 }
 
@@ -584,6 +620,7 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 	auth.AuditRequest(c, auth.EventAppUpdated, "", "appId", id)
+	h.publish(c, events.AppUpserted(id, appResponse(*updated)))
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
 }
 
@@ -636,6 +673,7 @@ func (h *AdminAPIHandler) DeleteAppHertz(ctx context.Context, c *app.RequestCont
 		}
 	}
 	auth.AuditRequest(c, auth.EventAppDeleted, "", "appId", id)
+	h.publish(c, events.AppDeleted(id), events.StatsChanged(events.ReasonApp))
 	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "deleted", Message: message})
 }
 
@@ -670,6 +708,7 @@ func (h *AdminAPIHandler) ToggleAppHertz(ctx context.Context, c *app.RequestCont
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load updated app")
 		return
 	}
+	h.publish(c, events.AppUpserted(id, appResponse(*updated)))
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
 }
 

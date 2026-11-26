@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"time"
 
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -17,6 +19,7 @@ import (
 type AppEnvHandler struct {
 	apps *store.AppStore
 	env  *store.AppEnvStore
+	eventPublisher
 }
 
 func NewAppEnvHandler(apps *store.AppStore, env *store.AppEnvStore) *AppEnvHandler {
@@ -99,6 +102,8 @@ func (h *AppEnvHandler) SaveAppEnvHertz(ctx context.Context, c *app.RequestConte
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to save environment variables")
 		return
 	}
+	// Other tabs learn only THAT the env changed, never names or values (FR-005).
+	h.publish(c, events.AppConfigChanged(id, events.PartEnv, time.Now()))
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "envVars": envVarsToJSON(vars)})
 }
 
