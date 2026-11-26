@@ -212,7 +212,18 @@ test.describe('live events', () => {
     await expect.poll(() => sendToPage !== undefined).toBe(true);
     const badge = card.getByTestId('progress-badge');
     await expect(badge).toContainText(/Failed|Succeeded/, { timeout: 45_000 }); // the seeded job settled
-    const original = await badge.textContent();
+    // The terminal word lands a few ms before the rest of the badge (e.g. "Detail: failed"):
+    // read the baseline only once two reads 300 ms apart are identical.
+    let original = await badge.textContent();
+    await expect
+      .poll(async () => {
+        const first = await badge.textContent();
+        await page.waitForTimeout(300);
+        const second = await badge.textContent();
+        original = second;
+        return first === second;
+      })
+      .toBe(true);
 
     sendToPage!('not-json-at-all');
     sendToPage!('{"protocol":"3"');
