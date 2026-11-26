@@ -5,14 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useRef } from "react";
 import { AppCard } from "@/components/apps/AppCard";
 import { Notice, useNotice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
-import { useTopic } from "@/lib/events/provider";
+import { announce } from "@/components/common/LiveAnnouncer";
+import { useEventStore, useTopic, useTopicFrames } from "@/lib/events/provider";
 import { liveQueryOptions, queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +31,15 @@ function AppsRoute() {
   useTopic("service");
   const apps = useQuery({ queryKey: queryKeys.apps, queryFn: ({ signal }) => api.listApps({ signal }), ...liveQueryOptions(appsFresh) });
   const all = apps.data?.apps ?? [];
+  // FR-022 (T061): an app added in another session is announced (its card appears by itself).
+  const store = useEventStore();
+  const known = useRef(all);
+  known.current = all;
+  useTopicFrames((f) => {
+    if (f.kind === "app.upserted" && !store.isOwnOrigin(f.origin) && apps.isSuccess && !known.current.some((a) => a.id === f.appId)) {
+      announce(t("live.app.added", { name: f.app.name }));
+    }
+  });
   const needle = q.toLowerCase();
   const shown = needle ? all.filter((a) => [a.name, a.serviceName, a.githubRepo].some((v) => v.toLowerCase().includes(needle))) : all;
   const onMessage = (kind: "success" | "error", text: string) => (kind === "success" ? success(text) : error(text));

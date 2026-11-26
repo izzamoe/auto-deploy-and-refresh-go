@@ -2,10 +2,11 @@
 
 import { Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useI18n } from "@/i18n";
-import { useConnection, useSummary, useTopic } from "@/lib/events/provider";
+import { LiveAnnouncer, announce } from "@/components/common/LiveAnnouncer";
+import { useConnection, useEventsFallback, useSummary, useTopic } from "@/lib/events/provider";
 import { indicatorOf } from "@/lib/events/store";
 import type { ConnectionIndicator } from "@/lib/events/store";
 import { LOGO_SRC } from "@/lib/paths";
@@ -52,6 +53,15 @@ export function Header() {
   const indicator = indicatorOf(connection.status);
   const label = t(CONNECTION_LABEL[indicator]);
 
+  // FR-022: say it (politely) when live updates stop for a while, and when they are back.
+  const fallback = useEventsFallback();
+  const wasFallback = useRef(false);
+  useEffect(() => {
+    if (fallback && !wasFallback.current) announce(t("live.connection.lost"));
+    else if (!fallback && wasFallback.current) announce(t("live.connection.back"));
+    wasFallback.current = fallback;
+  }, [fallback]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <header className="flex flex-wrap items-center gap-x-5 gap-y-3 pb-6">
       <img src={LOGO_SRC} alt={t("app.name")} width={44} height={44} />
@@ -87,6 +97,7 @@ export function Header() {
         <span className="sr-only xl:not-sr-only">{label}</span>
       </span>
       <NotificationsPanel />
+      <LiveAnnouncer />
     </header>
   );
 }

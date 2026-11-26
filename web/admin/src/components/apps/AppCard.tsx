@@ -4,14 +4,16 @@ import "@/i18n/id/apps";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
 import { effectiveStatus } from "@/lib/events/store";
-import { useEventsFresh, useJobProgress } from "@/lib/events/provider";
+import { announce } from "@/components/common/LiveAnnouncer";
+import type { MessageKey } from "@/i18n";
+import { useEventStore, useEventsFresh, useJobProgress, useServiceState, useTopicFrames } from "@/lib/events/provider";
 import { invalidateAfterJob, queryKeys, removeAppFromCache, upsertAppInCache } from "@/lib/query";
 import { CARD_TITLE } from "@/components/common/cardStyles";
 import { cn } from "@/lib/utils";
@@ -35,6 +37,27 @@ export function AppCard({ app, onMessage }: Props) {
   const client = useQueryClient();
   const live = useJobProgress(app.lastJobId);
   const fresh = useEventsFresh();
+
+  // FR-022: changes of THIS app made in another session are announced politely (T061).
+  const store = useEventStore();
+  const service = useServiceState(app.id);
+  const shown = useRef({ enabled: app.enabled, service });
+  shown.current = { enabled: app.enabled, service };
+  useTopicFrames((f) => {
+    if (!("appId" in f) || f.appId !== app.id) return;
+    // The ref follows every frame too: two quick events must compare with each other, not with
+    // the last render (the cache notifies its observers asynchronously).
+    const before = shown.current;
+    if (f.kind === "service.status") {
+      shown.current = { ...before, service: f.state };
+      if (f.state !== before.service) announce(t("live.service", { name: app.name, state: t(`apps.service.state.${f.state}` as MessageKey) }));
+      return;
+    }
+    if (f.kind === "app.upserted") shown.current = { ...before, enabled: f.app.enabled };
+    if (store.isOwnOrigin(f.origin)) return; // this tab did it and already said so
+    if (f.kind === "app.upserted" && f.app.enabled !== before.enabled) announce(t(f.app.enabled ? "live.app.enabled" : "live.app.disabled", { name: f.app.name }));
+    else if (f.kind === "app.deleted") announce(t("live.app.deleted", { name: app.name }));
+  });
   const status = effectiveStatus(app.lastJobStatus, app.lastDeployTime, live);
   const active = status !== undefined && ACTIVE.has(status);
 
