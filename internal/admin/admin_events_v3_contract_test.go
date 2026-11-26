@@ -207,8 +207,9 @@ func TestEventsV3_Contract(t *testing.T) {
 	env := func(t *testing.T) *wsSessionEnv {
 		t.Helper()
 		name := "v3c_" + strings.NewReplacer("/", "_", ":", "_").Replace(t.Name())
+		// The server already runs here: the hub's fields are only read from now on (the
+		// tracker's sink is set under its own lock).
 		e := newWSSessionEnv(t, name, time.Hour)
-		e.hub.SetServerVersion("v9.9.9-v3")
 		e.hub.tracker.SetProgressSink(e.hub)
 		return e
 	}
@@ -235,7 +236,7 @@ func TestEventsV3_Contract(t *testing.T) {
 		e := env(t)
 		s := v3cDial(t, e, sch)
 		p := v3cPayload(s.hello)
-		if p["serverVersion"] != "v9.9.9-v3" || v3cNum(p, "heartbeatSeconds") != 30 {
+		if p["serverVersion"] != e.hub.serverVersion || v3cNum(p, "heartbeatSeconds") != 30 {
 			t.Errorf("hello serverVersion/heartbeatSeconds: %v", s.hello["_raw"])
 		}
 		if _, ok := p["sessionExpiresAt"].(string); !ok {

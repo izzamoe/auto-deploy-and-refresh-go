@@ -2,8 +2,6 @@ package admin
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -81,7 +79,8 @@ type AdminEventHub struct {
 	nextID        atomic.Uint64
 	serverVersion string
 	sessions      SessionChecker
-	epoch         string // protocol 3: identity of this process (events-ws.v3.md section 5)
+	// bus carries protocol 3 (topics, seq/epoch, resume); protocol 2 keeps clients below.
+	bus *events.Bus
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -97,15 +96,9 @@ func NewAdminEventHub(tracker *progress.ProgressTracker) *AdminEventHub {
 		tracker:       tracker,
 		now:           time.Now,
 		serverVersion: llmstxt.Version,
-		epoch:         newEpoch(),
+		bus:           events.NewBus(),
 		clients:       make(map[*adminEventClient]struct{}),
 	}
-}
-
-func newEpoch() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
 }
 
 // SetServerVersion overrides the version reported in the hello event (default:
@@ -265,6 +258,14 @@ func (h *AdminEventHub) Broadcast(event AdminEvent) {
 
 func (h *AdminEventHub) PublishProgress(snapshot progress.ProgressSnapshot) {
 	h.Broadcast(AdminEvent{Type: adminEventTypeProgress, AppID: snapshot.AppID, JobID: snapshot.JobID, Payload: progressEventFrame(snapshot)})
+	// Protocol 3: only to sockets subscribed to jobs with progress on (FR-015).
+	h.bus.PublishProgress(snapshot.JobID, func() []byte {
+		raw, err := h.encodeEvent(AdminEvent{Protocol: adminEventProtocolV3, Type: adminEventTypeProgress, AppID: snapshot.AppID, JobID: snapshot.JobID, Payload: progressEventFrame(snapshot)})
+		if err != nil {
+			return nil
+		}
+		return raw
+	})
 }
 
 func (h *AdminEventHub) addClient() *adminEventClient {
@@ -532,8 +533,23 @@ const adminEventProtocolV3 = "3"
 const (
 	adminEventTypeSubscribed   = "subscribed"
 	adminEventTypeUnsubscribed = "unsubscribed"
+	adminEventTypeResumed      = "resumed"
+	adminEventTypeResync       = "resync"
 	adminEventTypeError        = "error"
 )
+
+type adminEventResumedPayload struct {
+	Ref      string `json:"ref"`
+	FromSeq  uint64 `json:"fromSeq"`
+	ToSeq    uint64 `json:"toSeq"`
+	Replayed int    `json:"replayed"`
+}
+
+type adminEventResyncPayload struct {
+	Ref    string         `json:"ref,omitempty"`
+	Topics []events.Topic `json:"topics"`
+	Reason string         `json:"reason"`
+}
 
 // adminEventV3 is a server frame of protocol 3 that the hub encodes itself (hello, control
 // frames, heartbeat). State events with a seq are encoded by the bus.
@@ -611,13 +627,17 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal)}
+	h.bus.Register(vc.client)
+	defer h.bus.Unregister(vc.client)
 
+	// hello.seq: a later sub with resume{epoch, seq: hello.seq} replays every state event
+	// published after this point (events-ws.v3.md section 5).
 	if !vc.writeFrame(adminEventTypeHello, adminEventHelloV3Payload{
 		ServerVersion:    h.serverVersion,
 		SessionExpiresAt: sessionExpiresAt,
 		HeartbeatSeconds: int(adminEventHeartbeatInterval / time.Second),
-		Epoch:            h.epoch,
-		Seq:              0,
+		Epoch:            h.bus.Epoch(),
+		Seq:              h.bus.Seq(),
 		ClientID:         vc.client.ID,
 		Limits:           adminEventLimits{MaxTopics: events.MaxTopics, MaxOpsPer10s: events.MaxOpsPer10s, MaxFrameBytes: events.MaxFrameBytes},
 	}) {
@@ -706,33 +726,86 @@ func (vc *v3Conn) handleOp(data []byte) bool {
 	}
 	switch op.Kind {
 	case "sub":
-		var accepted []events.TopicSub
-		for _, s := range op.Subs {
-			if events.Authorize(vc.client.Principal, s.Topic) != nil {
-				if !vc.writeError(events.OpError{Ref: op.Ref, Code: events.CodeForbiddenTopic, Topic: string(s.Topic)}) {
-					return false
-				}
-				continue
-			}
-			accepted = append(accepted, s)
-		}
-		if len(accepted) == 0 {
+		if len(op.Subs) == 0 {
 			return true
 		}
-		vc.client.Apply(events.Op{Kind: "sub", Subs: accepted})
-		topics := make([]adminEventSubscribedTopic, 0, len(accepted))
-		for _, s := range accepted {
-			topics = append(topics, adminEventSubscribedTopic{Name: s.Topic})
-		}
-		return vc.writeFrame(adminEventTypeSubscribed, adminEventSubscribedPayload{Ref: op.Ref, Topics: topics})
+		return vc.subscribe(op)
 	case "unsub":
 		if len(op.Unsubs) == 0 {
 			return true
 		}
-		vc.client.Apply(events.Op{Kind: "unsub", Unsubs: op.Unsubs})
+		vc.h.bus.Unsubscribe(vc.client, op.Unsubs)
 		return vc.writeFrame(adminEventTypeUnsubscribed, adminEventUnsubscribedPayload{Ref: op.Ref, Topics: op.Unsubs})
 	}
 	return true
+}
+
+// subscribe applies a sub op and writes, in this order: an error per refused topic, the
+// subscribed ack, the replayed events and resumed (or resync), then the jobs snapshot.
+// Live events of the new topics are queued by the bus after the replay point, so they
+// follow on the queue (events-ws.v3.md section 5).
+func (vc *v3Conn) subscribe(op events.Op) bool {
+	res := vc.h.bus.Subscribe(vc.client, op.Subs, op.Resume)
+	for _, t := range res.Refused {
+		if !vc.writeError(events.OpError{Ref: op.Ref, Code: events.CodeForbiddenTopic, Topic: string(t)}) {
+			return false
+		}
+	}
+	if len(res.Accepted) == 0 {
+		return true
+	}
+	topics := make([]adminEventSubscribedTopic, 0, len(res.Accepted))
+	for _, s := range res.Accepted {
+		topics = append(topics, adminEventSubscribedTopic{Name: s.Topic})
+	}
+	if !vc.writeFrame(adminEventTypeSubscribed, adminEventSubscribedPayload{Ref: op.Ref, Topics: topics}) {
+		return false
+	}
+	for _, frame := range res.Replay {
+		if !vc.write(frame) {
+			return false
+		}
+	}
+	switch {
+	case res.Resumed:
+		if !vc.writeFrame(adminEventTypeResumed, adminEventResumedPayload{Ref: op.Ref, FromSeq: res.FromSeq, ToSeq: res.ToSeq, Replayed: len(res.Replay)}) {
+			return false
+		}
+	case res.Resync != "":
+		if !vc.writeFrame(adminEventTypeResync, adminEventResyncPayload{Ref: op.Ref, Topics: res.ResyncTopics, Reason: res.Resync}) {
+			return false
+		}
+	}
+	for _, s := range res.Accepted {
+		if s.Topic == events.TopicJobs && s.Opts.Progress {
+			return vc.writeSnapshot()
+		}
+	}
+	return true
+}
+
+// writeSnapshot sends the active deployments to this socket only (no seq: it is the state
+// of the progress stream, not a bus event).
+func (vc *v3Conn) writeSnapshot() bool {
+	raw, err := json.Marshal(adminEventV3{
+		Protocol: adminEventProtocolV3, ID: vc.h.newEventID(), Topic: string(events.TopicJobs), Type: adminEventTypeSnapshot,
+		Timestamp: vc.h.now().UTC(), Payload: adminEventSnapshotPayload{Jobs: vc.h.snapshotJobs()},
+	})
+	if err != nil {
+		return false
+	}
+	return vc.write(raw)
+}
+
+// PublishTopic publishes one protocol-3 event straight to the bus: a state event (seq,
+// ring buffer) or, for logs:system, a stream frame. userID is set only for account events
+// (FR-017). Unknown topics are dropped.
+func (h *AdminEventHub) PublishTopic(topic, eventType, appID, jobID, userID string, payload any) {
+	t, ok := events.LookupTopic(topic)
+	if !ok {
+		return
+	}
+	_, _ = h.bus.Publish(events.Event{Topic: t, Type: eventType, AppID: appID, JobID: jobID, UserID: userID, Payload: payload})
 }
 
 func (vc *v3Conn) writeError(e events.OpError) bool {

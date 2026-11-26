@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // ClientQueueSize is the per-connection queue of state events (NFR-004).
@@ -16,8 +17,11 @@ type Client struct {
 	ID        string
 	Principal Principal
 
-	queue chan []byte
+	queue    chan []byte
+	overflow atomic.Bool
 
+	// topics is written only with both the bus lock and mu held, so the fan-out (bus lock)
+	// and the accessors below (mu) can each read it.
 	mu     sync.Mutex
 	topics map[Topic]TopicOpts
 }
@@ -91,5 +95,12 @@ func (c *Client) setTopics(subs []TopicSub, unsubs []Topic) (added []Topic) {
 	return added
 }
 
-// Apply records a sub or unsub without a bus (T031: acknowledgement only).
-func (c *Client) Apply(op Op) (added []Topic) { return c.setTopics(op.Subs, op.Unsubs) }
+// enqueue never blocks: when the queue is full the frame is dropped and the client is
+// flagged for overflow (the writer then resyncs it, FR-013).
+func (c *Client) enqueue(frame []byte) {
+	select {
+	case c.queue <- frame:
+	default:
+		c.overflow.Store(true)
+	}
+}
