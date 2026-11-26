@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -186,9 +187,15 @@ func (w *ServiceWatcher) round() {
 			args = append(args, units[id])
 		}
 		// is-active exits non-zero when a unit is not active; stdout still holds one state
-		// per unit, in argument order.
-		out, _ := runSystemctl("is-active", args...)
+		// per unit, in argument order. Only stdout is read (T089 CR-5): a warning on stderr
+		// would shift every state onto the wrong app.
+		out, _ := runSystemctlQuery("is-active", args...)
 		lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+		if len(lines) != len(appIDs) {
+			// The answer does not have one line per unit: no state is guessed by position.
+			slog.Warn("service watch: systemctl is-active answered an unexpected number of lines", "units", len(appIDs), "lines", len(lines))
+			lines = nil
+		}
 		for i, id := range appIDs {
 			st := "unknown"
 			if i < len(lines) {

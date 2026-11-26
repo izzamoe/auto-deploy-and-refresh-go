@@ -29,6 +29,15 @@ var (
 		cmd := exec.CommandContext(ctx, "systemctl", cmdArgs...)
 		return cmd.CombinedOutput()
 	}
+	// runSystemctlQuery runs a read-only systemctl query and returns ONLY its standard output
+	// (T089 CR-5): the service watcher maps the lines of `is-active -- u1 … uN` to apps by
+	// position, so a warning on stderr must never be read as a line of the answer.
+	runSystemctlQuery = func(name string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), systemctlTimeout)
+		defer cancel()
+		cmdArgs := append([]string{name}, args...)
+		return exec.CommandContext(ctx, "systemctl", cmdArgs...).Output()
+	}
 	renameFile             = os.Rename
 	chmodFile              = os.Chmod
 	deployHealthCheckSleep = time.Sleep
