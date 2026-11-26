@@ -175,16 +175,12 @@ func (q *DeployQueue) Stats(now time.Time, rangeDays int, loc *time.Location) (*
 	s.SuccessRate.Rate = ratio(curOK, curOK+curFail)
 	s.SuccessRate.PreviousRate = ratio(prevOK, prevOK+prevFail)
 
-	var enabled sql.NullInt64
-	if err := q.db.QueryRow(`SELECT COUNT(*), SUM(enabled) FROM apps`).Scan(&s.Apps.Total, &enabled); err != nil {
-		return nil, fmt.Errorf("stats: count apps: %w", err)
+	sum, err := q.Summary()
+	if err != nil {
+		return nil, err
 	}
-	s.Apps.Enabled = int(enabled.Int64)
-	if err := q.db.QueryRow(
-		`SELECT COALESCE(SUM(status IN ('in_progress', 'cancel_requested')), 0), COALESCE(SUM(status = 'pending'), 0) FROM deploy_jobs WHERE status IN ('pending', 'in_progress', 'cancel_requested')`,
-	).Scan(&s.Active.Running, &s.Active.Queued); err != nil {
-		return nil, fmt.Errorf("stats: count active jobs: %w", err)
-	}
+	s.Apps.Total, s.Apps.Enabled = sum.AppsTotal, sum.AppsEnabled
+	s.Active.Running, s.Active.Queued = sum.Running, sum.Queued
 
 	recent, err := q.db.Query(
 		`SELECT id, app_id, tag, status, trigger_type, COALESCE(retry_of_job_id, ''), COALESCE(error_msg, ''), download_bytes, download_duration_ms, download_speed_bps, created_at, updated_at, rolled_back
@@ -205,6 +201,29 @@ func (q *DeployQueue) Stats(now time.Time, rangeDays int, loc *time.Location) (*
 	}
 	if err := recent.Err(); err != nil {
 		return nil, fmt.Errorf("stats: iterate recent jobs: %w", err)
+	}
+	return s, nil
+}
+
+// Summary holds the counts of the realtime summary topic (specs/002 FR-002): apps total and
+// enabled, jobs running (in_progress or cancel_requested) and queued (pending).
+type Summary struct {
+	AppsTotal, AppsEnabled, Running, Queued int
+}
+
+// Summary computes the apps and active fields of GET /stats. The summary topic uses this
+// same function, so the header and the dashboard never disagree.
+func (q *DeployQueue) Summary() (Summary, error) {
+	var s Summary
+	var enabled sql.NullInt64
+	if err := q.db.QueryRow(`SELECT COUNT(*), SUM(enabled) FROM apps`).Scan(&s.AppsTotal, &enabled); err != nil {
+		return Summary{}, fmt.Errorf("stats: count apps: %w", err)
+	}
+	s.AppsEnabled = int(enabled.Int64)
+	if err := q.db.QueryRow(
+		`SELECT COALESCE(SUM(status IN ('in_progress', 'cancel_requested')), 0), COALESCE(SUM(status = 'pending'), 0) FROM deploy_jobs WHERE status IN ('pending', 'in_progress', 'cancel_requested')`,
+	).Scan(&s.Running, &s.Queued); err != nil {
+		return Summary{}, fmt.Errorf("stats: count active jobs: %w", err)
 	}
 	return s, nil
 }

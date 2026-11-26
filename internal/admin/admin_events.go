@@ -85,6 +85,8 @@ type AdminEventHub struct {
 	bus *events.Bus
 	// apps is the app store of the protocol-3 sources (SetAppStore).
 	apps atomic.Pointer[store.AppStore]
+	// summary publishes topic summary when its state changes (SetDeployQueue).
+	summary atomic.Pointer[events.Summary]
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -528,6 +530,7 @@ func (h *AdminEventHub) publishJobsV3(event cancel.CancelEvent) {
 		payload[k] = v
 	}
 	_, _ = h.bus.Publish(events.Event{Topic: events.TopicJobs, Type: event.Type, AppID: event.AppID, JobID: event.JobID, Payload: payload})
+	h.refreshSummary() // a cancel or a finished job changes running/queued
 }
 
 func progressStatusForStage(stage string) string {
@@ -873,7 +876,7 @@ func (vc *v3Conn) subscribe(op events.Op) bool {
 	}
 	topics := make([]adminEventSubscribedTopic, 0, len(res.Accepted))
 	for _, s := range res.Accepted {
-		topics = append(topics, adminEventSubscribedTopic{Name: s.Topic})
+		topics = append(topics, adminEventSubscribedTopic{Name: s.Topic, State: vc.h.topicState(s.Topic)})
 	}
 	if !vc.writeFrame(adminEventTypeSubscribed, adminEventSubscribedPayload{Ref: op.Ref, Topics: topics}) {
 		return false
@@ -899,6 +902,26 @@ func (vc *v3Conn) subscribe(op events.Op) bool {
 		}
 	}
 	return true
+}
+
+// topicState is the state a subscribed ack carries for the topic (events-ws.v3.md
+// section 3): summary and service; nil for the others. It is computed after the bus
+// subscription, so every later event of the topic is at least as new as this state.
+func (h *AdminEventHub) topicState(t events.Topic) any {
+	switch t {
+	case events.TopicSummary:
+		s := h.summary.Load()
+		if s == nil {
+			return nil
+		}
+		st, err := s.Current()
+		if err != nil {
+			slog.Warn("events: summary state failed", "err", err)
+			return nil
+		}
+		return st
+	}
+	return nil
 }
 
 // writeSnapshot sends the active deployments to this socket only (no seq: it is the state
@@ -931,6 +954,26 @@ func (h *AdminEventHub) PublishTopic(topic, eventType, appID, jobID, userID stri
 // contract has no such types).
 func (h *AdminEventHub) PublishEvent(e events.Event) {
 	_, _ = h.bus.Publish(e)
+	if e.Topic == events.TopicApps || e.Topic == events.TopicJobs {
+		h.refreshSummary()
+	}
+}
+
+// SetDeployQueue gives the hub the queue whose Summary (the apps and active fields of GET
+// /stats) is the state of topic summary (T042, FR-002).
+func (h *AdminEventHub) SetDeployQueue(q *store.DeployQueue) {
+	h.summary.Store(events.NewSummary(func() (events.SummaryState, error) {
+		s, err := q.Summary()
+		return events.SummaryState{AppsTotal: s.AppsTotal, AppsEnabled: s.AppsEnabled, Running: s.Running, Queued: s.Queued}, err
+	}, func(e events.Event) { _, _ = h.bus.Publish(e) }))
+}
+
+// refreshSummary publishes topic summary when an app mutation or a job transition changed
+// it (published only on change).
+func (h *AdminEventHub) refreshSummary() {
+	if s := h.summary.Load(); s != nil {
+		s.Refresh()
+	}
 }
 
 // RefreshService implements events.Publisher: a systemd action may have changed the state
