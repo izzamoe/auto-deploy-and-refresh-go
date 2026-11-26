@@ -335,6 +335,29 @@ func hasFieldError(errs []httpx.FieldError, field string) bool {
 	return false
 }
 
+// publishAppUpserted announces the app after a mutation as GET /apps lists it: with its
+// lastDeploy*/lastJob* fields (T089 CR-1: a row without them wiped "Last deploy" and the
+// last job status from every tab), never with liveProgress (progress travels on topic jobs).
+func (h *AdminAPIHandler) publishAppUpserted(c *app.RequestContext, a store.App, more ...events.Event) {
+	if h.events == nil {
+		return
+	}
+	row := appResponse(a)
+	if list, err := h.store.ListWithLastDeploy(); err == nil {
+		for i := range list {
+			if list[i].ID == a.ID {
+				list[i].LiveProgress = nil
+				row = appWithLastDeployResponse(list[i])
+				row.LiveProgress = nil
+				break
+			}
+		}
+	} else {
+		logHandlerError(c, "load app for app.upserted failed", err)
+	}
+	h.publish(c, append([]events.Event{events.AppUpserted(a.ID, row)}, more...)...)
+}
+
 func appWithLastDeployResponse(app store.AppWithLastDeploy) adminAPIAppResponse {
 	resp := appResponse(app.App)
 	resp.LastDeployTag = app.LastDeployTag
@@ -518,7 +541,7 @@ func (h *AdminAPIHandler) CreateAppHertz(ctx context.Context, c *app.RequestCont
 	}
 
 	auth.AuditRequest(c, auth.EventAppCreated, "", "appId", app.ID, "name", app.Name, "serviceName", app.ServiceName)
-	h.publish(c, events.AppUpserted(app.ID, appResponse(*app)), events.StatsChanged(events.ReasonApp))
+	h.publishAppUpserted(c, *app, events.StatsChanged(events.ReasonApp))
 	c.JSON(consts.StatusCreated, map[string]any{"status": "created", "app": appResponse(*app), "webhookSecret": secret})
 }
 
@@ -553,7 +576,7 @@ func (h *AdminAPIHandler) RotateWebhookSecretHertz(ctx context.Context, c *app.R
 	auth.AuditRequest(c, auth.EventAppSecretRotated, "", "appId", id)
 	// Only updatedAt changes for other tabs: the new secret is in this response alone.
 	if rotated, err := h.store.Get(id); err == nil && rotated != nil {
-		h.publish(c, events.AppUpserted(id, appResponse(*rotated)))
+		h.publishAppUpserted(c, *rotated)
 	}
 	c.JSON(consts.StatusOK, map[string]any{"secret": secret})
 }
@@ -620,7 +643,7 @@ func (h *AdminAPIHandler) UpdateAppHertz(ctx context.Context, c *app.RequestCont
 		return
 	}
 	auth.AuditRequest(c, auth.EventAppUpdated, "", "appId", id)
-	h.publish(c, events.AppUpserted(id, appResponse(*updated)))
+	h.publishAppUpserted(c, *updated)
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
 }
 
@@ -708,7 +731,7 @@ func (h *AdminAPIHandler) ToggleAppHertz(ctx context.Context, c *app.RequestCont
 		writeAdminAPIErrorHertz(c, consts.StatusInternalServerError, "Failed to load updated app")
 		return
 	}
-	h.publish(c, events.AppUpserted(id, appResponse(*updated)))
+	h.publishAppUpserted(c, *updated)
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "app": appResponse(*updated)})
 }
 

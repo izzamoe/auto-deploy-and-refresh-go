@@ -43,7 +43,9 @@ const newer = (a: string | undefined, b: string | undefined) => {
 
 /**
  * Puts one app into the cached list and its own entry (app.upserted, or a mutation response):
- * replace or insert, no request. Idempotent: an older `updatedAt` never replaces a newer row.
+ * merge or insert, no request. Idempotent: an older `updatedAt` never replaces a newer row.
+ * T089 CR-1: the fields the payload does not carry (the toggle/edit response has no
+ * last-deploy or last-job fields) are kept, never wiped.
  */
 export function upsertAppInCache(client: QueryClient, app: AppRow) {
   client.setQueryData<AppList>(queryKeys.apps, (old) => {
@@ -52,10 +54,10 @@ export function upsertAppInCache(client: QueryClient, app: AppRow) {
     if (i < 0) return { ...old, apps: [...old.apps, app] };
     if (newer(old.apps[i].updatedAt, app.updatedAt)) return old;
     const apps = old.apps.slice();
-    apps[i] = app;
+    apps[i] = { ...old.apps[i], ...app };
     return { ...old, apps };
   });
-  client.setQueryData<AppOne>(queryKeys.app(app.id), (old) => (old && !newer(old.app.updatedAt, app.updatedAt) ? { ...old, app } : old));
+  client.setQueryData<AppOne>(queryKeys.app(app.id), (old) => (old && !newer(old.app.updatedAt, app.updatedAt) ? { ...old, app: { ...old.app, ...app } } : old));
 }
 
 /** app.deleted: drops the row (no request). */
