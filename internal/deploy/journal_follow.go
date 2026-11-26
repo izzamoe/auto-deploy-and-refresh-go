@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"strconv"
@@ -85,11 +86,29 @@ var startJournalFollow = func(ctx context.Context, args ...string) (io.ReadClose
 	if err != nil {
 		return nil, nil, err
 	}
+	// T089 CR-2: what journalctl says when it exits (e.g. "Failed to seek to cursor") goes
+	// with its exit error, bounded.
+	stderr := &tailBuffer{max: journalStderrMax}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
-	return out, cmd.Wait, nil
+	return out, func() error {
+		err := cmd.Wait()
+		if msg := strings.TrimSpace(string(stderr.Bytes())); err != nil && msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}, nil
 }
+
+const (
+	// journalStderrMax bounds the stderr of journalctl kept for the log.
+	journalStderrMax = 1 << 10
+	// journalEmptyExitLimit consecutive exits without a single line are reported once
+	// through onError (notice logs_unavailable) instead of being retried silently.
+	journalEmptyExitLimit = 3
+)
 
 // SetStartJournalFollowForTest replaces the process starter of JournalFollower and returns
 // a restore func.
@@ -247,9 +266,11 @@ func (f *JournalFollower) startLocked(after string) {
 func (f *JournalFollower) run(ctx context.Context) {
 	backoff := f.opts.BackoffMin
 	reported := false
+	emptyExits := 0
 	for ctx.Err() == nil {
 		args := []string{"-u", f.opts.Unit, "-f", "-o", "json", "--no-pager"}
-		if head := f.Head(); head != "" {
+		head := f.Head()
+		if head != "" {
 			args = append(args, "--after-cursor="+head)
 		} else {
 			args = append(args, "--lines=0")
@@ -263,9 +284,27 @@ func (f *JournalFollower) run(ctx context.Context) {
 		} else {
 			readAny := f.consume(ctx, out)
 			_ = out.Close()
-			_ = wait() // reap the process: never a zombie
+			werr := wait() // reap the process: never a zombie
+			if ctx.Err() != nil {
+				return
+			}
 			if readAny {
-				backoff, reported = f.opts.BackoffMin, false
+				backoff, reported, emptyExits = f.opts.BackoffMin, false, 0
+			} else {
+				emptyExits++
+				// T089 CR-2: a process that ends without a single line after seeking to the
+				// head cannot use that cursor (another journal, garbage): forget it, follow
+				// from the end, and tell the subscribers to reload the REST snapshot.
+				if head != "" {
+					f.dropHead(head)
+				}
+				if emptyExits >= journalEmptyExitLimit && !reported && f.onError != nil {
+					if werr == nil {
+						werr = errors.New("journalctl exited without any output")
+					}
+					f.onError(werr)
+					reported = true
+				}
 			}
 		}
 		if ctx.Err() != nil {
@@ -279,6 +318,19 @@ func (f *JournalFollower) run(ctx context.Context) {
 		if backoff *= 2; backoff > f.opts.BackoffMax {
 			backoff = f.opts.BackoffMax
 		}
+	}
+}
+
+// dropHead forgets a head cursor journalctl could not continue after (T089 CR-2) and
+// reports logs.gap{cursor_behind}: the subscribers reload the REST snapshot.
+func (f *JournalFollower) dropHead(head string) {
+	f.mu.Lock()
+	if f.head == head {
+		f.head = ""
+	}
+	f.mu.Unlock()
+	if f.onGap != nil {
+		f.onGap(0, JournalGapCursorBehind)
 	}
 }
 
