@@ -720,6 +720,8 @@ type v3Conn struct {
 	// logsReplayed are the cursors of the lines the logs:system join replayed: a live batch
 	// queued meanwhile with one of them is a duplicate and is dropped (T089 CR-6).
 	logsReplayed map[string]struct{}
+	// pinging is set while a ping waits for its pong (T089 CR-8).
+	pinging atomic.Bool
 }
 
 // watchedTopic reports whether subscribing to t holds a shared watcher, and its key.
@@ -870,6 +872,10 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, tok *even
 
 	heartbeat := time.NewTicker(adminEventHeartbeatTick)
 	defer heartbeat.Stop()
+	// T089 CR-8: every heartbeat also pings the peer; no pong within adminEventPingTimeout
+	// closes the socket.
+	pingFailed := make(chan struct{}, 1)
+
 	// The session (B12) or the API token (T089 CR-4) is re-checked like on protocol 2.
 	cred := h.watchCredential(sess, tok)
 	defer cred.stop()
@@ -893,6 +899,12 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, tok *even
 			if !vc.writeFrame(adminEventTypeHeartbeat, nil) {
 				return
 			}
+			vc.ping(pingFailed)
+		case <-pingFailed:
+			// T089 CR-8: the peer did not answer a ping within adminEventPingTimeout (half-open
+			// TCP): end the socket so its shared watchers and journal follower are released.
+			slog.Info("events: closing a socket whose peer stopped answering", "clientId", vc.client.ID)
+			return
 		case data := <-incoming:
 			if !vc.handleOp(data) {
 				return
@@ -921,6 +933,25 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, tok *even
 			}
 		}
 	}
+}
+
+// ping sends a WebSocket ping without blocking the writer loop (the pong is read by the read
+// loop); one at a time. A missing pong within adminEventPingTimeout signals failed.
+func (vc *v3Conn) ping(failed chan<- struct{}) {
+	if !vc.pinging.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer vc.pinging.Store(false)
+		ctx, cancel := context.WithTimeout(vc.ctx, adminEventPingTimeout)
+		defer cancel()
+		if err := vc.c.Ping(ctx); err != nil && vc.ctx.Err() == nil {
+			select {
+			case failed <- struct{}{}:
+			default:
+			}
+		}
+	}()
 }
 
 // flush handles what the bus flagged besides the queue. Overflow (FR-013, events-ws.v3.md
