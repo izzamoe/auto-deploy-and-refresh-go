@@ -206,3 +206,79 @@ func TestEvents_UnsupportedProtocolClosesWith4409(t *testing.T) {
 		_ = conn.CloseNow()
 	}
 }
+
+// connectV3 dials ?protocol=3 and consumes the hello (protocol 3 sends no automatic
+// snapshot).
+func (e *wsSessionEnv) connectV3(t *testing.T) *websocket.Conn {
+	t.Helper()
+	conn, resp, err := dialEvents(t, e.addr, "/admin/events/v1/ws?protocol=3", e.header())
+	closeBody(resp)
+	if err != nil {
+		t.Fatalf("dial ?protocol=3: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+	readFrame(t, conn) // hello
+	return conn
+}
+
+// T048 (FR-031, Q-2=A): an open protocol-3 socket does NOT extend the session. Past half
+// of the idle window (when an HTTP request would renew it) the socket stays open because
+// the session is still valid; when the original idle window ends the next check closes it
+// with 4401 (the tab goes to the login page with next).
+func TestEventsV3_DoesNotRenewSession(t *testing.T) {
+	env := newWSSessionEnv(t, "ws_v3_norenew", 40*time.Millisecond)
+	conn := env.connectV3(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"op":"sub","ref":"r1","topics":[{"name":"summary"},{"name":"jobs"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// One reader for the whole test: a Read whose context expires closes the client side.
+	closed := make(chan websocket.StatusCode, 1)
+	go func() {
+		for {
+			if _, _, err := conn.Read(context.Background()); err != nil {
+				closed <- websocket.CloseStatus(err)
+				return
+			}
+		}
+	}()
+
+	env.clock.Advance(auth.DefaultIdle/2 + time.Minute) // a request now would renew
+	select {
+	case code := <-closed:
+		t.Fatalf("the socket closed with %d while the session is still valid", code)
+	case <-time.After(300 * time.Millisecond): // several session checks (every 40 ms)
+	}
+	if err := env.mgr.Recheck(env.iss.SessionID, env.user.ID, env.user.TokenVersion); err != nil {
+		t.Fatalf("the session should still be valid past idle/2: %v", err)
+	}
+
+	// Up to the ORIGINAL expiry: had the socket renewed the session it would stay open.
+	env.clock.Advance(auth.DefaultIdle/2 - time.Minute + time.Second)
+	select {
+	case code := <-closed:
+		if code != 4401 {
+			t.Fatalf("close code at the original expiry = %d, want 4401", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the socket is still open after the original expiry: it renewed the session")
+	}
+	if err := env.mgr.Recheck(env.iss.SessionID, env.user.ID, env.user.TokenVersion); err == nil {
+		t.Fatal("the session row was renewed by the open socket")
+	}
+}
+
+// T048 (FR-031): a protocol-3 socket of a revoked session closes 4401 at once, like
+// protocol 2 (the revocation signal), whatever it subscribes to.
+func TestEventsV3_RevokedSessionCloses4401(t *testing.T) {
+	env := newWSSessionEnv(t, "ws_v3_revoke", time.Hour)
+	conn := env.connectV3(t)
+	if err := env.mgr.Revoke(env.iss.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if code := expectClose(conn, 2*time.Second); code != 4401 {
+		t.Fatalf("protocol-3 close code after revoke = %d, want 4401", code)
+	}
+}
