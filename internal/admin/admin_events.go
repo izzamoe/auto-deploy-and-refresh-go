@@ -509,6 +509,22 @@ func RegisterAdminEventRoutesHertz(h *server.Hertz, hub *AdminEventHub, auth app
 
 func (h *AdminEventHub) BroadcastCancelEvent(event cancel.CancelEvent) {
 	h.Broadcast(AdminEvent{Type: event.Type, AppID: event.AppID, JobID: event.JobID, Payload: event.Payload})
+	h.publishJobsV3(event)
+}
+
+// publishJobsV3 maps the existing job sources (cancel service, coordinator job_status) to
+// topic jobs of protocol 3 (FR-015). The protocol-2 copy of jobId in the payload is not
+// sent on protocol 3 (events-ws.v3.md section 0); protocol-2 sockets keep receiving
+// everything through Broadcast, unchanged.
+func (h *AdminEventHub) publishJobsV3(event cancel.CancelEvent) {
+	payload := make(map[string]any, len(event.Payload))
+	for k, v := range event.Payload {
+		if k == "jobId" || (k == "previousStatus" && v == "") {
+			continue
+		}
+		payload[k] = v
+	}
+	_, _ = h.bus.Publish(events.Event{Topic: events.TopicJobs, Type: event.Type, AppID: event.AppID, JobID: event.JobID, Payload: payload})
 }
 
 func progressStatusForStage(stage string) string {
