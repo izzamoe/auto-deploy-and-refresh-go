@@ -7,8 +7,16 @@
 //   topics    (T018, FR-015, SC-011): /account/ (no `jobs` topic) receives no progress frame
 //   navigate  (T052, FR-014, RV-8): leave /apps/, change it elsewhere, come back -> shown with <= 1 REST
 //   bundle    (T073, FR-027, FR-028, SC-007): a cold load fetches no other route before intent
-import { expect, test } from '@playwright/test';
-import type { Browser, BrowserContext, Page } from '@playwright/test';
+//   latency   (T081, NFR-001, SC-004): p95 change -> shown in another tab <= 500 ms (LOCAL only:
+//             the CI runs `--grep-invert "latency"`, RV2-15)
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { expect, request as pwRequest, test } from '@playwright/test';
+import type { APIRequestContext, Browser, BrowserContext, Page } from '@playwright/test';
 import { STATIC_ROUTES, STORAGE_STATE, adminURL, baseURL, browserHeaders, countApi, firstApp, ready, seedJob, setPrefs } from './helpers';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -265,3 +273,322 @@ test.describe('bundle', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// T081 (NFR-001, SC-004, Q-12): cross-tab latency. 50 trials per kind; t0 = just before the
+// action in tab A (a click, or the webhook POST for a job), t1 = the MutationObserver in tab B
+// seeing the change (both Date.now() on the same machine). p95 must be <= 500 ms. Local only
+// (RV2-15: the CI runs `--grep-invert "latency"`). RV-25: jobs only assert the queued job
+// appearing (never a terminal state); the service kind uses a FAKE systemctl (a second server
+// with the fake first on its PATH), never a real `systemctl stop/start` (RV2-17). SC-012 (journal
+// latency) is proven by TestJournalFollower_LatencyUnder1s (T046): e2e has no journal unit.
+// ---------------------------------------------------------------------------------------
+const LATENCY_TRIALS = 50;
+const LATENCY_P95_MAX_MS = 500;
+
+/** What tab B waits for: an element whose text includes `text`, whose value is `value`, or whose `attr` is `attrValue`. */
+type Match = { selector: string; text?: string; value?: string; attr?: string; attrValue?: string };
+
+/** Arms a MutationObserver in B that records Date.now() the first time `m` holds. */
+async function armB(page: Page, m: Match): Promise<void> {
+  const already = await page.evaluate((m) => {
+    const w = window as unknown as { __latT1: number };
+    const holds = () => {
+      const el = document.querySelector(m.selector);
+      if (!el) return false;
+      if (m.text !== undefined) return (el.textContent ?? '').includes(m.text);
+      if (m.value !== undefined) return (el as HTMLInputElement).value === m.value;
+      if (m.attr !== undefined) return el.getAttribute(m.attr) === m.attrValue;
+      return false;
+    };
+    w.__latT1 = 0;
+    if (holds()) return true;
+    const mo = new MutationObserver(() => {
+      if (w.__latT1 === 0 && holds()) {
+        w.__latT1 = Date.now();
+        mo.disconnect();
+      }
+    });
+    mo.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    return false;
+  }, m);
+  expect(already, `tab B already shows ${JSON.stringify(m)} before the action`).toBe(false);
+}
+
+/** Runs `act` (tab A) and returns t1 - t0 as seen by tab B (fails after 5 s). */
+async function measure(b: Page, m: Match, act: () => Promise<unknown>): Promise<number> {
+  await armB(b, m);
+  const t0 = Date.now();
+  await act();
+  const handle = await b.waitForFunction(() => (window as unknown as { __latT1: number }).__latT1, null, { timeout: 5_000, polling: 50 });
+  return (await handle.jsonValue()) - t0;
+}
+
+function report(kind: string, samples: number[]): { p50: number; p95: number } {
+  const s = [...samples].sort((x, y) => x - y);
+  const rank = (p: number) => s[Math.max(0, Math.ceil((p / 100) * s.length) - 1)];
+  const out = { p50: rank(50), p95: rank(95) };
+  console.log(`[latency] ${kind}: n=${s.length} p50=${out.p50} ms p95=${out.p95} ms min=${s[0]} ms max=${s[s.length - 1]} ms`);
+  return out;
+}
+
+async function createApp(api: APIRequestContext, base: string, prefix: string, headers: Record<string, string> = browserHeaders()): Promise<string> {
+  const name = `${prefix}-${Date.now()}`;
+  const res = await api.post(`${base}/admin/api/v1/apps`, {
+    data: { name, binaryPath: `/opt/${name}/app`, serviceName: `${name}.service`, githubRepo: `example/${name}`, artifactName: `${name}-art` },
+    headers,
+  });
+  expect([200, 201], `create app ${name}`).toContain(res.status());
+  const body = await res.json();
+  return body.app?.id ?? body.id;
+}
+
+test.describe('latency', () => {
+  test('latency: toggle app (A /apps/ -> B /apps/)', async ({ browser, request }) => {
+    const appId = await createApp(request, baseURL(), 'pw-lat-toggle');
+    const a = await openTab(browser, '/apps/');
+    const b = await openTab(browser, '/apps/');
+    try {
+      await waitLive(a.page);
+      await waitLive(b.page);
+      const cardA = a.page.getByTestId(`app-card-${appId}`);
+      const pill = `[data-testid="app-card-${appId}"] header > span`;
+      await expect(cardA.getByRole('button', { name: 'Disable' })).toBeVisible();
+      const samples: number[] = [];
+      for (let i = 0; i < LATENCY_TRIALS; i++) {
+        const disabling = i % 2 === 0;
+        const button = cardA.getByRole('button', { name: disabling ? 'Disable' : 'Enable' });
+        samples.push(await measure(b.page, { selector: pill, text: disabling ? 'Disabled' : 'Enabled' }, () => button.click()));
+        await expect(cardA.getByRole('button', { name: disabling ? 'Enable' : 'Disable' })).toBeVisible();
+      }
+      expect(report('toggle app', samples).p95).toBeLessThanOrEqual(LATENCY_P95_MAX_MS);
+    } finally {
+      await a.context.close();
+      await b.context.close();
+      await request.delete(`${baseURL()}/admin/api/v1/apps/${appId}`, { headers: browserHeaders() });
+    }
+  });
+
+  test('latency: edit app (A /apps/edit/ -> B /apps/)', async ({ browser, request }) => {
+    const appId = await createApp(request, baseURL(), 'pw-lat-edit');
+    const a = await openTab(browser, `/apps/edit/?id=${appId}`);
+    const b = await openTab(browser, '/apps/');
+    try {
+      await waitLive(a.page);
+      await waitLive(b.page);
+      const save = a.page.getByRole('button', { name: 'Save changes' });
+      const card = `[data-testid="app-card-${appId}"]`;
+      const samples: number[] = [];
+      for (let i = 0; i < LATENCY_TRIALS; i++) {
+        const artifact = `lat-art-${Date.now()}-${i}`;
+        await a.page.locator('#f-artifact').fill(artifact);
+        samples.push(await measure(b.page, { selector: card, text: artifact }, () => save.click()));
+        await expect(a.page.getByText('App updated.')).toBeVisible();
+        await expect(save).toBeEnabled();
+      }
+      expect(report('edit app', samples).p95).toBeLessThanOrEqual(LATENCY_P95_MAX_MS);
+    } finally {
+      await a.context.close();
+      await b.context.close();
+      await request.delete(`${baseURL()}/admin/api/v1/apps/${appId}`, { headers: browserHeaders() });
+    }
+  });
+
+  test('latency: Telegram setting (A /settings/telegram/ -> B)', async ({ browser }) => {
+    const a = await openTab(browser, '/settings/telegram/');
+    const b = await openTab(browser, '/settings/telegram/');
+    try {
+      await waitLive(a.page);
+      await waitLive(b.page);
+      const chat = a.page.locator('#tg-chat');
+      const save = a.page.getByRole('button', { name: 'Save settings' });
+      const samples: number[] = [];
+      for (let i = 0; i < LATENCY_TRIALS; i++) {
+        const value = `@pwlat${Date.now() % 1_000_000}${i}`;
+        await chat.fill(value);
+        samples.push(await measure(b.page, { selector: '#tg-chat', value }, () => save.click()));
+        await expect(save).toBeEnabled();
+        await expect(chat).toHaveValue(value);
+      }
+      expect(report('Telegram setting', samples).p95).toBeLessThanOrEqual(LATENCY_P95_MAX_MS);
+    } finally {
+      await a.context.close();
+      await b.context.close();
+    }
+  });
+
+  test('latency: create token (A /account/ -> B /account/)', async ({ browser, request }) => {
+    const a = await openTab(browser, '/account/');
+    const b = await openTab(browser, '/account/');
+    const names: string[] = [];
+    try {
+      await waitLive(a.page);
+      await waitLive(b.page);
+      const create = a.page.getByRole('button', { name: 'Create token' });
+      const samples: number[] = [];
+      for (let i = 0; i < LATENCY_TRIALS; i++) {
+        const name = `pw-lat-${Date.now()}-${i}`;
+        names.push(name);
+        await a.page.locator('#tok-name').fill(name);
+        samples.push(await measure(b.page, { selector: '[data-testid="tokens-card"]', text: name }, () => create.click()));
+        await expect(a.page.getByTestId('tokens-card')).toContainText(name);
+        await expect(a.page.locator('#tok-name')).toHaveValue(''); // A's create finished (the field is cleared)
+      }
+      expect(report('create token', samples).p95).toBeLessThanOrEqual(LATENCY_P95_MAX_MS);
+    } finally {
+      await a.context.close();
+      await b.context.close();
+      const list = (await (await request.get(`${baseURL()}/admin/api/v1/tokens`)).json()) as { tokens?: { id: string; name: string }[] };
+      for (const tok of list.tokens ?? []) {
+        if (names.includes(tok.name)) await request.delete(`${baseURL()}/admin/api/v1/tokens/${tok.id}`, { headers: browserHeaders() });
+      }
+    }
+  });
+
+  test('latency: job transition (webhook -> B /history/ shows the queued job)', async ({ browser, request }) => {
+    const b = await openTab(browser, '/history/');
+    try {
+      await waitLive(b.page);
+      const samples: number[] = [];
+      for (let i = 0; i < LATENCY_TRIALS; i++) {
+        // A unique tag per trial: only the queued job appearing in B is asserted (RV-25).
+        const tag = `pw-lat-job-${Date.now()}-${i}`;
+        samples.push(
+          await measure(b.page, { selector: 'main', text: tag }, async () => {
+            const res = await request.post(`${baseURL()}/webhook`, { headers: { Authorization: `Bearer ${process.env.PLAYWRIGHT_WEBHOOK_SECRET}` }, data: { tag } });
+            expect(res.status()).toBe(202);
+          }),
+        );
+        await sleep(400); // the debounced history refetch of this job's later transitions settles first
+      }
+      expect(report('job transition', samples).p95).toBeLessThanOrEqual(LATENCY_P95_MAX_MS);
+    } finally {
+      await b.context.close();
+    }
+  });
+
+  test('latency: service control (fake systemctl, A /apps/ -> B /apps/)', async ({ browser }) => {
+    const srv = await startFakeSystemctlServer();
+    try {
+      const appId = await createApp(srv.api, srv.base, 'lat-svc', {});
+      const open = async () => {
+        const context = await browser.newContext({ storageState: srv.storage, viewport: { width: 1280, height: 800 } });
+        await setPrefs(context, 'en', 'light');
+        const page = await context.newPage();
+        await page.goto(`${srv.base}/admin/apps/`, { waitUntil: 'load' });
+        await ready(page);
+        await waitLive(page);
+        return { context, page };
+      };
+      const a = await open();
+      const b = await open();
+      try {
+        const status = `[data-testid="service-status-${appId}"]`;
+        await expect(a.page.locator(status)).toHaveAttribute('data-state', 'inactive');
+        await expect(b.page.locator(status)).toHaveAttribute('data-state', 'inactive');
+        const controls = a.page.getByTestId(`service-${appId}`);
+        const samples: number[] = [];
+        for (let i = 0; i < LATENCY_TRIALS; i++) {
+          const starting = i % 2 === 0;
+          const target = starting ? 'active' : 'inactive';
+          const button = controls.getByRole('button', { name: starting ? 'Start' : 'Stop', exact: true });
+          samples.push(await measure(b.page, { selector: status, attr: 'data-state', attrValue: target }, () => button.click()));
+          await expect(a.page.locator(status)).toHaveAttribute('data-state', target);
+          await expect(button).toBeEnabled();
+        }
+        expect(report('service control', samples).p95).toBeLessThanOrEqual(LATENCY_P95_MAX_MS);
+      } finally {
+        await a.context.close();
+        await b.context.close();
+      }
+    } finally {
+      await srv.stop();
+    }
+  });
+});
+
+/**
+ * A second server for the service kind: same source, its own DB, a FAKE `systemctl` first on
+ * its PATH (start/stop write the unit's state to a file, is-active reads it), the watcher
+ * interval at 60 s so only the control's refresh reports the change.
+ */
+async function startFakeSystemctlServer() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-deploy-latency-'));
+  const fakeBin = path.join(dir, 'fakebin');
+  const units = path.join(dir, 'units');
+  fs.mkdirSync(fakeBin);
+  fs.mkdirSync(units);
+  fs.writeFileSync(
+    path.join(fakeBin, 'systemctl'),
+    [
+      '#!/bin/sh',
+      '# Fake systemctl of the T081 latency test: never touches systemd.',
+      `dir='${units}'`,
+      'verb=$1; shift',
+      'rc=0',
+      'for arg in "$@"; do',
+      '  case "$arg" in -*) continue ;; esac',
+      '  f="$dir/$arg"',
+      '  case "$verb" in',
+      '    is-active) s=inactive; [ -f "$f" ] && s=$(cat "$f"); echo "$s"; [ "$s" = active ] || rc=3 ;;',
+      '    start|restart) echo active > "$f" ;;',
+      '    stop) echo inactive > "$f" ;;',
+      '  esac',
+      'done',
+      'exit $rc',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  const bin = path.join(dir, 'srv');
+  const repoRoot = path.resolve(__dirname, '..');
+  const built = await new Promise<number | null>((resolve) => spawn('go', ['build', '-o', bin, './cmd/server'], { cwd: repoRoot, stdio: 'inherit' }).on('exit', resolve));
+  expect(built, 'go build of the second server').toBe(0);
+  const port = await new Promise<number>((resolve) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => {
+      const p = (s.address() as net.AddressInfo).port;
+      s.close(() => resolve(p));
+    });
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+    LISTEN_ADDR: `127.0.0.1:${port}`,
+    DEPLOY_QUEUE_DB_PATH: path.join(dir, 'db.sqlite'),
+    COOKIE_SECURE: 'false',
+    WEBHOOK_SECRET: 'latency-secret-latency-secret-xx',
+    DEPLOY_BINARY_PATH: path.join(dir, 'boot-bin'),
+    DEPLOY_SERVICE_NAME: 'lat-boot.service',
+    GITHUB_REPO: 'example/latency',
+    ARTIFACT_NAME: 'latency',
+    SERVICE_WATCH_INTERVAL: '60s',
+  };
+  delete env.ADMIN_USERNAME;
+  delete env.ADMIN_PASSWORD;
+  const log = fs.openSync(path.join(dir, 'server.log'), 'a');
+  const proc: ChildProcess = spawn(bin, [], { cwd: dir, env, stdio: ['ignore', log, log] });
+  const exited = new Promise((resolve) => proc.once('exit', resolve));
+  let api: APIRequestContext | undefined;
+  const stop = async () => {
+    await api?.dispose();
+    proc.kill('SIGTERM');
+    await Promise.race([exited, sleep(5_000)]);
+    if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+    fs.closeSync(log);
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+  try {
+    api = await pwRequest.newContext({ baseURL: base, extraHTTPHeaders: { 'X-Admin-Request': 'true', 'Sec-Fetch-Site': 'same-origin', Origin: base } });
+    const ctx = api;
+    await expect.poll(async () => (await ctx.get('/admin/api/v1/session').catch(() => null))?.status() ?? 0, { timeout: 30_000 }).toBe(401);
+    const initial = fs.readFileSync(path.join(dir, 'initial-admin-password'), 'utf8').trim();
+    expect((await ctx.post('/admin/api/v1/session', { data: { username: 'admin', password: initial } })).status()).toBe(200);
+    expect((await ctx.post('/admin/api/v1/account/password', { data: { currentPassword: initial, newPassword: 'latency-secret-123' } })).status()).toBe(200);
+    return { base, api: ctx, storage: await ctx.storageState(), stop };
+  } catch (err) {
+    await stop();
+    throw err;
+  }
+}
