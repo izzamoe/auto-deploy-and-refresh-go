@@ -16,6 +16,7 @@ import (
 	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/llmstxt"
 	"github.com/izzamoe/auto-deploy/internal/progress"
+	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -82,6 +83,8 @@ type AdminEventHub struct {
 	sessions      SessionChecker
 	// bus carries protocol 3 (topics, seq/epoch, resume); protocol 2 keeps clients below.
 	bus *events.Bus
+	// apps is the app store of the protocol-3 sources (SetAppStore).
+	apps atomic.Pointer[store.AppStore]
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -933,6 +936,71 @@ func (h *AdminEventHub) PublishEvent(e events.Event) {
 // RefreshService implements events.Publisher: a systemd action may have changed the state
 // of the app's unit; the service watcher runs a round at once (T045).
 func (h *AdminEventHub) RefreshService(appID string) {}
+
+// SetAppStore gives the hub the apps, for the public App of app.upserted after a deploy
+// (lastDeploy*) and for the summary topic.
+func (h *AdminEventHub) SetAppStore(apps *store.AppStore) { h.apps.Store(apps) }
+
+func (h *AdminEventHub) appStore() *store.AppStore { return h.apps.Load() }
+
+// jobStatusPayload is the payload of a protocol-3 job_status the hub builds from a queue
+// transition (events-ws.v3.md 2.2). The terminal job_status of a deploy comes from the
+// coordinator (it knows rolledBack and the error code) through BroadcastCancelEvent.
+type jobStatusPayload struct {
+	Status         string     `json:"status"`
+	PreviousStatus string     `json:"previousStatus,omitempty"`
+	Tag            string     `json:"tag,omitempty"`
+	Trigger        string     `json:"trigger,omitempty"`
+	ErrorCode      string     `json:"errorCode,omitempty"`
+	StartedAt      *time.Time `json:"startedAt,omitempty"`
+	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
+}
+
+// OnJobTransition implements store.JobObserver (T041, FR-006): every committed transition
+// of deploy_jobs becomes its protocol-3 events. It runs on the writer's goroutine after the
+// commit and never blocks (the bus only queues).
+func (h *AdminEventHub) OnJobTransition(t store.JobTransition) {
+	now := h.now().UTC()
+	switch t.Kind {
+	case store.JobEnqueued:
+		h.PublishEvent(events.Event{Topic: events.TopicJobs, Type: events.TypeJobStatus, AppID: t.AppID, JobID: t.JobID,
+			Payload: jobStatusPayload{Status: t.Status, Tag: t.Tag, Trigger: t.Trigger}})
+	case store.JobStarted:
+		h.PublishEvent(events.Event{Topic: events.TopicJobs, Type: events.TypeJobStatus, AppID: t.AppID, JobID: t.JobID,
+			Payload: jobStatusPayload{Status: t.Status, PreviousStatus: t.PreviousStatus, Tag: t.Tag, Trigger: t.Trigger, StartedAt: &now}})
+	case store.JobFinished:
+		// job_status itself: the coordinator's, after MarkRolledBack (publishJobsV3).
+		h.publishAppWithLastDeploy(t.AppID)
+		h.RefreshService(t.AppID)
+	case store.JobRecovered:
+		h.PublishEvent(events.Event{Topic: events.TopicJobs, Type: events.TypeJobStatus, AppID: t.AppID, JobID: t.JobID,
+			Payload: jobStatusPayload{Status: t.Status, PreviousStatus: t.PreviousStatus, Tag: t.Tag, Trigger: t.Trigger, ErrorCode: "recovered", FinishedAt: &now}})
+		h.publishAppWithLastDeploy(t.AppID)
+	}
+}
+
+// publishAppWithLastDeploy announces the app with its lastDeploy*/lastJob* fields (the
+// row of GET /apps, without liveProgress: progress only travels on topic jobs).
+func (h *AdminEventHub) publishAppWithLastDeploy(appID string) {
+	apps := h.appStore()
+	if apps == nil || appID == "" {
+		return
+	}
+	list, err := apps.ListWithLastDeploy()
+	if err != nil {
+		slog.Warn("events: load app for app.upserted failed", "appId", appID, "err", err)
+		return
+	}
+	for i := range list {
+		if list[i].ID == appID {
+			list[i].LiveProgress = nil
+			resp := appWithLastDeployResponse(list[i])
+			resp.LiveProgress = nil
+			h.PublishEvent(events.AppUpserted(appID, resp))
+			return
+		}
+	}
+}
 
 func (vc *v3Conn) writeError(e events.OpError) bool {
 	events.M().OpsRejected.Add(string(e.Code), 1)

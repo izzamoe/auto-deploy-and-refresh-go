@@ -74,6 +74,7 @@ type DownloadSummary struct {
 
 type DeployQueue struct {
 	onEnqueue  atomic.Pointer[func()] // wakes the coordinator (FR-048)
+	observer   atomic.Pointer[jobObserverBox]
 	db         *sql.DB
 	maxPending int
 	// activeCache is an immutable snapshot of every non-terminal deploy job,
@@ -329,6 +330,55 @@ func scanJobRecord(sc rowScanner) (JobRecord, error) {
 	return item, err
 }
 
+// Kinds of JobTransition (specs/002 T041).
+const (
+	JobEnqueued   = "enqueued"    // a new pending job (Enqueue, EnqueueManual, CreateRetryJob)
+	JobStarted    = "started"     // pending -> in_progress (DequeueNext)
+	JobFinished   = "finished"    // in_progress/cancel_requested -> succeeded/failed (MarkDone)
+	JobRolledBack = "rolled_back" // the finished job restored the previous binary (MarkRolledBack)
+	JobRecovered  = "recovered"   // a job a dead process left active -> failed (RecoverStale)
+	JobsPruned    = "pruned"      // finished jobs beyond the retention were deleted (PruneHistory)
+)
+
+// JobTransition is one committed change of deploy_jobs, reported to the JobObserver.
+// JobsPruned carries only Count.
+type JobTransition struct {
+	Kind           string
+	JobID          string
+	AppID          string
+	Tag            string
+	Trigger        string
+	Status         string
+	PreviousStatus string
+	Count          int
+}
+
+// JobObserver learns about every job transition AFTER it is committed (plan.md section 3:
+// the realtime event source of the jobs, summary and stats topics). It is called on the
+// goroutine of the writer and must not block.
+type JobObserver interface {
+	OnJobTransition(JobTransition)
+}
+
+type jobObserverBox struct{ o JobObserver }
+
+// SetJobObserver attaches the observer of job transitions (nil detaches it).
+func (q *DeployQueue) SetJobObserver(o JobObserver) {
+	if o == nil {
+		q.observer.Store(nil)
+		return
+	}
+	q.observer.Store(&jobObserverBox{o: o})
+}
+
+func (q *DeployQueue) observing() bool { return q.observer.Load() != nil }
+
+func (q *DeployQueue) notify(t JobTransition) {
+	if b := q.observer.Load(); b != nil {
+		b.o.OnJobTransition(t)
+	}
+}
+
 // SetEnqueueHook registers fn, called (without holding any lock) after a job was
 // inserted, so the coordinator can start it at once instead of polling (FR-048).
 func (q *DeployQueue) SetEnqueueHook(fn func()) { q.onEnqueue.Store(&fn) }
@@ -395,6 +445,9 @@ func (q *DeployQueue) enqueue(appID, tag, trigger string) error {
 	} else if n == 0 {
 		return ErrQueueFull
 	}
+	// The observer hears about the pending job before the coordinator is woken, so the
+	// pending event precedes the in_progress one.
+	q.notify(JobTransition{Kind: JobEnqueued, JobID: jobID, AppID: appID, Tag: tag, Trigger: trigger, Status: "pending"})
 	q.enqueued()
 	return nil
 }
@@ -406,11 +459,12 @@ func (q *DeployQueue) DequeueNext(appID string) (id, tag string, err error) {
 	}
 	defer tx.Rollback()
 
+	var trigger string
 	row := tx.QueryRow(
-		`SELECT id, tag FROM deploy_jobs WHERE app_id = ? AND status = 'pending' ORDER BY seq ASC LIMIT 1`,
+		`SELECT id, tag, trigger_type FROM deploy_jobs WHERE app_id = ? AND status = 'pending' ORDER BY seq ASC LIMIT 1`,
 		appID,
 	)
-	if err := row.Scan(&id, &tag); err != nil {
+	if err := row.Scan(&id, &tag, &trigger); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", "", nil
 		}
@@ -429,6 +483,7 @@ func (q *DeployQueue) DequeueNext(appID string) (id, tag string, err error) {
 		return "", "", err
 	}
 	q.InvalidateActiveJobsCache()
+	q.notify(JobTransition{Kind: JobStarted, JobID: id, AppID: appID, Tag: tag, Trigger: trigger, Status: "in_progress", PreviousStatus: "pending"})
 	return id, tag, nil
 }
 
@@ -451,12 +506,24 @@ func (q *DeployQueue) MarkDone(id string, success bool, errMsg string, summary *
 		downloadSpeedBPS = summary.SpeedBPS
 	}
 
-	_, err := q.db.Exec(
+	res, err := q.db.Exec(
 		`UPDATE deploy_jobs SET status = ?, error_msg = ?, download_bytes = ?, download_duration_ms = ?, download_speed_bps = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('in_progress', 'cancel_requested')`,
 		status, nullMsg, downloadBytes, downloadDurationMs, downloadSpeedBPS, id,
 	)
 	q.InvalidateActiveJobsCache()
-	return err
+	if err != nil {
+		return err
+	}
+	// Only a MarkDone that ended the job is a transition (a job the cancel service already
+	// ended is left as it is and was announced there).
+	if n, _ := res.RowsAffected(); n > 0 && q.observing() {
+		t := JobTransition{Kind: JobFinished, JobID: id, Status: status}
+		if job, gerr := q.GetJob(id); gerr == nil && job != nil {
+			t.AppID, t.Tag, t.Trigger = job.AppID, job.Tag, job.Trigger
+		}
+		q.notify(t)
+	}
+	return nil
 }
 
 // MarkArtifactVerification records the artifact hash and whether it was verified
@@ -478,8 +545,18 @@ var ErrRolledBack = errors.New("rolled back to the previous binary")
 // MarkRolledBack flags job id as rolled back (deploy_jobs.rolled_back = 1). It
 // is idempotent and a no-op for unknown ids.
 func (q *DeployQueue) MarkRolledBack(id string) error {
-	_, err := q.db.Exec(`UPDATE deploy_jobs SET rolled_back = 1 WHERE id = ?`, id)
-	return err
+	res, err := q.db.Exec(`UPDATE deploy_jobs SET rolled_back = 1 WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 && q.observing() {
+		t := JobTransition{Kind: JobRolledBack, JobID: id}
+		if job, gerr := q.GetJob(id); gerr == nil && job != nil {
+			t.AppID, t.Tag, t.Trigger, t.Status = job.AppID, job.Tag, job.Trigger, job.Status
+		}
+		q.notify(t)
+	}
+	return nil
 }
 
 // SaveJobLog stores captured service logs (e.g. journalctl output) for a job,
@@ -522,11 +599,51 @@ var ErrSelfDeployInFlight = errors.New("self-deploy in flight: the restarted pro
 // none stays active forever (FR-044, NFR-007). It runs at startup, after a
 // self-deploy has been settled.
 func (q *DeployQueue) RecoverStale() error {
-	_, err := q.db.Exec(
+	if !q.observing() {
+		_, err := q.db.Exec(
+			`UPDATE deploy_jobs SET status = 'failed', error_msg = 'recovered: process crashed', updated_at = CURRENT_TIMESTAMP WHERE status IN ('in_progress', 'cancel_requested')`,
+		)
+		q.InvalidateActiveJobsCache()
+		return err
+	}
+	// With an observer the recovered jobs are read in the same transaction, so each one is
+	// reported after the commit.
+	tx, err := q.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT id, app_id, tag, status, trigger_type FROM deploy_jobs WHERE status IN ('in_progress', 'cancel_requested') ORDER BY seq ASC`)
+	if err != nil {
+		return err
+	}
+	var recovered []JobTransition
+	for rows.Next() {
+		t := JobTransition{Kind: JobRecovered, Status: "failed"}
+		if err := rows.Scan(&t.JobID, &t.AppID, &t.Tag, &t.PreviousStatus, &t.Trigger); err != nil {
+			rows.Close()
+			return err
+		}
+		recovered = append(recovered, t)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if _, err := tx.Exec(
 		`UPDATE deploy_jobs SET status = 'failed', error_msg = 'recovered: process crashed', updated_at = CURRENT_TIMESTAMP WHERE status IN ('in_progress', 'cancel_requested')`,
-	)
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	q.InvalidateActiveJobsCache()
-	return err
+	for _, t := range recovered {
+		q.notify(t)
+	}
+	return nil
 }
 
 func (q *DeployQueue) IsDuplicate(appID, tag string) (bool, error) {
@@ -675,6 +792,7 @@ func (q *DeployQueue) CreateRetryJob(originalJobID, appID, tag string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("create retry job: insert: %w", err)
 	}
+	q.notify(JobTransition{Kind: JobEnqueued, JobID: jobID, AppID: appID, Tag: tag, Trigger: "manual_retry", Status: "pending"})
 	q.enqueued()
 	return jobID, nil
 }
@@ -732,5 +850,8 @@ func (q *DeployQueue) PruneHistory(keep int) (int, error) {
 		return 0, fmt.Errorf("deploy_queue: prune history: %w", err)
 	}
 	n, err := res.RowsAffected()
+	if err == nil && n > 0 {
+		q.notify(JobTransition{Kind: JobsPruned, Count: int(n)})
+	}
 	return int(n), err
 }

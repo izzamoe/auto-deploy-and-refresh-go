@@ -160,6 +160,9 @@ func main() {
 	tracker.SetProgressSink(adminEventHub)
 	cancelService := cancel.NewCancelService(q)
 	cancelService.SetEventSink(adminEventHub)
+	// Protocol-3 job and app sources (specs/002 T041): every committed job transition.
+	adminEventHub.SetAppStore(appStore)
+	q.SetJobObserver(adminEventHub)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	githubClient := github.NewClient(serviceCfg.GitHubToken)
