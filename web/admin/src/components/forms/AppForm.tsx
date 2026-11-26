@@ -8,6 +8,9 @@
 //  - EDIT: env and args are loaded separately. A part that is not loaded (or failed to load)
 //    is disabled and NEVER sent (B53); a part whose text did not change is NOT sent either
 //    (FR-074); the form state is local, so refetches and notifications never reset typing (B54).
+//  - 002 (FR-022, Q-10=A): a change of THIS app made in another session (app.upserted,
+//    app.config_changed, app.deleted with a foreign origin) shows a non-blocking notice
+//    (role="status") with "Reload"; what the user typed is never overwritten.
 import "@/i18n/id/form";
 import "@/i18n/id/unit";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -25,8 +28,9 @@ import { useI18n } from "@/i18n";
 import type { MessageKey } from "@/i18n";
 import { ApiError, api, describeError } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
+import { useEventStore, useTopic, useTopicFrames } from "@/lib/events/provider";
 import { envVarsToText, argsToText, firstInvalidEnvName, normalizeArgsText, normalizeEnvText, parseArgsText, parseEnvText } from "@/lib/envargs";
-import { queryKeys } from "@/lib/query";
+import { queryKeys, upsertAppInCache } from "@/lib/query";
 import { ArgsEditor } from "./ArgsEditor";
 import { EnvEditor } from "./EnvEditor";
 import { WebhookReference, WebhookSnippet } from "./WebhookSnippet";
@@ -114,9 +118,41 @@ function SwitchRow({ id, label, hint, checked, onChange }: { id: string; label: 
 interface InnerProps {
   appId?: string;
   initial: App | null;
+  /** Edit only: reloads the saved values (after a change made elsewhere). */
+  onReload?: () => void;
 }
 
-function AppFormInner({ appId, initial }: InnerProps) {
+type Conflict = "changed" | "config" | "deleted";
+
+/** Q-10=A: what another session did to the app being edited, if anything. */
+function useEditConflict(appId: string | undefined): [Conflict | null, () => void] {
+  const store = useEventStore();
+  const [conflict, setConflict] = useState<Conflict | null>(null);
+  useTopicFrames((frame) => {
+    if (!appId || !("appId" in frame) || frame.appId !== appId) return;
+    if (store.isOwnOrigin(frame.origin)) return; // our own save
+    if (frame.kind === "app.deleted") setConflict("deleted");
+    else if (frame.kind === "app.upserted") setConflict((c) => (c === "deleted" ? c : "changed"));
+    else if (frame.kind === "app.config_changed") setConflict((c) => c ?? "config");
+  });
+  return [conflict, () => setConflict(null)];
+}
+
+function ConflictNotice({ kind, onReload }: { kind: Conflict; onReload?: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div role="status" data-testid="edit-conflict" data-conflict={kind} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-warning-soft px-4 py-3 text-sm text-warning-soft-foreground">
+      <span>{t(kind === "deleted" ? "form.conflict.deleted" : kind === "config" ? "form.conflict.config" : "form.conflict.changed")}</span>
+      {kind !== "deleted" && onReload && (
+        <Button type="button" size="sm" variant="outline" onClick={onReload}>
+          {t("form.conflict.reload")}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function AppFormInner({ appId, initial, onReload }: InnerProps) {
   const i18n = useI18n();
   const { t } = i18n;
   const client = useQueryClient();
@@ -130,6 +166,7 @@ function AppFormInner({ appId, initial }: InnerProps) {
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ name: string; secret: string } | null>(null);
   const [unitOpen, setUnitOpen] = useState(false);
+  const [conflict] = useEditConflict(appId);
 
   // env / args: separate resources, loaded only when editing.
   const envQ = useQuery({
@@ -234,26 +271,26 @@ function AppFormInner({ appId, initial }: InnerProps) {
           envVars: checked.envVars,
           args: checked.args,
         });
-        void client.invalidateQueries({ queryKey: queryKeys.apps });
-        void client.invalidateQueries({ queryKey: queryKeys.stats });
+        upsertAppInCache(client, res.app); // the response is the row: no list refetch (002)
+        void client.invalidateQueries({ queryKey: queryKeys.stats, refetchType: "none" });
         setCreated({ name: res.app.name, secret: res.webhookSecret });
         return;
       }
 
       // EDIT: the app first; env/args only when loaded AND changed.
       try {
-        await api.updateApp(appId, {
+        const updated = await api.updateApp(appId, {
           ...fieldsBody(),
           runAsUser: v.runAsUser.trim(),
           healthUrl: v.healthUrl.trim(),
           ...(initial?.isSelf !== undefined ? { isSelf: initial.isSelf } : {}),
           ...(v.webhookSecret ? { webhookSecret: v.webhookSecret } : {}),
         });
+        upsertAppInCache(client, updated.app); // the response is the row: no list refetch (002)
       } catch (err) {
         applyServerError(err);
         return;
       }
-      void client.invalidateQueries({ queryKey: queryKeys.apps });
       set("webhookSecret", "");
       let partial = false;
       if (envDirty) {
@@ -305,6 +342,7 @@ function AppFormInner({ appId, initial }: InnerProps) {
       </div>
 
       <Notice notice={notice} onDismiss={clear} />
+      {conflict && <ConflictNotice kind={conflict} onReload={onReload} />}
 
       {created ? (
         <WebhookSnippet appName={created.name} secret={created.secret} onDismiss={() => router.push("/apps/")} />
@@ -427,6 +465,9 @@ function labelKey(k: FieldKey): MessageKey {
 export function AppForm({ appId }: { appId?: string }) {
   const i18n = useI18n();
   const { t } = i18n;
+  const client = useQueryClient();
+  const [version, setVersion] = useState(0);
+  useTopic("apps"); // subscription.md §1: /apps/edit/ and /apps/new/
   const app = useQuery({
     queryKey: queryKeys.app(appId ?? ""),
     queryFn: ({ signal }) => api.getApp(appId as string, { signal }),
@@ -457,5 +498,12 @@ export function AppForm({ appId }: { appId?: string }) {
       </div>
     );
   }
-  return <AppFormInner key={appId} appId={appId} initial={app.data.app} />;
+  // Q-10=A "Reload": the saved values replace the form (the app row is already current from
+  // the event; env/args are fetched again), only when the user asks for it.
+  const reload = () => {
+    client.removeQueries({ queryKey: queryKeys.appEnv(appId) });
+    client.removeQueries({ queryKey: queryKeys.appArgs(appId) });
+    void app.refetch().then(() => setVersion((v) => v + 1));
+  };
+  return <AppFormInner key={`${appId}:${version}`} appId={appId} initial={app.data.app} onReload={reload} />;
 }
