@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SystemLogsView } from "@/components/logs/SystemLogsView";
 import { SessionGate } from "@/components/shell/SessionGate";
-import { Providers, SESSION, errorBody, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
+import { FakeWebSocket, Providers, SESSION, ackSubs, errorBody, goLive, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
 import type { Handler } from "@/components/shell/testUtils";
 import { resetAuthStateForTests } from "@/lib/api/client";
 import { GitHubSettings } from "./GitHubSettings";
@@ -51,6 +51,66 @@ describe("System logs (FR-029, FR-058)", () => {
     fireEvent.change(screen.getByLabelText("Tampilkan"), { target: { value: "500" } });
     await waitFor(() => expect(api.mock.mock.calls.some((c) => String(c[0]).includes("/system/logs?lines=500"))).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "Muat ulang" }));
+  });
+
+  const LOGS = { log: "old\nnew\n", truncated: false, service: "auto-deploy.service", cursor: "s=1;i=9" };
+  const lines = (...messages: string[]) => ({ protocol: "3", id: "evt-l", topic: "logs:system", type: "logs.lines", ts: new Date().toISOString(), payload: { lines: messages.map((message) => ({ ts: "2026-11-25T10:00:00Z", priority: 6, message })), cursor: "s=2" } });
+  const logsSubs = () => FakeWebSocket.instances[0].ops().filter((o) => o.op === "sub" && o.topics.some((t) => typeof t !== "string" && t.name === "logs:system"));
+
+  it("live mode is ON when the page opens (Q-5=A): logs:system after the snapshot cursor, streamed lines on top, no polling (002 T056)", async () => {
+    const api = installFetch(base({ [`GET ${U}/system/logs`]: () => ({ status: 200, body: LOGS }) }));
+    mount(<SystemLogsView />);
+    const pre = await screen.findByTestId("system-logs-text");
+    await waitFor(() => expect(pre.textContent).toBe("new\nold"));
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(logsSubs().map((o) => o.topics)).toEqual([[{ name: "logs:system", after: "s=1;i=9" }]]);
+    expect(screen.getByTestId("logs-live-status")).toHaveTextContent("Langsung");
+    await act(async () => FakeWebSocket.instances[0].emit(lines("line A", "line B")));
+    expect(pre.textContent).toBe("2026-11-25T10:00:00Z line B\n2026-11-25T10:00:00Z line A\nnew\nold");
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+    expect(api.count("GET", `${U}/system/logs`)).toBe(1); // no polling (the old view refetched every 10 s)
+    expect(screen.queryByLabelText(/Muat ulang otomatis/)).toBeNull();
+  });
+
+  it("Pause holds new lines and says how many arrived; Resume shows them; the log region is not a live region", async () => {
+    installFetch(base({ [`GET ${U}/system/logs`]: () => ({ status: 200, body: LOGS }) }));
+    mount(<SystemLogsView />);
+    const pre = await screen.findByTestId("system-logs-text");
+    await waitFor(() => expect(pre.textContent).toBe("new\nold"));
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(pre).not.toHaveAttribute("aria-live");
+    expect(screen.getByTestId("logs-live-status")).toHaveAttribute("aria-live", "polite");
+    fireEvent.click(screen.getByRole("button", { name: "Jeda" }));
+    expect(screen.getByRole("button", { name: "Lanjutkan" })).toHaveAttribute("aria-pressed", "true");
+    await act(async () => FakeWebSocket.instances[0].emit(lines("x", "y", "z")));
+    expect(pre.textContent).toBe("new\nold");
+    expect(screen.getByTestId("logs-live-status")).toHaveTextContent("3 baris baru");
+    fireEvent.click(screen.getByRole("button", { name: "Lanjutkan" }));
+    expect(pre.textContent).toBe("2026-11-25T10:00:00Z z\n2026-11-25T10:00:00Z y\n2026-11-25T10:00:00Z x\nnew\nold");
+  });
+
+  it("a rate gap is shown; cursor_behind reloads the snapshot ONCE and continues after its new cursor", async () => {
+    let n = 0;
+    const api = installFetch(base({ [`GET ${U}/system/logs`]: () => ({ status: 200, body: { ...LOGS, cursor: `s=${++n}` } }) }));
+    mount(<SystemLogsView />);
+    const pre = await screen.findByTestId("system-logs-text");
+    await waitFor(() => expect(pre.textContent).toBe("new\nold"));
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    await act(async () => FakeWebSocket.instances[0].emit({ protocol: "3", id: "g", topic: "logs:system", type: "logs.gap", ts: new Date().toISOString(), payload: { dropped: 42, reason: "rate" } }));
+    expect(screen.getByTestId("logs-gap")).toHaveTextContent("42 baris terlewati");
+    await act(async () => FakeWebSocket.instances[0].emit({ protocol: "3", id: "h", topic: "logs:system", type: "logs.gap", ts: new Date().toISOString(), payload: { dropped: 0, reason: "cursor_behind" } }));
+    await waitFor(() => expect(api.count("GET", `${U}/system/logs`)).toBe(2));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); ackSubs(FakeWebSocket.instances[0]); });
+    await waitFor(() => expect(logsSubs().map((o) => o.topics[0])).toEqual([{ name: "logs:system", after: "s=1" }, { name: "logs:system", after: "s=2" }]));
+  });
+
+  it("the journal being unavailable on the server is said once on the page", async () => {
+    installFetch(base({ [`GET ${U}/system/logs`]: () => ({ status: 200, body: LOGS }) }));
+    mount(<SystemLogsView />);
+    await screen.findByTestId("system-logs-text");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    await act(async () => FakeWebSocket.instances[0].emit({ protocol: "3", id: "n", seq: 3, topic: "summary", type: "notice", ts: new Date().toISOString(), payload: { level: "warning", code: "logs_unavailable", message: "x" } }));
+    expect(screen.getByTestId("logs-unavailable")).toHaveTextContent("Log langsung tidak tersedia di server ini.");
   });
 
   it("a failed load shows a localized error, never the raw server text", async () => {
@@ -183,5 +243,64 @@ describe("Telegram settings (B27, FR-029)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Simpan pengaturan" }));
     expect(await screen.findByText("Data tidak valid. Periksa kolom yang ditandai.")).toBeInTheDocument();
     expect(screen.getByLabelText("Bot token")).toHaveValue("typed");
+  });
+});
+
+describe("settings changed in another session (002 T058, FR-004, FR-017)", () => {
+  const tg = (over: object = {}) => ({ config: { appId: 12345, appHash: "************abcd", botToken: "*****wxyz", chatUsername: "@ops", enabled: true, ...over } });
+  const changed = (section: string, seq: number, origin = "c-99999999") => ({ protocol: "3", id: `evt-${seq}`, seq, topic: "settings", type: "settings.changed", ts: new Date().toISOString(), origin, payload: { section } });
+
+  it("an untouched Telegram form follows a change saved elsewhere: ONE GET /telegram after settings.changed, none on focus", async () => {
+    let config = tg();
+    const api = installFetch(base({ [`GET ${U}/telegram`]: () => ({ status: 200, body: config }) }));
+    mount(<TelegramSettings />);
+    await screen.findByTestId("tg-app-hash-status");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(FakeWebSocket.instances[0].subscribedTopics()).toContain("settings");
+    await act(async () => { window.dispatchEvent(new Event("visibilitychange")); await new Promise((r) => setTimeout(r, 50)); });
+    expect(api.count("GET", `${U}/telegram`)).toBe(1);
+    config = tg({ chatUsername: "@elsewhere" });
+    await act(async () => FakeWebSocket.instances[0].emit(changed("telegram", 5)));
+    await waitFor(() => expect(screen.getByLabelText("Username chat")).toHaveValue("@elsewhere"));
+    expect(api.count("GET", `${U}/telegram`)).toBe(2);
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+  });
+
+  it("while typing, a Telegram change elsewhere keeps the typing and says so; Reload applies the saved values; our own save raises nothing", async () => {
+    let config = tg();
+    installFetch(base({ [`GET ${U}/telegram`]: () => ({ status: 200, body: config }), [`POST ${U}/telegram`]: () => ({ status: 200, body: { status: "updated", ...tg({ chatUsername: "@mine" }) } }) }));
+    mount(<TelegramSettings />);
+    await screen.findByTestId("tg-app-hash-status");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    fireEvent.change(screen.getByLabelText("Username chat"), { target: { value: "@typing" } });
+    config = tg({ chatUsername: "@elsewhere" });
+    await act(async () => FakeWebSocket.instances[0].emit(changed("telegram", 6)));
+    const notice = await screen.findByTestId("settings-conflict");
+    expect(notice).toHaveAttribute("role", "status");
+    expect(screen.getByLabelText("Username chat")).toHaveValue("@typing");
+    fireEvent.click(within(notice).getByRole("button", { name: "Muat ulang" }));
+    expect(screen.getByLabelText("Username chat")).toHaveValue("@elsewhere");
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Username chat"), { target: { value: "@mine" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan pengaturan" }));
+    await screen.findByText("Pengaturan Telegram disimpan.");
+    await act(async () => FakeWebSocket.instances[0].emit(changed("telegram", 7, "c-0000test")));
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+    expect(screen.getByLabelText("Username chat")).toHaveValue("@mine");
+  });
+
+  it("GitHub: a token being typed is kept when the token is changed elsewhere; the status follows", async () => {
+    let config = { config: { token: "****wxyz", hasToken: true, source: "db" } };
+    installFetch(base({ [`GET ${U}/github`]: () => ({ status: 200, body: config }) }));
+    mount(<GitHubSettings />);
+    await screen.findByText("Token tersimpan: ****wxyz");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    fireEvent.change(screen.getByLabelText("Token baru"), { target: { value: "ghp_typing" } });
+    config = { config: { token: "****abcd", hasToken: true, source: "db" } };
+    await act(async () => FakeWebSocket.instances[0].emit(changed("github", 8)));
+    await screen.findByText("Token tersimpan: ****abcd");
+    expect(screen.getByTestId("settings-conflict")).toBeInTheDocument();
+    expect(screen.getByLabelText("Token baru")).toHaveValue("ghp_typing");
   });
 });

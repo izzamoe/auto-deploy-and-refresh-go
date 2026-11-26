@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionGate } from "@/components/shell/SessionGate";
-import { Providers, SESSION, STATS, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
+import { FakeWebSocket, Providers, SESSION, STATS, goLive, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
 import { resetAuthStateForTests } from "@/lib/api/client";
 import DashboardPage from "./page";
 
@@ -190,6 +190,33 @@ describe("Dashboard (T087, FR-100, FR-026, FR-108)", () => {
     expect(screen.queryByText("boom")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Coba lagi" }));
     expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
+  });
+
+  it("no polling (002 T054): /stats is loaded once, then refetched ONCE only after stats.changed (debounced), never on focus while live", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const api = installFetch(routes());
+      mount();
+      expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
+      const ws = FakeWebSocket.instances[0];
+      await act(async () => goLive(ws));
+      expect(ws.subscribedTopics()).toEqual(expect.arrayContaining(["stats", "jobs", "apps", "settings", "account"]));
+      const stats = () => api.count("GET", "/admin/api/v1/stats");
+      expect(stats()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000); }); // the old page polled every 30 s
+      await act(async () => { window.dispatchEvent(new Event("visibilitychange")); await vi.advanceTimersByTimeAsync(100); });
+      expect(stats()).toBe(1);
+      await act(async () => {
+        ws.emit({ protocol: "3", id: "evt-7", seq: 7, topic: "stats", type: "stats.changed", ts: new Date().toISOString(), payload: { reasons: ["job"] } });
+        ws.emit({ protocol: "3", id: "evt-8", seq: 8, topic: "stats", type: "stats.changed", ts: new Date().toISOString(), payload: { reasons: ["window"] } });
+        await vi.advanceTimersByTimeAsync(1_100);
+      });
+      await waitFor(() => expect(stats()).toBe(2));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(stats()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("English locale translates the dashboard", async () => {

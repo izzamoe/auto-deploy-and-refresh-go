@@ -1,6 +1,7 @@
 package config
 
 import (
+	"time"
 	"net"
 	"os"
 	"strings"
@@ -199,5 +200,33 @@ func TestParseQueueConfigInvalid(t *testing.T) {
 		if _, _, err := parseQueueConfig(tc, "deploy-queue.db"); err == nil {
 			t.Fatalf("expected error for %q", tc)
 		}
+	}
+}
+
+// specs/002 T045 (Q-3=A): SERVICE_WATCH_INTERVAL, default 5 s, kept within 2 s..60 s.
+func TestLoadServiceConfig_ServiceWatchInterval(t *testing.T) {
+	t.Setenv("SERVICE_WATCH_INTERVAL", "")
+	cfg, err := LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServiceWatchInterval != 5*time.Second {
+		t.Fatalf("default interval = %v, want 5s", cfg.ServiceWatchInterval)
+	}
+	for _, c := range []struct {
+		in   string
+		want time.Duration
+	}{
+		{"10s", 10 * time.Second}, {"7", 7 * time.Second}, {"1s", 2 * time.Second}, {"0", 2 * time.Second},
+		{"5m", 60 * time.Second}, {" 3s ", 3 * time.Second},
+	} {
+		got, err := ParseServiceWatchInterval(c.in)
+		if err != nil || got != c.want {
+			t.Errorf("ParseServiceWatchInterval(%q) = %v, %v; want %v", c.in, got, err, c.want)
+		}
+	}
+	t.Setenv("SERVICE_WATCH_INTERVAL", "soon")
+	if _, err := LoadServiceConfig(); err == nil {
+		t.Fatal("SERVICE_WATCH_INTERVAL=soon was accepted")
 	}
 }

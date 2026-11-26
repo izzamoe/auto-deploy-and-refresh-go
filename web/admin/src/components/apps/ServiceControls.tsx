@@ -2,22 +2,26 @@
 
 import "@/i18n/id/apps";
 import "@/i18n/id/unit";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Play, RefreshCw, RotateCw, Square } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { renderNothing } from "@/components/common/lazy";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import type { MessageKey } from "@/i18n";
-import { api, describeError } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { api, describeError, inBackground } from "@/lib/api/client";
+import { useEventStore, useEventsFallback, useServiceState, useTopicConfirmed } from "@/lib/events/provider";
+import { SERVICE_STATES } from "@/lib/events/types";
+import type { ServiceState } from "@/lib/events/types";
 import { cn } from "@/lib/utils";
 
 // Heavy dialogs are fetched only when first opened (Q-20).
-const LogsDialog = dynamic(() => import("./LogsDialog").then((m) => m.LogsDialog), { ssr: false });
-const ServiceUnitDialog = dynamic(() => import("./ServiceUnitDialog").then((m) => m.ServiceUnitDialog), { ssr: false });
+const LogsDialog = dynamic(() => import("./LogsDialog").then((m) => m.LogsDialog).catch(renderNothing), { ssr: false });
+const ServiceUnitDialog = dynamic(() => import("./ServiceUnitDialog").then((m) => m.ServiceUnitDialog).catch(renderNothing), { ssr: false });
 
 const KNOWN_STATES = new Set(["active", "inactive", "failed", "activating", "deactivating", "reloading"]);
+const toState = (raw: string | undefined): ServiceState => ((SERVICE_STATES as readonly string[]).includes(raw ?? "") ? (raw as ServiceState) : "unknown");
 
 function stateTone(state: string): string {
   if (state === "active") return "bg-success-soft text-success-soft-foreground";
@@ -32,31 +36,62 @@ interface Props {
   onMessage: (kind: "success" | "error", text: string) => void;
 }
 
-/** Systemd state of the app's service + start/stop/restart, logs and unit generation. */
+/**
+ * Systemd state of the app's service + start/stop/restart, logs and unit generation.
+ * 002 (FR-007, SC-005): the state comes from topic `service` (the subscribed ack, then only
+ * changes); no request per card. A card whose app has no state yet (an app created while the
+ * shared watcher was already running: its first observation is not a change) asks ONCE with
+ * GET /service/status per appearance; later changes still arrive as events. The refresh button
+ * stays a REST call.
+ */
 export function ServiceControls({ appId, appName, onMessage }: Props) {
   const i18n = useI18n();
   const { t } = i18n;
-  const client = useQueryClient();
+  const store = useEventStore();
   const [logsOpen, setLogsOpen] = useState(false);
   const [unitOpen, setUnitOpen] = useState(false);
 
-  const status = useQuery({
-    queryKey: queryKeys.serviceStatus(appId),
-    queryFn: ({ signal }) => api.getServiceStatus(appId, { signal }),
-    retry: false,
-  });
-  const raw = status.data?.status ?? "";
-  const state = status.isError ? "unknown" : KNOWN_STATES.has(raw) ? raw : raw === "" ? "…" : "unknown";
+  const live = useServiceState(appId);
+  const confirmed = useTopicConfirmed("service");
+  const fallback = useEventsFallback();
+  const [fetching, setFetching] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const asked = useRef(false);
+
+  const refresh = () => {
+    setFetching(true);
+    api
+      .getServiceStatus(appId)
+      .then((res) => {
+        setFailed(false);
+        store.setService(appId, toState(res.status));
+      })
+      .catch(() => setFailed(true))
+      .finally(() => setFetching(false));
+  };
+
+  // One targeted request per appearance when the topic cannot tell (no state for this app once
+  // the ack arrived, or the socket has not been live for a while: Q-4 fallback).
+  const known = live !== undefined;
+  const mayAsk = !known && (confirmed || fallback);
+  useEffect(() => {
+    if (!mayAsk || asked.current) return;
+    asked.current = true;
+    inBackground(refresh); // not the user's request: it must not extend the session (T089 CR-3)
+  }, [mayAsk]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const raw = live ?? "";
+  const state = live === undefined && failed ? "unknown" : KNOWN_STATES.has(raw) ? raw : raw === "" ? "…" : "unknown";
 
   const control = useMutation({
     mutationFn: (action: "start" | "stop" | "restart") => api.controlService(appId, action),
     onSuccess: (res, action) => {
-      client.setQueryData(queryKeys.serviceStatus(appId), { status: res.status });
+      store.setService(appId, toState(res.status));
       onMessage("success", t("apps.service.done", { action: t(`apps.service.${action}` as MessageKey) }));
     },
     onError: (err) => {
       onMessage("error", describeError(err, i18n));
-      void client.invalidateQueries({ queryKey: queryKeys.serviceStatus(appId) });
+      refresh();
     },
   });
   const busy = control.isPending;
@@ -72,8 +107,8 @@ export function ServiceControls({ appId, appName, onMessage }: Props) {
         >
           {state === "…" ? t("common.loading") : t(`apps.service.state.${state}` as MessageKey)}
         </span>
-        <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={t("apps.service.refresh")} onClick={() => void status.refetch()} disabled={status.isFetching}>
-          <RefreshCw aria-hidden="true" className={cn(status.isFetching && "motion-safe:animate-spin")} />
+        <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={t("apps.service.refresh")} onClick={refresh} disabled={fetching}>
+          <RefreshCw aria-hidden="true" className={cn(fetching && "motion-safe:animate-spin")} />
         </Button>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -114,7 +149,7 @@ export function ServiceControls({ appId, appName, onMessage }: Props) {
           onOpenChange={setUnitOpen}
           onApplied={() => {
             onMessage("success", t("apps.unit.done"));
-            void client.invalidateQueries({ queryKey: queryKeys.serviceStatus(appId) });
+            if (fallback) refresh(); // live: the server refreshes the watcher and pushes service.status
           }}
         />
       )}

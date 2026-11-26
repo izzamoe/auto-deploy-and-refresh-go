@@ -67,6 +67,7 @@ export const STATS = {
   recent: [],
 };
 
+// Protocol 3 (002 T050, RV-2): `send` records the ops of the page, `emit` pushes a server frame.
 export class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   onopen: ((e: unknown) => void) | null = null;
@@ -74,12 +75,49 @@ export class FakeWebSocket {
   onclose: ((e: { code: number }) => void) | null = null;
   onerror: ((e: unknown) => void) | null = null;
   close = vi.fn();
+  send = vi.fn();
   constructor(public url: string) {
     FakeWebSocket.instances.push(this);
   }
-  send(frame: object | string) {
+  emit(frame: object | string) {
     this.onmessage?.({ data: typeof frame === "string" ? frame : JSON.stringify(frame) });
   }
+  /** The sub/unsub ops sent by the page, parsed. */
+  ops(): { op: string; ref: string; topics: (string | { name: string })[]; resume?: { epoch: string; seq: number } }[] {
+    return this.send.mock.calls.map((c) => JSON.parse(String(c[0])));
+  }
+  /** Topic names of every sub op sent so far. */
+  subscribedTopics(): string[] {
+    return this.ops().flatMap((o) => (o.op === "sub" ? o.topics.map((t) => (typeof t === "string" ? t : t.name)) : []));
+  }
+}
+
+/** A protocol-3 server frame. */
+export const v3 = (type: string, extra: Record<string, unknown> = {}) => ({ protocol: "3", id: `evt-${type}`, type, ts: new Date().toISOString(), ...extra });
+
+export const hello = (extra: Record<string, unknown> = {}) =>
+  v3("hello", { payload: { serverVersion: "v1", heartbeatSeconds: 30, epoch: "e-test", seq: 0, clientId: "c-0000test", limits: { maxTopics: 16, maxOpsPer10s: 20, maxFrameBytes: 4096 }, ...extra } });
+
+/**
+ * Answers every sub op of the page not answered yet with `subscribed` (carrying `states[topic]`),
+ * plus `resumed` when the op asked to resume. Call inside `act`.
+ */
+export function ackSubs(ws: FakeWebSocket, states: Record<string, unknown> = {}) {
+  const answered = ((ws as unknown as { answered?: Set<string> }).answered ??= new Set<string>());
+  for (const op of ws.ops()) {
+    if (op.op !== "sub" || answered.has(op.ref)) continue;
+    answered.add(op.ref);
+    const topics = op.topics.map((t) => (typeof t === "string" ? t : t.name));
+    ws.emit(v3("subscribed", { payload: { ref: op.ref, topics: topics.map((name) => (states[name] === undefined ? { name } : { name, state: states[name] })) } }));
+    if (op.resume) ws.emit(v3("resumed", { payload: { ref: op.ref, fromSeq: op.resume.seq, toSeq: op.resume.seq, replayed: 0 } }));
+  }
+}
+
+/** hello + ack of every topic the page asked for: the socket is `live`. Call inside `await act(async () => ...)`. */
+export async function goLive(ws: FakeWebSocket, states: Record<string, unknown> = {}) {
+  ws.emit(hello());
+  await Promise.resolve(); // the sub op is sent from a microtask
+  ackSubs(ws, states);
 }
 
 export function installFakeWebSocket() {

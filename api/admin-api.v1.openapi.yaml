@@ -40,6 +40,7 @@ paths:
       security: []
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -64,6 +65,7 @@ paths:
       summary: "Logout dan cabut sesi di server (FR-007)"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "204":
           description: Sesi dicabut dan cookie dihapus
@@ -87,6 +89,7 @@ paths:
       summary: "Ganti password; menaikkan token_version dan menerbitkan ulang sesi saat ini (FR-005)"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -109,6 +112,7 @@ paths:
       summary: "Ganti username; menaikkan token_version dan menerbitkan ulang sesi saat ini via Set-Cookie (FR-005, B3)"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -131,6 +135,7 @@ paths:
       summary: "Cabut semua sesi lain (BARU, FR-005)"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "200":
           description: Semua sesi lain dicabut
@@ -163,6 +168,7 @@ paths:
       summary: "Buat token API; nilai penuh dikembalikan sekali"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -192,6 +198,7 @@ paths:
       operationId: revokeApiToken
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "204":
           description: Token dicabut
@@ -222,6 +229,7 @@ paths:
       summary: "Buat app beserta env dan args dalam satu transaksi (FR-028, B55)"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -260,6 +268,7 @@ paths:
       operationId: updateApp
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -287,6 +296,7 @@ paths:
       summary: "Hapus app beserta env, args, dan job dalam satu transaksi (FR-035, B14)"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
         - name: removeUnitFile
           in: query
           required: false
@@ -310,6 +320,7 @@ paths:
       operationId: toggleApp
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -343,6 +354,7 @@ paths:
       summary: "Deploy manual; tag tidak valid = 400 invalid_tag (B15)"
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -378,6 +390,7 @@ paths:
       operationId: cancelAppJobs
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "200":
           description: Permintaan cancel untuk semua job aktif app
@@ -401,6 +414,7 @@ paths:
       summary: "BARU (FR-055, B31). Server men-generate secret 32 byte; dikembalikan sekali."
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "200":
           description: Secret baru
@@ -440,6 +454,7 @@ paths:
       summary: "Ganti penuh env. Klien wajib hanya mengirim bila data sudah termuat (FR-074)."
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -493,6 +508,7 @@ paths:
       operationId: saveAppArgs
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -568,6 +584,7 @@ paths:
       operationId: applyServiceUnit
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "200":
           description: Unit ditulis dan di-enable
@@ -625,6 +642,7 @@ paths:
       operationId: controlService
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "200":
           description: Aksi systemd dijalankan
@@ -675,6 +693,7 @@ paths:
       operationId: retryJob
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "202":
           description: Job retry masuk antrean
@@ -700,6 +719,7 @@ paths:
       operationId: cancelJob
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       responses:
         "200":
           description: Hasil permintaan cancel
@@ -748,6 +768,7 @@ paths:
       operationId: saveGitHubConfig
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -791,6 +812,7 @@ paths:
       operationId: saveTelegramConfig
       parameters:
         - $ref: "#/components/parameters/XAdminRequest"
+        - $ref: "#/components/parameters/AdminClientId"
       requestBody:
         required: true
         content:
@@ -828,6 +850,9 @@ paths:
                     required: [service]
                     properties:
                       service: { type: string }
+                      cursor:
+                        type: string
+                        description: "BARU (002, FR-009). Cursor journald baris terakhir; dipakai `sub logs:system {after}`."
         "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/api/v1/stats:
     get:
@@ -941,6 +966,12 @@ components:
       required: false
       description: "Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API."
       schema: { type: string, enum: ["true"] }
+    AdminClientId:
+      name: X-Admin-Client
+      in: header
+      required: false
+      description: "BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat)."
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{1,32}$" }
     LogLines:
       name: lines
       in: query

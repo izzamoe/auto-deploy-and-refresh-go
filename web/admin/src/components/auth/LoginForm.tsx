@@ -1,5 +1,6 @@
 "use client";
 
+import "@/i18n/id/login";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Button } from "@/components/ui/button";

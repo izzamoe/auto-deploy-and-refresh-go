@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
+import { useTopic } from "@/lib/events/provider";
 import { queryKeys } from "@/lib/query";
 
 /** Change username (FR-005, B3): the server re-issues the session cookie; the header greeting follows. */
@@ -16,6 +17,7 @@ export function UsernameForm({ onMessage }: { onMessage: (kind: "success" | "err
   const i18n = useI18n();
   const { t } = i18n;
   const client = useQueryClient();
+  useTopic("account"); // account.changed{profile} from another session refreshes the session name
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
 

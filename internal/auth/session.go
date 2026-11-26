@@ -191,6 +191,18 @@ func (m *Manager) Reissue(sessionID string, user *store.AdminUser) (*Issued, err
 // (data-model §5): signature -> exp/aexp -> row exists and is not revoked -> user
 // exists (fail closed) -> token_version matches.
 func (m *Manager) Verify(token string) (*Verified, error) {
+	return m.verify(token, true)
+}
+
+// VerifyNoRenew is Verify for a request that must not keep the session alive (T089 CR-3,
+// Q-2=A, FR-031): a refetch the panel makes on its own because of an event, or a WebSocket
+// handshake. Every check of Verify applies (an expired or revoked session fails the same
+// way); only the sliding renewal and the last-seen touch are skipped.
+func (m *Manager) VerifyNoRenew(token string) (*Verified, error) {
+	return m.verify(token, false)
+}
+
+func (m *Manager) verify(token string, renew bool) (*Verified, error) {
 	c, err := m.parse(token)
 	if err != nil {
 		return nil, ErrSessionExpired
@@ -228,6 +240,9 @@ func (m *Manager) Verify(token string) (*Verified, error) {
 	}
 
 	v := &Verified{User: user, SessionID: row.ID, ExpiresAt: row.ExpiresAt, AbsoluteExpiresAt: row.AbsoluteExpiresAt, TokenVersion: c.Ver}
+	if !renew {
+		return v, nil
+	}
 
 	// Sliding renewal: less than half of the idle window left -> push it forward.
 	if row.ExpiresAt.Sub(now) < m.idle/2 {

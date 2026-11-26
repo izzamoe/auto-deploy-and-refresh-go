@@ -30,7 +30,10 @@ module.exports = defineConfig({
     { name: 'a11y', testMatch: /a11y\.spec\.ts$/, timeout: 120_000 },
     { name: 'visual', testMatch: /visual\.spec\.ts$/, timeout: 120_000 },
     // T104: timing budget (FCP); only run on request (`--project=perf`), never by `make e2e` or the CI.
-    { name: 'perf', testMatch: /perf\.spec\.ts$/, timeout: 120_000 }
+    { name: 'perf', testMatch: /perf\.spec\.ts$/, timeout: 120_000 },
+    // 002: realtime (idle without REST, two tabs in sync, reconnect/focus without refetch,
+    // topic filtering); the idle window alone is 65 s.
+    { name: 'realtime', testMatch: /realtime\.spec\.ts$/, timeout: 300_000 }
   ],
   expect: {
     toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled' }

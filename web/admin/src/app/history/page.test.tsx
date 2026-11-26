@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionGate } from "@/components/shell/SessionGate";
-import { Providers, SESSION, errorBody, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
+import { FakeWebSocket, Providers, SESSION, errorBody, goLive, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
 import type { Handler } from "@/components/shell/testUtils";
 import { resetAuthStateForTests } from "@/lib/api/client";
 import HistoryPage from "./page";
@@ -172,5 +172,27 @@ describe("History page (T090, FR-077, B56, B52)", () => {
     installFetch(routes({ [`GET ${U}/history`]: () => ({ status: 404, body: errorBody("not_found") }) }));
     mount();
     expect(await screen.findByText("Aplikasi untuk riwayat ini tidak ditemukan.")).toBeInTheDocument();
+  });
+});
+
+describe("history on topic jobs (002 T058)", () => {
+  it("refetches only after job events (several -> ONE request), never on focus or by a timer", async () => {
+    const api = installFetch(routes());
+    mount();
+    await screen.findByTestId("history-table");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(FakeWebSocket.instances[0].subscribedTopics()).toEqual(expect.arrayContaining(["jobs", "apps"]));
+    const n = () => historyUrls(api).length;
+    expect(n()).toBe(1);
+    await act(async () => { window.dispatchEvent(new Event("visibilitychange")); await new Promise((r) => setTimeout(r, 50)); });
+    expect(n()).toBe(1);
+    await act(async () => {
+      for (let i = 0; i < 3; i++) {
+        FakeWebSocket.instances[0].emit({ protocol: "3", id: `evt-${10 + i}`, seq: 10 + i, topic: "jobs", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j9", payload: { status: i === 0 ? "pending" : i === 1 ? "in_progress" : "succeeded" } });
+      }
+    });
+    await waitFor(() => expect(n()).toBe(2));
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)); });
+    expect(n()).toBe(2);
   });
 });

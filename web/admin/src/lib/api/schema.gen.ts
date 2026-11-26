@@ -918,6 +918,8 @@ export interface components {
         JobId: string;
         /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
         XAdminRequest: "true";
+        /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+        AdminClientId: string;
         /** @description Jumlah baris; default 100; maks 5000; all dibatasi byte (FR-058) */
         LogLines: string;
     };
@@ -954,6 +956,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -986,6 +990,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -1030,6 +1036,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -1061,6 +1069,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -1092,6 +1102,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -1140,6 +1152,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -1172,6 +1186,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 tokenId: string;
@@ -1222,6 +1238,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -1279,6 +1297,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1320,6 +1340,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1349,6 +1371,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1388,6 +1412,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1431,6 +1457,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1463,6 +1491,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1519,6 +1549,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1584,6 +1616,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1676,6 +1710,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1759,6 +1795,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 appId: components["parameters"]["AppId"];
@@ -1820,6 +1858,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 jobId: components["parameters"]["JobId"];
@@ -1855,6 +1895,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path: {
                 jobId: components["parameters"]["JobId"];
@@ -1934,6 +1976,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -1999,6 +2043,8 @@ export interface operations {
             header?: {
                 /** @description Wajib bernilai true untuk mutasi berbasis cookie (CSRF, FR-011). Tidak diperlukan untuk token API. */
                 "X-Admin-Request"?: components["parameters"]["XAdminRequest"];
+                /** @description BARU (002). clientId dari event hello; disalin ke `origin` event agar tab pelaku tidak me-refetch. Nilai tak valid diabaikan (bukan galat). */
+                "X-Admin-Client"?: components["parameters"]["AdminClientId"];
             };
             path?: never;
             cookie?: never;
@@ -2047,6 +2093,8 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LogText"] & {
                         service: string;
+                        /** @description BARU (002, FR-009). Cursor journald baris terakhir; dipakai `sub logs:system {after}`. */
+                        cursor?: string;
                     };
                 };
             };

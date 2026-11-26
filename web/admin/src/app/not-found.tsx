@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 
@@ -18,7 +18,7 @@ export default function NotFound() {
         <h1 className="mt-2 text-balance text-2xl font-semibold">{t("notfound.title")}</h1>
         <p className="mx-auto mt-2 max-w-[32ch] text-balance text-muted-foreground">{t("notfound.body")}</p>
         <Button asChild size="lg" className="mt-6">
-          <Link href="/">{t("notfound.home")}</Link>
+          <IntentLink href="/">{t("notfound.home")}</IntentLink>
         </Button>
       </main>
     </div>

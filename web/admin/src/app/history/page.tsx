@@ -3,7 +3,7 @@
 import "@/i18n/id/history";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Notice, useNotice } from "@/components/common/Notice";
@@ -12,10 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { ApiError, api, describeError } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { useTopic } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
 
 export const HISTORY_PAGE_SIZE = 20;
+const JOBS_PROGRESS = { progress: true };
 
 function HistoryRoute() {
   const i18n = useI18n();
@@ -28,7 +30,11 @@ function HistoryRoute() {
   const [pageFor, setPageFor] = useState<{ app: string | undefined; page: number }>({ app: appId, page: 1 });
   const page = pageFor.app === appId ? pageFor.page : 1;
 
+  // 002 T058: refetched only when topic jobs says a job changed (debounced), never polled.
+  const jobsFresh = useTopic("jobs", JOBS_PROGRESS);
+  useTopic("apps");
   const history = useQuery({
+    ...liveQueryOptions(jobsFresh),
     queryKey: queryKeys.historyPage(appId, page, HISTORY_PAGE_SIZE),
     queryFn: ({ signal }) => api.listHistory({ appId, page, pageSize: HISTORY_PAGE_SIZE }, { signal }),
     // Keep the previous page visible while paging, but never another app's rows after a filter change.
@@ -57,9 +63,9 @@ function HistoryRoute() {
       {appId && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-accent px-4 py-3 text-sm text-accent-foreground" data-testid="history-filter">
           <span>{t("history.filteredBy", { app: data?.app?.name ?? appId })}</span>
-          <Link href="/history/" className="rounded-pill px-3 py-1 font-medium underline underline-offset-4">
+          <IntentLink href="/history/" className="rounded-pill px-3 py-1 font-medium underline underline-offset-4">
             {t("history.showAll")}
-          </Link>
+          </IntentLink>
         </div>
       )}
 

@@ -3,17 +3,21 @@
 import "@/i18n/id/apps";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useRef } from "react";
 import { AppCard } from "@/components/apps/AppCard";
 import { Notice, useNotice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { announce } from "@/components/common/LiveAnnouncer";
+import { useEventStore, useTopic, useTopicFrames } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
+
+const JOBS_PROGRESS = { progress: true };
 
 function AppsRoute() {
   const i18n = useI18n();
@@ -21,8 +25,21 @@ function AppsRoute() {
   const q = (useSearchParams().get("q") ?? "").trim();
   const { notice, success, error, clear } = useNotice();
 
-  const apps = useQuery({ queryKey: queryKeys.apps, queryFn: ({ signal }) => api.listApps({ signal }) });
+  // 002 (FR-007, SC-005): apps (rows), jobs (live progress, last job), service (systemd state).
+  const appsFresh = useTopic("apps");
+  useTopic("jobs", JOBS_PROGRESS);
+  useTopic("service");
+  const apps = useQuery({ queryKey: queryKeys.apps, queryFn: ({ signal }) => api.listApps({ signal }), ...liveQueryOptions(appsFresh) });
   const all = apps.data?.apps ?? [];
+  // FR-022 (T061): an app added in another session is announced (its card appears by itself).
+  const store = useEventStore();
+  const known = useRef(all);
+  known.current = all;
+  useTopicFrames((f) => {
+    if (f.kind === "app.upserted" && !store.isOwnOrigin(f.origin) && apps.isSuccess && !known.current.some((a) => a.id === f.appId)) {
+      announce(t("live.app.added", { name: f.app.name }));
+    }
+  });
   const needle = q.toLowerCase();
   const shown = needle ? all.filter((a) => [a.name, a.serviceName, a.githubRepo].some((v) => v.toLowerCase().includes(needle))) : all;
   const onMessage = (kind: "success" | "error", text: string) => (kind === "success" ? success(text) : error(text));
@@ -40,10 +57,10 @@ function AppsRoute() {
             {t("common.refresh")}
           </Button>
           <Button asChild>
-            <Link href="/apps/new/">
+            <IntentLink href="/apps/new/">
               <Plus aria-hidden="true" />
               {t("apps.add")}
-            </Link>
+            </IntentLink>
           </Button>
         </div>
       </div>

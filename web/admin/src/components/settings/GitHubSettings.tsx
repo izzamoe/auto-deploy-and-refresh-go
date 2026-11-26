@@ -2,9 +2,9 @@
 
 import "@/i18n/id/settings";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ConfirmDialog, confirmIntent } from "@/components/common/ConfirmDialog";
 import { Notice, useNotice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,22 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { useTopic } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
+
+/** A change made in another session while this form has unsaved input (002 T058, like Q-10=A). */
+export function SettingsConflict({ onReload }: { onReload: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div role="status" data-testid="settings-conflict" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-warning-soft px-4 py-3 text-sm text-warning-soft-foreground">
+      <span>{t("settings.conflict.changed")}</span>
+      <Button type="button" size="sm" variant="outline" onClick={onReload}>
+        {t("settings.conflict.reload")}
+      </Button>
+    </div>
+  );
+}
+
 
 /**
  * GitHub token (B27, FR-029). The server only ever returns a MASKED token; it is shown as
@@ -28,12 +43,27 @@ export function GitHubSettings() {
   const [fieldError, setFieldError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const config = useQuery({ queryKey: queryKeys.github, queryFn: ({ signal }) => api.getGitHub({ signal }), refetchOnWindowFocus: false });
+  const fresh = useTopic("settings");
+  const config = useQuery({ queryKey: queryKeys.github, queryFn: ({ signal }) => api.getGitHub({ signal }), refetchOnWindowFocus: false, ...liveQueryOptions(fresh) });
+
+  // 002 T058: the status follows a change made elsewhere; a token being typed is kept and the
+  // change is announced instead.
+  const seen = useRef(config.data);
+  const [conflict, setConflict] = useState(false);
+  useEffect(() => {
+    if (config.data === seen.current) return;
+    const first = seen.current === undefined;
+    seen.current = config.data;
+    if (!first && token !== "") setConflict(true);
+  }, [config.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = useMutation({
     mutationFn: (body: { token?: string; clear?: boolean }) => api.saveGitHub(body),
     onSuccess: (res, body) => {
-      client.setQueryData(queryKeys.github, { config: res.config });
+      const next = { config: res.config };
+      seen.current = next; // our own save is not a conflict
+      setConflict(false);
+      client.setQueryData(queryKeys.github, next);
       setToken("");
       setConfirmOpen(false);
       success(t(body.clear ? "github.cleared" : "github.saved"));
@@ -65,6 +95,15 @@ export function GitHubSettings() {
       </div>
 
       <Notice notice={notice} onDismiss={clear} />
+      {conflict && (
+        <SettingsConflict
+          onReload={() => {
+            setToken("");
+            setFieldError("");
+            setConflict(false);
+          }}
+        />
+      )}
 
       {config.isPending ? (
         <Skeleton className="h-48 rounded-card" />
@@ -107,7 +146,7 @@ export function GitHubSettings() {
           </div>
 
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-            <Button type="button" variant="destructive" disabled={!cfg?.hasToken || save.isPending} onClick={() => setConfirmOpen(true)}>
+            <Button type="button" variant="destructive" disabled={!cfg?.hasToken || save.isPending} {...confirmIntent} onClick={() => setConfirmOpen(true)}>
               {t("github.clear")}
             </Button>
             <Button type="submit" disabled={save.isPending}>

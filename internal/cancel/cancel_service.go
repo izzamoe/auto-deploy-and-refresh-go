@@ -327,11 +327,16 @@ func (s *CancelService) Checkpoint(jobID string, phase DeployPhase) (CancelCheck
 
 	decision := cancelDecisionForStatus(jobID, status, phase)
 	if decision.TerminalStatus != "" && status == JobStatusCancelRequested {
-		if err := s.markTerminal(jobID, decision.TerminalStatus, decision.Message); err != nil {
+		changed, err := s.markTerminal(jobID, decision.TerminalStatus, decision.Message)
+		if err != nil {
 			return CancelCheckpointDecision{}, err
 		}
 		decision.Status = decision.TerminalStatus
-		s.publishJobStatus(appID, jobID, status, decision.TerminalStatus, decision.Message)
+		// Announced after the UPDATE is committed, and only when it ended the job: a job
+		// that MarkDone ended meanwhile was announced by the coordinator (RV2-5).
+		if changed {
+			s.publishJobStatus(appID, jobID, status, decision.TerminalStatus, decision.Message)
+		}
 	}
 	return decision, nil
 }
@@ -375,14 +380,20 @@ func (s *CancelService) publishJobStatus(appID, jobID, previousStatus, status, m
 	})
 }
 
-func (s *CancelService) markTerminal(jobID, status, message string) error {
-	_, err := s.q.DB().Exec(
+// markTerminal ends a cancel_requested job; changed reports whether the row was still
+// cancel_requested (and is now terminal).
+func (s *CancelService) markTerminal(jobID, status, message string) (changed bool, err error) {
+	res, err := s.q.DB().Exec(
 		`UPDATE deploy_jobs SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'cancel_requested'`,
 		status, message, jobID,
 	)
 	s.q.InvalidateActiveJobsCache()
 	s.notifyCancel() // FR-048: running deploys react at once
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func cancelDecisionForStatus(jobID, status string, phase DeployPhase) CancelCheckpointDecision {

@@ -56,21 +56,67 @@ type Client struct {
 
 	mu    sync.RWMutex
 	token string
+
+	// releases caches ListReleases per owner/repo (specs/002 FR-010, research.md
+	// section 9): served from memory for releasesTTL, then revalidated with
+	// If-None-Match; a 304 keeps the cached list.
+	cacheMu  sync.Mutex
+	releases map[string]*releaseCacheEntry
+	now      func() time.Time
+}
+
+// releasesTTL is how long a fetched release list is served without asking GitHub.
+const releasesTTL = 60 * time.Second
+
+// maxReleaseCacheEntries bounds the cache (one entry per repo; repos <= apps).
+const maxReleaseCacheEntries = 256
+
+type releaseCacheEntry struct {
+	etag      string
+	releases  []Release
+	fetchedAt time.Time
+	expired   bool
 }
 
 // NewClient creates a Client. token may be empty, meaning requests are made
 // unauthenticated (subject to GitHub's lower rate limit for anonymous
 // callers) — that is fine and expected for public repos.
 func NewClient(token string) *Client {
-	return &Client{httpClient: &http.Client{Timeout: requestTimeout}, token: token}
+	return &Client{httpClient: &http.Client{Timeout: requestTimeout}, token: token, releases: map[string]*releaseCacheEntry{}, now: time.Now}
 }
 
 // SetToken replaces the token used to authenticate subsequent requests. An
 // empty token switches back to unauthenticated calls. Safe for concurrent use.
 func (c *Client) SetToken(token string) {
 	c.mu.Lock()
+	changed := c.token != token
 	c.token = token
 	c.mu.Unlock()
+	if changed {
+		// Another token may see other repos (or none): nothing cached under the old one
+		// is served under the new one.
+		c.cacheMu.Lock()
+		c.releases = map[string]*releaseCacheEntry{}
+		c.cacheMu.Unlock()
+	}
+}
+
+// ExpireReleases makes the next ListReleases of owner/repo ask GitHub again (with
+// If-None-Match, so an unchanged list costs a 304). Called when a new job of an app with
+// this repo was created: a new release may be the reason.
+func (c *Client) ExpireReleases(owner, repo string) {
+	c.cacheMu.Lock()
+	if e := c.releases[owner+"/"+repo]; e != nil {
+		e.expired = true
+	}
+	c.cacheMu.Unlock()
+}
+
+func (c *Client) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 // currentToken returns the token under a read lock.
@@ -104,6 +150,18 @@ type releaseJSON struct {
 // recent releases first by default, which is sufficient for tag selection.
 func (c *Client) ListReleases(ctx context.Context, owner, repo string) ([]Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases", apiBaseURL, owner, repo)
+	key := owner + "/" + repo
+	var etag string
+	c.cacheMu.Lock()
+	if e := c.releases[key]; e != nil {
+		if !e.expired && c.clock().Sub(e.fetchedAt) < releasesTTL {
+			out := cloneReleases(e.releases)
+			c.cacheMu.Unlock()
+			return out, nil
+		}
+		etag = e.etag
+	}
+	c.cacheMu.Unlock()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -111,8 +169,12 @@ func (c *Client) ListReleases(ctx context.Context, owner, repo string) ([]Releas
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if token := c.currentToken(); token != "" {
+	token := c.currentToken()
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -121,6 +183,15 @@ func (c *Client) ListReleases(ctx context.Context, owner, repo string) ([]Releas
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotModified && etag != "" {
+		c.cacheMu.Lock()
+		defer c.cacheMu.Unlock()
+		if e := c.releases[key]; e != nil && e.etag == etag {
+			e.fetchedAt, e.expired = c.clock(), false
+			return cloneReleases(e.releases), nil
+		}
+		return nil, &StatusError{StatusCode: resp.StatusCode, Op: fmt.Sprintf("list releases for %s/%s", owner, repo)}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &StatusError{StatusCode: resp.StatusCode, Op: fmt.Sprintf("list releases for %s/%s", owner, repo)}
 	}
@@ -138,7 +209,36 @@ func (c *Client) ListReleases(ctx context.Context, owner, repo string) ([]Releas
 		}
 		releases = append(releases, Release{TagName: r.TagName, Assets: assets})
 	}
-	return releases, nil
+	if c.currentToken() == token { // not cached across a token change in flight
+		c.storeReleases(key, resp.Header.Get("ETag"), releases)
+	}
+	return cloneReleases(releases), nil
+}
+
+func (c *Client) storeReleases(key, etag string, releases []Release) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.releases == nil {
+		c.releases = map[string]*releaseCacheEntry{}
+	}
+	if _, ok := c.releases[key]; !ok && len(c.releases) >= maxReleaseCacheEntries {
+		var oldest string
+		for k, e := range c.releases {
+			if oldest == "" || e.fetchedAt.Before(c.releases[oldest].fetchedAt) {
+				oldest = k
+			}
+		}
+		delete(c.releases, oldest)
+	}
+	c.releases[key] = &releaseCacheEntry{etag: etag, releases: cloneReleases(releases), fetchedAt: c.clock()}
+}
+
+func cloneReleases(in []Release) []Release {
+	out := make([]Release, len(in))
+	for i, r := range in {
+		out[i] = Release{TagName: r.TagName, Assets: append([]string(nil), r.Assets...)}
+	}
+	return out
 }
 
 // FilterReleasesWithAsset returns only the releases whose Assets contain

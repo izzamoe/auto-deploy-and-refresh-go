@@ -8,7 +8,7 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { PropsWithChildren } from "react";
 import { idCore } from "./id/core";
-import { DICTIONARIES, registerMessages } from "./registry";
+import { DICTIONARIES, englishMissing, loadEnglish, registerEnLoader, registerMessages, setEnglishWanted, subscribeDictionaries } from "./registry";
 import type { Dictionary, Locale } from "./registry";
 import type { MessageKey } from "./id";
 
@@ -22,18 +22,20 @@ export const LOCALE_STORAGE_KEY = "ad.locale";
 
 // `id` (the default) starts with the CORE messages only; every page/component imports the
 // namespace module of the text it uses (see i18n/id/*.ts), so a route ships just its own
-// text. `en` is one separate chunk fetched only when the English UI is needed. Both keep the
+// text. `en` follows the same namespaces (002 T072, FR-029): each namespace module registers the
+// loader of its en/<ns>.ts, fetched only when the English UI is needed, so an English user
+// downloads the English text of the routes they open, not of the whole admin. Both keep the
 // initial JS (Q-20) small.
 registerMessages("id", idCore);
+registerEnLoader("core", () => import("./en/core").then((m) => m.enCore), idCore);
 
 export function registerDictionary(locale: Locale, dict: Dictionary) {
   registerMessages(locale, dict);
 }
 
-/** Resolves once the dictionary of `locale` is available (no-op when already loaded). */
+/** Resolves once the messages of `locale` of every namespace imported so far are available. */
 export async function loadDictionary(locale: Locale): Promise<void> {
-  if (locale === "en" ? DICTIONARIES.en && Object.keys(DICTIONARIES.en).length > 0 : DICTIONARIES[locale]) return;
-  if (locale === "en") registerDictionary("en", (await import("./en")).en);
+  if (locale === "en") await loadEnglish();
 }
 
 const INTL_TAG: Record<Locale, string> = { id: "id-ID", en: "en-GB" };
@@ -146,11 +148,15 @@ export function I18nProvider({ children }: PropsWithChildren) {
   // Same value on the server and on the first client render: no hydration mismatch.
   const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
   const [ready, setReady] = useState(false);
+  // Bumped when the English part of a namespace imported later (another route) has arrived.
+  const [version, setVersion] = useState(0);
+  useEffect(() => subscribeDictionaries(() => setVersion((v) => v + 1)), []);
 
   useEffect(() => {
     const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
     const target = detectLocale(readStored(), languages);
-    if (DICTIONARIES[target]) {
+    setEnglishWanted(target === "en");
+    if (target !== "en" || !englishMissing()) {
       setLocaleState(target); // already loaded: apply in the same pass
       setReady(true);
       return;
@@ -173,7 +179,8 @@ export function I18nProvider({ children }: PropsWithChildren) {
   }, [locale]);
 
   const setLocale = useCallback((next: Locale) => {
-    if (DICTIONARIES[next]) setLocaleState(next);
+    setEnglishWanted(next === "en");
+    if (next !== "en" || !englishMissing()) setLocaleState(next);
     else void loadDictionary(next).then(() => setLocaleState(next)).catch(() => undefined);
     try {
       window.localStorage.setItem(LOCALE_STORAGE_KEY, next);
@@ -182,6 +189,8 @@ export function I18nProvider({ children }: PropsWithChildren) {
     }
   }, []);
 
-  const value = useMemo(() => build(locale, ready, setLocale), [locale, ready, setLocale]);
+  // `version` is a dependency on purpose: a late English namespace gives consumers a new value
+  // (t() reads the registry at call time), so they re-render with the English text.
+  const value = useMemo(() => build(locale, ready, setLocale), [locale, ready, setLocale, version]); // eslint-disable-line react-hooks/exhaustive-deps
   return createElement(I18nContext.Provider, { value }, children);
 }

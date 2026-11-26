@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/izzamoe/auto-deploy/internal/github"
 	"github.com/izzamoe/auto-deploy/internal/store"
@@ -50,6 +51,54 @@ type releaseLister interface {
 type ReleasesHandler struct {
 	store  *store.AppStore
 	lister releaseLister
+	// queue tells whether an app has a job newer than the last one this handler saw: then
+	// the cached release list of its repo is expired (specs/002 FR-010).
+	queue   *store.DeployQueue
+	seenMu  sync.Mutex
+	seenJob map[string]string // appID -> newest job id when its releases were last served
+}
+
+// releaseExpirer is implemented by a lister with a cache (*github.Client).
+type releaseExpirer interface {
+	ExpireReleases(owner, repo string)
+}
+
+// SetDeployQueue lets the handler expire the cached releases of an app's repo once a new
+// job of the app was created (a new release is the usual reason for one).
+func (h *ReleasesHandler) SetDeployQueue(q *store.DeployQueue) {
+	h.seenMu.Lock()
+	h.queue = q
+	h.seenMu.Unlock()
+}
+
+// expireIfNewJob expires the cached release list of the app's repo when the app got a job
+// since the previous request for its releases.
+func (h *ReleasesHandler) expireIfNewJob(appID, owner, repo string) {
+	exp, ok := h.lister.(releaseExpirer)
+	if !ok {
+		return
+	}
+	h.seenMu.Lock()
+	q := h.queue
+	h.seenMu.Unlock()
+	if q == nil {
+		return
+	}
+	jobs, err := q.ListHistoryPaged(appID, 1, 0)
+	if err != nil || len(jobs) == 0 {
+		return
+	}
+	newest := jobs[0].ID
+	h.seenMu.Lock()
+	if h.seenJob == nil {
+		h.seenJob = map[string]string{}
+	}
+	prev, seen := h.seenJob[appID]
+	h.seenJob[appID] = newest
+	h.seenMu.Unlock()
+	if !seen || prev != newest {
+		exp.ExpireReleases(owner, repo)
+	}
 }
 
 func NewReleasesHandler(store *store.AppStore, lister releaseLister) *ReleasesHandler {
@@ -71,6 +120,7 @@ func (h *ReleasesHandler) ListAppReleasesHertz(ctx context.Context, c *app.Reque
 		return
 	}
 
+	h.expireIfNewJob(appRecord.ID, owner, repo)
 	releases, err := h.lister.ListReleases(ctx, owner, repo)
 	if err != nil {
 		// Deliberately do not include err.Error() in the response: it may

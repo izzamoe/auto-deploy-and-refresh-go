@@ -212,20 +212,33 @@ test.describe('live events', () => {
     await expect.poll(() => sendToPage !== undefined).toBe(true);
     const badge = card.getByTestId('progress-badge');
     await expect(badge).toContainText(/Failed|Succeeded/, { timeout: 45_000 }); // the seeded job settled
-    const original = await badge.textContent();
+    // The terminal word lands a few ms before the rest of the badge (e.g. "Detail: failed"):
+    // read the baseline only once two reads 300 ms apart are identical.
+    let original = await badge.textContent();
+    await expect
+      .poll(async () => {
+        const first = await badge.textContent();
+        await page.waitForTimeout(300);
+        const second = await badge.textContent();
+        original = second;
+        return first === second;
+      })
+      .toBe(true);
 
     sendToPage!('not-json-at-all');
-    sendToPage!('{"protocol":"2"');
+    sendToPage!('{"protocol":"3"');
     await page.waitForTimeout(300);
     await expect(badge).toHaveText(original ?? '');
 
     const ts = new Date().toISOString();
-    sendToPage!(JSON.stringify({ v: '2', t: 'p', i: 'evt-900', ts, a: app.id, j: jobId, ph: 'downloading', st: 'in_progress', pct: 50, db: 524288, tb: 1048576, bps: 524288, msg: '' }));
+    // Protocol 3 (002 T050, RV-2 d): compact progress `v:"3"`; job_status is a topic event with
+    // seq/topic (a seq far above the server's so the per-topic dedup accepts it).
+    sendToPage!(JSON.stringify({ v: '3', t: 'p', i: 'evt-900', ts, a: app.id, j: jobId, ph: 'downloading', st: 'in_progress', pct: 50, db: 524288, tb: 1048576, bps: 524288, msg: '' }));
     await expect(card.getByTestId('progress-live')).toBeVisible();
     await expect(card).toContainText('Downloading the release artifact');
     await expect(card).toContainText('512');
 
-    sendToPage!(JSON.stringify({ protocol: '2', id: 'evt-901', type: 'job_status', ts: new Date().toISOString(), appId: app.id, jobId, payload: { status: 'failed', previousStatus: 'in_progress', tag: 'v0.0.0-synthetic' } }));
+    sendToPage!(JSON.stringify({ protocol: '3', id: 'evt-901', seq: 2_000_000_000, topic: 'jobs', type: 'job_status', ts: new Date().toISOString(), appId: app.id, jobId, payload: { status: 'failed', previousStatus: 'in_progress', tag: 'v0.0.0-synthetic' } }));
     await expect(card.getByTestId('progress-live')).toHaveCount(0);
   });
 });

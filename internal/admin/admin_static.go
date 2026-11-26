@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -10,7 +12,9 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -33,6 +37,9 @@ const (
 	indexDocument          = "index.html"
 	contentTypeTextPlain   = "text/plain; charset=utf-8"
 	contentTypeOctetStream = "application/octet-stream"
+	// gzipMinSize: smaller text files are sent as is (the gzip header and a second
+	// representation are not worth it).
+	gzipMinSize = 1024
 )
 
 // staticEntry is one embedded file, indexed once at start (D1, D4).
@@ -41,8 +48,14 @@ type staticEntry struct {
 	etag        string
 	contentType string
 	// csp is set for HTML documents only: script-src lists the sha256 of every inline
-	// script of THAT document (D4), never 'unsafe-inline'.
+	// script of THAT document (D4), never 'unsafe-inline'. Computed from the identity body,
+	// so it is the same for both representations.
 	csp string
+	// gz is the gzip representation (002 T074, D9, FR-030), computed once at index time for
+	// text files larger than gzipMinSize when it is smaller; nil otherwise. It has its own
+	// validator gzEtag (same value + "-gz"): another representation, another ETag.
+	gz     []byte
+	gzEtag string
 }
 
 // StaticHandler serves the embedded Next.js export under /admin/ (replaces the Vite SPA
@@ -75,6 +88,12 @@ func NewStaticHandler(fsys fs.FS) (*StaticHandler, error) {
 		if strings.HasSuffix(p, ".html") {
 			e.csp = BuildCSP(InlineScriptHashes(body))
 		}
+		if compressible(p) && len(body) > gzipMinSize {
+			if gz, err := gzipBytes(body); err == nil && len(gz) < len(body) {
+				e.gz = gz
+				e.gzEtag = strings.TrimSuffix(e.etag, `"`) + `-gz"`
+			}
+		}
 		h.files[p] = e
 		return nil
 	})
@@ -82,6 +101,70 @@ func NewStaticHandler(fsys fs.FS) (*StaticHandler, error) {
 		return nil, err
 	}
 	return h, nil
+}
+
+// compressible reports whether a file is text that gzip shrinks (fonts and images are
+// already compressed; .svg is XML text).
+func compressible(name string) bool {
+	switch path.Ext(name) {
+	case ".html", ".js", ".mjs", ".css", ".txt", ".json", ".svg", ".map", ".xml", ".webmanifest":
+		return true
+	}
+	return false
+}
+
+func gzipBytes(body []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := zw.Write(body); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// acceptsGzip reads Accept-Encoding (RFC 9110 §12.5.3): gzip (or x-gzip, or `*`) with a
+// q-value above 0. An explicit gzip;q=0 refuses it even when `*` is accepted.
+func acceptsGzip(header string) bool {
+	star := false
+	for _, part := range strings.Split(header, ",") {
+		fields := strings.Split(part, ";")
+		coding := strings.ToLower(strings.TrimSpace(fields[0]))
+		q := 1.0
+		for _, param := range fields[1:] {
+			k, v, ok := strings.Cut(strings.TrimSpace(param), "=")
+			if ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+				if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					q = f
+				}
+			}
+		}
+		switch coding {
+		case "gzip", "x-gzip":
+			return q > 0
+		case "*":
+			star = q > 0
+		}
+	}
+	return star
+}
+
+// stats reports how many files were indexed and their total and gzip sizes (startup log).
+func (h *StaticHandler) stats() (files, gzipped, bytesTotal, gzBytes int) {
+	for _, e := range h.files {
+		files++
+		bytesTotal += len(e.body)
+		if e.gz != nil {
+			gzipped++
+			gzBytes += len(e.gz)
+		}
+	}
+	return
 }
 
 // Built reports whether a UI export is present (an index.html exists).
@@ -124,9 +207,14 @@ func RegisterAdminStaticRoutesHertz(h *server.Hertz, auth app.HandlerFunc) {
 	}
 	var sh *StaticHandler
 	if sub != nil {
+		start := time.Now()
 		if sh, err = NewStaticHandler(sub); err != nil {
 			slog.Error("failed to index the embedded admin UI", "err", err)
 			sh = nil
+		} else {
+			// T074: the gzip representations are computed here, once; log what it cost.
+			files, gzipped, total, gz := sh.stats()
+			slog.Info("admin UI indexed", "files", files, "gzipped", gzipped, "bytes", total, "gzip_bytes", gz, "duration", time.Since(start).String())
 		}
 	}
 	if sh == nil {
@@ -223,14 +311,31 @@ func (h *StaticHandler) respond(c *app.RequestContext, rel string, e *staticEntr
 		// the hashes of this document's inline scripts.
 		hdr.Set("Content-Security-Policy", e.csp)
 	}
+	// T074 (FR-030): the gzip representation when the client accepts it. Both
+	// representations of such a file vary on Accept-Encoding (shared caches, Cloudflare).
+	body, etag := e.body, e.etag
+	if e.gz != nil {
+		hdr.Set("Vary", "Accept-Encoding")
+		if acceptsGzip(string(c.GetHeader("Accept-Encoding"))) {
+			body, etag = e.gz, e.gzEtag
+			hdr.Set("Content-Encoding", "gzip")
+		}
+	}
 	if status == http.StatusOK && !immutable {
-		hdr.Set("ETag", e.etag)
-		if etagMatches(string(c.GetHeader("If-None-Match")), e.etag) {
+		hdr.Set("ETag", etag)
+		if etagMatches(string(c.GetHeader("If-None-Match")), etag) {
 			c.SetStatusCode(http.StatusNotModified)
 			return
 		}
 	}
-	c.Data(status, e.contentType, e.body)
+	if c.Request.Header.IsHead() {
+		// HEAD: the headers of the selected representation (its length), no body.
+		c.SetStatusCode(status)
+		hdr.SetContentLength(len(body))
+		c.Response.SkipBody = true
+		return
+	}
+	c.Data(status, e.contentType, body)
 }
 
 // etagMatches implements If-None-Match weak comparison for one validator.

@@ -3,13 +3,14 @@
 import "@/i18n/id/dashboard";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, HelpCircle } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useId } from "react";
 import { useSession } from "@/components/shell/SessionGate";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { useTopic } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { CARD_TITLE } from "@/components/common/cardStyles";
 
@@ -35,8 +36,9 @@ export function SecurityCard() {
   const { t } = useI18n();
   const id = useId();
   const session = useSession();
-  const tokens = useQuery({ queryKey: queryKeys.tokens, queryFn: ({ signal }) => api.listTokens({ signal }) });
-  const github = useQuery({ queryKey: queryKeys.github, queryFn: ({ signal }) => api.getGitHub({ signal }) });
+  // Kept current by topics account (tokens) and settings (GitHub): no refetch on focus while live.
+  const tokens = useQuery({ queryKey: queryKeys.tokens, queryFn: ({ signal }) => api.listTokens({ signal }), ...liveQueryOptions(useTopic("account")) });
+  const github = useQuery({ queryKey: queryKeys.github, queryFn: ({ signal }) => api.getGitHub({ signal }), ...liveQueryOptions(useTopic("settings")) });
 
   const activeTokens = tokens.data ? tokens.data.tokens.filter((tok) => !tok.revokedAt).length : undefined;
   const https = typeof window !== "undefined" && window.location.protocol === "https:";
@@ -59,7 +61,7 @@ export function SecurityCard() {
         <Row state={https ? "ok" : "warn"} text={https ? t("dashboard.security.cookie") : t("dashboard.security.cookieNo")} />
       </ul>
       <Button asChild variant="outline" className="mt-auto w-full">
-        <Link href="/account/">{t("dashboard.security.manage")}</Link>
+        <IntentLink href="/account/">{t("dashboard.security.manage")}</IntentLink>
       </Button>
     </section>
   );

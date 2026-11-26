@@ -1,6 +1,6 @@
 // 'history' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: namespaces.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idHistory = {
   "history.title": "Riwayat",
@@ -42,3 +42,5 @@ export const idHistory = {
 } as const;
 
 registerMessages("id", idHistory);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("history", () => import("../en/history").then((m) => m.enHistory), idHistory);

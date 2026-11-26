@@ -1,20 +1,38 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useI18n } from "@/i18n";
-import { api } from "@/lib/api/client";
-import { useConnection } from "@/lib/events/provider";
+import { LiveAnnouncer, announce } from "@/components/common/LiveAnnouncer";
+import { useConnection, useEventsFallback, useSummary, useTopic } from "@/lib/events/provider";
+import { indicatorOf } from "@/lib/events/store";
+import type { ConnectionIndicator } from "@/lib/events/store";
 import { LOGO_SRC } from "@/lib/paths";
-import { queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { NotificationsPanel } from "./NotificationsPanel";
 import { useSession } from "./SessionGate";
 
-/** Greeting with live counts, app search and the notification bell (plan §E). */
+const CONNECTION_LABEL = {
+  live: "shell.connection.online",
+  reconnecting: "shell.connection.reconnecting",
+  resyncing: "shell.connection.resyncing",
+  offline: "shell.connection.offline",
+} as const satisfies Record<ConnectionIndicator, string>;
+
+const CONNECTION_DOT: Record<ConnectionIndicator, string> = {
+  live: "bg-primary",
+  reconnecting: "bg-info-soft-foreground motion-safe:animate-pulse",
+  resyncing: "bg-info-soft-foreground",
+  offline: "bg-muted-foreground/60",
+};
+
+/**
+ * Greeting with live counts, app search and the notification bell (plan §E). The counts come
+ * from topic `summary` (state in the subscribed ack, then pushed): no /stats request, no
+ * polling (002 FR-001, FR-002).
+ */
 export function Header() {
   const { t } = useI18n();
   const session = useSession();
@@ -22,11 +40,8 @@ export function Header() {
   const connection = useConnection();
   const [q, setQ] = useState("");
 
-  const stats = useQuery({
-    queryKey: queryKeys.stats,
-    queryFn: ({ signal }) => api.getStats({}, { signal }),
-    refetchInterval: 30_000,
-  });
+  useTopic("summary");
+  const summary = useSummary();
 
   function search(e: FormEvent) {
     e.preventDefault();
@@ -34,7 +49,18 @@ export function Header() {
     router.push(term ? `/apps/?q=${encodeURIComponent(term)}` : "/apps/");
   }
 
-  const online = connection.status === "open";
+  // FR-024: four states, as text (not colour alone) and as `data-connection` (Playwright).
+  const indicator = indicatorOf(connection.status);
+  const label = t(CONNECTION_LABEL[indicator]);
+
+  // FR-022: say it (politely) when live updates stop for a while, and when they are back.
+  const fallback = useEventsFallback();
+  const wasFallback = useRef(false);
+  useEffect(() => {
+    if (fallback && !wasFallback.current) announce(t("live.connection.lost"));
+    else if (!fallback && wasFallback.current) announce(t("live.connection.back"));
+    wasFallback.current = fallback;
+  }, [fallback]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <header className="flex flex-wrap items-center gap-x-5 gap-y-3 pb-6">
@@ -44,11 +70,7 @@ export function Header() {
           {t("shell.greeting", { name: session.username })}
         </p>
         <p className="text-sm text-muted-foreground" data-testid="subtitle">
-          {stats.data
-            ? t("shell.subtitle", { active: stats.data.apps.enabled, running: stats.data.active.running })
-            : stats.isError
-              ? t("shell.stats.error")
-              : t("common.loading")}
+          {summary ? t("shell.subtitle", { active: summary.appsEnabled, running: summary.running }) : t("shell.summary.pending")}
         </p>
       </div>
 
@@ -70,11 +92,12 @@ export function Header() {
         </button>
       </form>
 
-      <span role="status" title={online ? t("shell.connection.online") : t("shell.connection.offline")} className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <span aria-hidden="true" className={cn("inline-flex size-2.5 rounded-full", online ? "bg-primary" : "bg-muted-foreground/60")} />
-        <span className="sr-only xl:not-sr-only">{online ? t("shell.connection.online") : t("shell.connection.offline")}</span>
+      <span role="status" title={label} data-connection={indicator} data-testid="connection-status" className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span aria-hidden="true" className={cn("inline-flex size-2.5 rounded-full", CONNECTION_DOT[indicator])} />
+        <span className="sr-only xl:not-sr-only">{label}</span>
       </span>
       <NotificationsPanel />
+      <LiveAnnouncer />
     </header>
   );
 }

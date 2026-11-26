@@ -3,22 +3,25 @@
 import "@/i18n/id/apps";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import Link from "next/link";
-import { useState } from "react";
+import { IntentLink } from "@/components/common/IntentLink";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog, confirmIntent } from "@/components/common/ConfirmDialog";
+import { renderNothing } from "@/components/common/lazy";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
 import { effectiveStatus } from "@/lib/events/store";
-import { useJobProgress } from "@/lib/events/provider";
-import { invalidateAfterJob, queryKeys } from "@/lib/query";
+import { announce } from "@/components/common/LiveAnnouncer";
+import type { MessageKey } from "@/i18n";
+import { useEventStore, useEventsFresh, useJobProgress, useServiceState, useTopicFrames } from "@/lib/events/provider";
+import { invalidateAfterJob, queryKeys, removeAppFromCache, upsertAppInCache } from "@/lib/query";
 import { CARD_TITLE } from "@/components/common/cardStyles";
 import { cn } from "@/lib/utils";
 import { ProgressBadge } from "./ProgressBadge";
 import { ServiceControls } from "./ServiceControls";
 
-const DeployDialog = dynamic(() => import("./DeployDialog").then((m) => m.DeployDialog), { ssr: false });
+const DeployDialog = dynamic(() => import("./DeployDialog").then((m) => m.DeployDialog).catch(renderNothing), { ssr: false });
 
 const ACTIVE = new Set(["pending", "in_progress", "cancel_requested"]);
 
@@ -34,6 +37,28 @@ export function AppCard({ app, onMessage }: Props) {
   const { t, formatRelative } = i18n;
   const client = useQueryClient();
   const live = useJobProgress(app.lastJobId);
+  const fresh = useEventsFresh();
+
+  // FR-022: changes of THIS app made in another session are announced politely (T061).
+  const store = useEventStore();
+  const service = useServiceState(app.id);
+  const shown = useRef({ enabled: app.enabled, service });
+  shown.current = { enabled: app.enabled, service };
+  useTopicFrames((f) => {
+    if (!("appId" in f) || f.appId !== app.id) return;
+    // The ref follows every frame too: two quick events must compare with each other, not with
+    // the last render (the cache notifies its observers asynchronously).
+    const before = shown.current;
+    if (f.kind === "service.status") {
+      shown.current = { ...before, service: f.state };
+      if (f.state !== before.service) announce(t("live.service", { name: app.name, state: t(`apps.service.state.${f.state}` as MessageKey) }));
+      return;
+    }
+    if (f.kind === "app.upserted") shown.current = { ...before, enabled: f.app.enabled };
+    if (store.isOwnOrigin(f.origin)) return; // this tab did it and already said so
+    if (f.kind === "app.upserted" && f.app.enabled !== before.enabled) announce(t(f.app.enabled ? "live.app.enabled" : "live.app.disabled", { name: f.app.name }));
+    else if (f.kind === "app.deleted") announce(t("live.app.deleted", { name: app.name }));
+  });
   const status = effectiveStatus(app.lastJobStatus, app.lastDeployTime, live);
   const active = status !== undefined && ACTIVE.has(status);
 
@@ -46,9 +71,9 @@ export function AppCard({ app, onMessage }: Props) {
 
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.toggleApp(app.id, enabled),
-    onSuccess: (_r, enabled) => {
+    onSuccess: (res, enabled) => {
       onMessage("success", t(enabled ? "apps.enabled" : "apps.disabled"));
-      void client.invalidateQueries({ queryKey: queryKeys.apps });
+      upsertAppInCache(client, res.app); // the response is the new row: no refetch (002)
     },
     onError: fail,
   });
@@ -57,8 +82,8 @@ export function AppCard({ app, onMessage }: Props) {
     onSuccess: () => {
       onMessage("success", t("apps.delete.done"));
       setDeleteOpen(false);
-      void client.invalidateQueries({ queryKey: queryKeys.apps });
-      void client.invalidateQueries({ queryKey: queryKeys.stats });
+      removeAppFromCache(client, app.id);
+      void client.invalidateQueries({ queryKey: queryKeys.stats, refetchType: "none" });
     },
     onError: (err) => {
       setDeleteOpen(false);
@@ -70,7 +95,7 @@ export function AppCard({ app, onMessage }: Props) {
     onSuccess: () => {
       onMessage("success", t("apps.cancel.done"));
       setCancelOpen(false);
-      invalidateAfterJob(client, app.id);
+      if (!fresh) invalidateAfterJob(client, app.id); // live: cancel_requested / job_status update the card
     },
     onError: (err) => {
       setCancelOpen(false);
@@ -133,20 +158,20 @@ export function AppCard({ app, onMessage }: Props) {
           </Button>
         )}
         <Button asChild variant="outline" size="sm">
-          <Link href={`/apps/edit/?id=${encodeURIComponent(app.id)}`}>{t("apps.edit")}</Link>
+          <IntentLink href={`/apps/edit/?id=${encodeURIComponent(app.id)}`}>{t("apps.edit")}</IntentLink>
         </Button>
         <Button asChild variant="outline" size="sm">
-          <Link href={`/history/?appId=${encodeURIComponent(app.id)}`}>{t("apps.history")}</Link>
+          <IntentLink href={`/history/?appId=${encodeURIComponent(app.id)}`}>{t("apps.history")}</IntentLink>
         </Button>
         <Button type="button" variant="secondary" size="sm" disabled={toggle.isPending} onClick={() => toggle.mutate(!app.enabled)}>
           {app.enabled ? t("apps.disable") : t("apps.enable")}
         </Button>
         {active && (
-          <Button type="button" variant="outline" size="sm" onClick={() => setCancelOpen(true)}>
+          <Button type="button" variant="outline" size="sm" {...confirmIntent} onClick={() => setCancelOpen(true)}>
             {t("apps.cancelDeploy")}
           </Button>
         )}
-        <Button type="button" variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+        <Button type="button" variant="destructive" size="sm" {...confirmIntent} onClick={() => setDeleteOpen(true)}>
           {t("common.delete")}
         </Button>
       </div>
@@ -155,47 +180,32 @@ export function AppCard({ app, onMessage }: Props) {
 
       {deployOpen && <DeployDialog appId={app.id} appName={app.name} open onOpenChange={setDeployOpen} onQueued={(tag) => onMessage("success", t("apps.deployDialog.queued", { tag }))} />}
 
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="rounded-card">
-          <DialogHeader>
-            <DialogTitle>{t("apps.delete.title")}</DialogTitle>
-            <DialogDescription>{t("apps.delete.body", { name: app.name })}</DialogDescription>
-          </DialogHeader>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={removeUnit} onChange={(e) => setRemoveUnit(e.target.checked)} className="size-4 accent-primary" />
-            {t("apps.delete.removeUnit")}
-          </label>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                {t("apps.delete.keep")}
-              </Button>
-            </DialogClose>
-            <Button type="button" variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>
-              {t("apps.delete.confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={t("apps.delete.title")}
+        body={t("apps.delete.body", { name: app.name })}
+        cancelLabel={t("apps.delete.keep")}
+        confirmLabel={t("apps.delete.confirm")}
+        busy={remove.isPending}
+        onConfirm={() => remove.mutate()}
+      >
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={removeUnit} onChange={(e) => setRemoveUnit(e.target.checked)} className="size-4 accent-primary" />
+          {t("apps.delete.removeUnit")}
+        </label>
+      </ConfirmDialog>
 
-      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <DialogContent className="rounded-card">
-          <DialogHeader>
-            <DialogTitle>{t("apps.cancel.title")}</DialogTitle>
-            <DialogDescription>{t("apps.cancel.body", { name: app.name })}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                {t("apps.cancel.keep")}
-              </Button>
-            </DialogClose>
-            <Button type="button" variant="destructive" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
-              {t("apps.cancel.confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        title={t("apps.cancel.title")}
+        body={t("apps.cancel.body", { name: app.name })}
+        cancelLabel={t("apps.cancel.keep")}
+        confirmLabel={t("apps.cancel.confirm")}
+        busy={cancel.isPending}
+        onConfirm={() => cancel.mutate()}
+      />
     </article>
   );
 }

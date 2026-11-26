@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -30,6 +31,7 @@ type GitHubConfigHandler struct {
 	envToken string
 
 	mu sync.Mutex
+	eventPublisher
 }
 
 // NewGitHubConfigHandler creates a handler bound to cfgStore and client.
@@ -150,6 +152,8 @@ func (h *GitHubConfigHandler) SaveGitHubConfigHertz(ctx context.Context, c *app.
 	}
 
 	h.apply(token)
+	// Other tabs refetch the section; the token is never sent (FR-005).
+	h.publish(c, events.SettingsChanged(events.SectionGitHub))
 
 	c.JSON(consts.StatusOK, map[string]any{"status": "updated", "config": h.responseFor(token)})
 }

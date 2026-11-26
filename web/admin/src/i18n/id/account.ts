@@ -1,6 +1,6 @@
 // 'account' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: namespaces.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idAccount = {
   "account.page.title": "Akun",
@@ -50,3 +50,5 @@ export const idAccount = {
 } as const;
 
 registerMessages("id", idAccount);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("account", () => import("../en/account").then((m) => m.enAccount), idAccount);

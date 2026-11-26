@@ -29,6 +29,15 @@ var (
 		cmd := exec.CommandContext(ctx, "systemctl", cmdArgs...)
 		return cmd.CombinedOutput()
 	}
+	// runSystemctlQuery runs a read-only systemctl query and returns ONLY its standard output
+	// (T089 CR-5): the service watcher maps the lines of `is-active -- u1 … uN` to apps by
+	// position, so a warning on stderr must never be read as a line of the answer.
+	runSystemctlQuery = func(name string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), systemctlTimeout)
+		defer cancel()
+		cmdArgs := append([]string{name}, args...)
+		return exec.CommandContext(ctx, "systemctl", cmdArgs...).Output()
+	}
 	renameFile             = os.Rename
 	chmodFile              = os.Chmod
 	deployHealthCheckSleep = time.Sleep
@@ -114,6 +123,42 @@ func CaptureServiceLogsLines(serviceName string, lines int) string {
 // one-line marker). FR-058: live log responses are bounded in bytes AND lines.
 func CaptureServiceLogsBounded(serviceName string, lines, maxBytes int) (log string, truncated bool) {
 	return store.CapLogTail(CaptureServiceLogsLines(serviceName, lines), maxBytes)
+}
+
+// journalCursorPrefix starts the line `journalctl --show-cursor` prints after the entries.
+const journalCursorPrefix = "-- cursor: "
+
+// CaptureServiceLogsWithCursor is CaptureServiceLogsBounded plus the journal cursor of the
+// last entry (`--show-cursor`, specs/002 FR-009): the output keeps journalctl's default text
+// format; the trailing "-- cursor: …" line is taken out of the log and returned as cursor
+// ("" when journalctl printed none). The stream of logs:system continues after it.
+func CaptureServiceLogsWithCursor(serviceName string, lines, maxBytes int) (log string, truncated bool, cursor string) {
+	if strings.TrimSpace(serviceName) == "" {
+		return "", false, ""
+	}
+	args := []string{"-u", serviceName, "--no-pager"}
+	if lines > 0 {
+		args = append(args, "-n", strconv.Itoa(lines))
+	} else {
+		args = append(args, "--no-tail")
+	}
+	args = append(args, "--show-cursor")
+	out, err := runJournalctl(args...)
+	text := string(out)
+	if err != nil && len(out) == 0 {
+		text = fmt.Sprintf("failed to read logs for %s: %v", serviceName, err)
+	}
+	trimmed := strings.TrimRight(text, "\n")
+	if i := strings.LastIndex(trimmed, "\n"); strings.HasPrefix(trimmed[i+1:], journalCursorPrefix) {
+		cursor = strings.TrimSpace(strings.TrimPrefix(trimmed[i+1:], journalCursorPrefix))
+		if i < 0 {
+			text = ""
+		} else {
+			text = trimmed[:i+1]
+		}
+	}
+	log, truncated = store.CapLogTail(text, maxBytes)
+	return log, truncated, cursor
 }
 
 // CaptureServiceLogsSince returns serviceName's systemd journal limited to

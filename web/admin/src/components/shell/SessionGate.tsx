@@ -13,7 +13,10 @@ import { ApiError, api, describeError, onAuthEvent } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
 import { AdminEventProvider } from "@/lib/events/provider";
 import { queryKeys } from "@/lib/query";
-import { ForcedPasswordChange } from "./ForcedPasswordChange";
+import { lazyModule, useChunkFailed, useLazyModule } from "@/components/common/lazy";
+
+// T070 (FR-027): the forced password change is rare; it is loaded only when it is needed.
+const forcedModule = lazyModule(() => import("./ForcedPasswordChange"));
 
 export type Session = Schemas["Session"];
 
@@ -36,15 +39,36 @@ function Screen({ children }: { children: ReactNode }) {
   );
 }
 
+function ForcedPasswordChange({ onDone }: { onDone: () => void }) {
+  const { t } = useI18n();
+  const mod = useLazyModule(forcedModule, true);
+  const failed = useChunkFailed();
+  if (mod) return <mod.ForcedPasswordChange onDone={onDone} />;
+  if (!failed) return <Screen>{t("shell.session.checking")}</Screen>;
+  // RV-22: the page is out of date (its chunks are gone after an update).
+  return (
+    <Screen>
+      <p>{t("notification.eventsStale")}</p>
+      <Button type="button" onClick={() => window.location.reload()}>
+        {t("shell.reload")}
+      </Button>
+    </Screen>
+  );
+}
+
 export function SessionGate({ children }: { children: ReactNode }) {
   const i18n = useI18n();
   const { t } = i18n;
   const client = useQueryClient();
   const [forced, setForced] = useState(false);
 
+  // 002 (FR-014): the open event socket guards the session (4401 on revocation, account.changed
+  // on profile changes), so it is not refetched on focus; any 401 elsewhere redirects to login.
   const session = useQuery({
     queryKey: queryKeys.session,
     queryFn: ({ signal }) => api.getSession({ signal }),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 
   // A 403 password_change_required from any data call also lands here.

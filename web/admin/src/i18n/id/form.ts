@@ -1,6 +1,6 @@
 // 'form' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: i18n.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idForm = {
   "form.title.new": "Aplikasi baru",
@@ -43,6 +43,10 @@ export const idForm = {
   "form.submitting": "Menyimpan…",
   "form.created": "Aplikasi dibuat.",
   "form.updated": "Aplikasi diperbarui.",
+  "form.conflict.changed": "Aplikasi ini diubah di sesi lain. Isian Anda tetap; muat ulang untuk melihat nilai tersimpan.",
+  "form.conflict.config": "Variabel lingkungan, argumen, atau unit aplikasi ini diubah di sesi lain. Isian Anda tetap.",
+  "form.conflict.deleted": "Aplikasi ini dihapus di sesi lain.",
+  "form.conflict.reload": "Muat ulang",
   "form.partial.env": "Aplikasi tersimpan, tetapi variabel lingkungan gagal disimpan: {reason}",
   "form.partial.args": "Aplikasi tersimpan, tetapi argumen gagal disimpan: {reason}",
   "form.summary": "Periksa kolom berikut:",
@@ -76,3 +80,5 @@ export const idForm = {
 } as const;
 
 registerMessages("id", idForm);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("form", () => import("../en/form").then((m) => m.enForm), idForm);

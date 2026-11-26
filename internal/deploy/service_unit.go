@@ -244,7 +244,7 @@ func SetSystemdUnitDirForTest(dir string) (restore func()) {
 // invoking the real systemctl binary. Package-internal tests in this package
 // should instead set the runSystemctl var directly.
 func SetRunSystemctlForTest(fn func(name string, args ...string) ([]byte, error)) (restore func()) {
-	original := runSystemctl
-	runSystemctl = fn
-	return func() { runSystemctl = original }
+	original, originalQuery := runSystemctl, runSystemctlQuery
+	runSystemctl, runSystemctlQuery = fn, fn // a stub answers the watcher's queries too
+	return func() { runSystemctl, runSystemctlQuery = original, originalQuery }
 }

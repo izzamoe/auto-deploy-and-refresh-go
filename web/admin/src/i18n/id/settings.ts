@@ -1,6 +1,6 @@
 // 'settings' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: namespaces.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idSettings = {
   "github.title": "GitHub",
@@ -12,6 +12,8 @@ export const idSettings = {
   "github.token.hint": "Kosongkan untuk mempertahankan token yang tersimpan. Token tidak pernah ditampilkan penuh.",
   "github.save": "Simpan token",
   "github.saved": "Token GitHub disimpan.",
+  "settings.conflict.changed": "Pengaturan ini diubah di sesi lain. Isian Anda tetap.",
+  "settings.conflict.reload": "Muat ulang",
   "github.clear": "Hapus token",
   "github.clear.title": "Hapus token GitHub?",
   "github.clear.body": "Token yang tersimpan dihapus. Permintaan ke GitHub akan tanpa autentikasi: batas laju lebih rendah dan repo privat tidak dapat diakses.",
@@ -47,3 +49,5 @@ export const idSettings = {
 } as const;
 
 registerMessages("id", idSettings);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("settings", () => import("../en/settings").then((m) => m.enSettings), idSettings);

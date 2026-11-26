@@ -1,7 +1,7 @@
 "use client";
 
 import "@/i18n/id/dashboard";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useId } from "react";
 import { CARD_TITLE } from "@/components/common/cardStyles";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,7 @@ export function AddAppCard() {
       </h2>
       <p className="mt-1 max-w-[32ch] text-balance text-sm">{t("dashboard.addApp.body")}</p>
       <Button asChild size="lg" className="mt-4 w-full bg-card text-primary-text hover:bg-card/90">
-        <Link href="/apps/new/">{t("dashboard.addApp.action")}</Link>
+        <IntentLink href="/apps/new/">{t("dashboard.addApp.action")}</IntentLink>
       </Button>
     </section>
   );

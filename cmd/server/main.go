@@ -64,7 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 	hlog.SetLogger(hertzLogger)
-	serviceCfg, err := config.LoadServiceConfig()
+	serviceCfg, err := config.LoadServiceConfigForStart() // T089 CR-9: a bad SERVICE_WATCH_INTERVAL does not stop the start
 	if err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
@@ -160,6 +160,14 @@ func main() {
 	tracker.SetProgressSink(adminEventHub)
 	cancelService := cancel.NewCancelService(q)
 	cancelService.SetEventSink(adminEventHub)
+	// Protocol-3 job and app sources (specs/002 T041): every committed job transition.
+	adminEventHub.SetAppStore(appStore)
+	adminEventHub.SetDeployQueue(q) // topic summary = the apps/active fields of GET /stats (T042)
+	// Topic service: one shared `systemctl is-active` round per interval while subscribed (Q-3=A).
+	adminEventHub.SetServiceWatchOptions(deploy.ServiceWatcherOptions{Interval: serviceCfg.ServiceWatchInterval})
+	// Topic logs:system: one shared `journalctl -f -o json` while subscribed (Q-5=A).
+	adminEventHub.SetSystemLogUnit(serviceCfg.SelfServiceName)
+	q.SetJobObserver(adminEventHub)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	githubClient := github.NewClient(serviceCfg.GitHubToken)
@@ -230,8 +238,10 @@ func main() {
 		ClientIP: clientIPs,
 	})
 	tokensHandler := admin.NewTokensHandler(apiTokens)
+	adminEventHub.SetTokenChecker(tokensHandler) // 4401 when a socket's API token is revoked (T089 CR-4)
 	accountHandler := admin.NewAccountHandler(adminUsers, sessionMgr, filepath.Join(filepath.Dir(serviceCfg.QueueDBPath), store.InitialAdminPasswordFile))
 	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
+	releasesHandler.SetDeployQueue(q) // a new job of an app expires its cached releases (T047)
 	githubConfigStore, err := store.NewGitHubConfigStore(db)
 	if err != nil {
 		slog.Error("github config store init failed", "err", err)
@@ -258,6 +268,16 @@ func main() {
 	appArgsHandler := admin.NewAppArgsHandler(appStore, appArgsStore)
 	serviceUnitHandler := admin.NewServiceUnitAdminHandler(appStore, appEnvStore, appArgsStore)
 	systemLogsHandler := admin.NewSystemLogsHandler(serviceCfg.SelfServiceName)
+	// Protocol-3 mutation events (specs/002 plan.md section 4): every handler publishes
+	// after its change is committed.
+	adminAPIHandler.SetEventPublisher(adminEventHub)
+	appEnvHandler.SetEventPublisher(adminEventHub)
+	appArgsHandler.SetEventPublisher(adminEventHub)
+	serviceUnitHandler.SetEventPublisher(adminEventHub)
+	githubConfigHandler.SetEventPublisher(adminEventHub)
+	telegramHandler.SetEventPublisher(adminEventHub)
+	tokensHandler.SetEventPublisher(adminEventHub)
+	accountHandler.SetEventPublisher(adminEventHub)
 	h := server.New(
 		server.WithHostPorts(serviceCfg.ListenAddr),
 		server.WithReadTimeout(45*time.Second),
@@ -309,6 +329,7 @@ func main() {
 	if err := h.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
+	adminEventHub.Close() // stop and reap the journalctl of the live log stream
 }
 
 // sessionRetention is how long expired or revoked session rows are kept.

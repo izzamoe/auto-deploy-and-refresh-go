@@ -1,6 +1,6 @@
 // 'dashboard' messages (Indonesian). Importing this module registers them (side effect), so a
 // component that uses these keys must import it: i18n.test.ts checks that.
-import { registerMessages } from "../registry";
+import { registerEnLoader, registerMessages } from "../registry";
 
 export const idDashboard = {
   "dashboard.title": "Dasbor",
@@ -67,3 +67,5 @@ export const idDashboard = {
 } as const;
 
 registerMessages("id", idDashboard);
+// English only when the English UI is needed (002 T072, FR-029).
+registerEnLoader("dashboard", () => import("../en/dashboard").then((m) => m.enDashboard), idDashboard);

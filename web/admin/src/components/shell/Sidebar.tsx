@@ -1,40 +1,21 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Ellipsis, GitBranch, History, LayoutGrid, LogOut, Moon, Rocket, ScrollText, Send, Sun, UserCog } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import Link from "next/link";
+import { Ellipsis, LogOut } from "lucide-react";
+import { IntentLink } from "@/components/common/IntentLink";
 import { usePathname } from "next/navigation";
-import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { useRef, useState } from "react";
+import { lazyModule, useLazyModule } from "@/components/common/lazy";
 import { useI18n } from "@/i18n";
-import type { MessageKey } from "@/i18n";
 import { LOGIN_PATH, api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { LocaleToggle } from "./LocaleToggle";
+import { NAV_ITEMS } from "./nav";
 import { RailTip } from "./RailTip";
 import { ThemeToggle } from "./ThemeToggle";
 
-interface NavItem {
-  href: string;
-  label: MessageKey;
-  icon: LucideIcon;
-  /** True when `path` (no trailing slash, no basePath) belongs to this item. */
-  match: (path: string) => boolean;
-  /** Shown in the bottom bar below 768 px; the others move into the "More" dialog there. */
-  primary?: boolean;
-}
-
-export const NAV_ITEMS: readonly NavItem[] = [
-  { href: "/", label: "nav.dashboard", icon: LayoutGrid, match: (p) => p === "", primary: true },
-  { href: "/apps/", label: "nav.apps", icon: Rocket, match: (p) => p.startsWith("/apps"), primary: true },
-  { href: "/history/", label: "nav.history", icon: History, match: (p) => p.startsWith("/history"), primary: true },
-  { href: "/settings/github/", label: "nav.github", icon: GitBranch, match: (p) => p.startsWith("/settings/github") },
-  { href: "/settings/telegram/", label: "nav.telegram", icon: Send, match: (p) => p.startsWith("/settings/telegram") },
-  { href: "/logs/", label: "nav.logs", icon: ScrollText, match: (p) => p.startsWith("/logs"), primary: true },
-  { href: "/account/", label: "nav.account", icon: UserCog, match: (p) => p.startsWith("/account") },
-];
+export { NAV_ITEMS } from "./nav";
+export type { NavItem } from "./nav";
 
 function useLogout() {
   const client = useQueryClient();
@@ -47,73 +28,49 @@ function useLogout() {
   });
 }
 
-const ROW =
-  "inline-flex min-h-11 w-full items-center gap-3 rounded-full px-4 text-sm font-medium text-rail-foreground hover:bg-white/10 focus-visible:outline-rail-foreground disabled:opacity-50";
+// T070 (FR-027): the dialog (Radix) is loaded on intent (pointerenter/focus) and opened on click.
+const moreModule = lazyModule(() => import("./MoreMenuDialog"));
+const preloadMore = () => void moreModule.load();
 
 /** Below 768 px: the sections that do not fit the bottom bar, theme, language and sign out. */
 function MoreMenu({ pathname, logout }: { pathname: string; logout: ReturnType<typeof useLogout> }) {
   const { t } = useI18n();
-  const { resolvedTheme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  const dark = mounted && resolvedTheme === "dark";
-  const secondary = NAV_ITEMS.filter((i) => !i.primary);
-  const active = secondary.some((i) => i.match(pathname));
+  const mod = useLazyModule(moreModule, open, () => setOpen(false));
+  const trigger = useRef<HTMLButtonElement>(null);
+  const active = NAV_ITEMS.some((i) => !i.primary && i.match(pathname));
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button
-          type="button"
-          aria-label={t("shell.more")}
-          aria-expanded={open}
-          aria-haspopup="dialog"
-          className={cn(
-            "inline-flex size-11 shrink-0 items-center justify-center rounded-full focus-visible:outline-rail-foreground md:hidden",
-            active || open ? "bg-rail-active text-rail-active-foreground" : "text-rail-muted hover:bg-white/10 hover:text-rail-foreground",
-          )}
-        >
-          <Ellipsis className="size-5" aria-hidden="true" />
-        </button>
-      </DialogTrigger>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>{t("shell.more.title")}</DialogTitle>
-          <DialogDescription className="sr-only">{t("shell.more.title")}</DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-1 rounded-3xl bg-rail p-2" data-testid="more-menu">
-          {secondary.map(({ href, label, icon: Icon, match }) => (
-            <Link
-              key={href}
-              href={href}
-              onClick={() => setOpen(false)}
-              aria-current={match(pathname) ? "page" : undefined}
-              className={cn(ROW, match(pathname) && "bg-rail-active text-rail-active-foreground hover:bg-rail-active")}
-            >
-              <Icon className="size-5" aria-hidden="true" />
-              {t(label)}
-            </Link>
-          ))}
-          <button type="button" onClick={() => setTheme(dark ? "light" : "dark")} className={ROW}>
-            {dark ? <Sun className="size-5" aria-hidden="true" /> : <Moon className="size-5" aria-hidden="true" />}
-            {t("shell.theme.toggle")}
-          </button>
-          <div className="px-4 py-1">
-            <LocaleToggle touch />
-          </div>
-          <button type="button" onClick={() => logout.mutate()} disabled={logout.isPending} className={ROW}>
-            <LogOut className="size-5" aria-hidden="true" />
-            {t("shell.logout")}
-          </button>
-        </div>
-        {logout.isError && (
-          <p role="alert" className="rounded-xl bg-danger-soft px-3 py-2 text-xs text-danger-soft-foreground">
-            {t("shell.logout.failed")}
-          </p>
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        aria-label={t("shell.more")}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        data-state={open ? "open" : "closed"}
+        onPointerEnter={preloadMore}
+        onFocus={preloadMore}
+        onClick={() => setOpen(true)}
+        className={cn(
+          "inline-flex size-11 shrink-0 items-center justify-center rounded-full focus-visible:outline-rail-foreground md:hidden",
+          active || open ? "bg-rail-active text-rail-active-foreground" : "text-rail-muted hover:bg-white/10 hover:text-rail-foreground",
         )}
-      </DialogContent>
-    </Dialog>
+      >
+        <Ellipsis className="size-5" aria-hidden="true" />
+      </button>
+      {mod && (
+        <mod.MoreMenuDialog
+          open={open}
+          onOpenChange={setOpen}
+          pathname={pathname}
+          onLogout={() => logout.mutate()}
+          logoutPending={logout.isPending}
+          logoutFailed={logout.isError}
+          trigger={trigger}
+        />
+      )}
+    </>
   );
 }
 
@@ -136,7 +93,7 @@ export function Sidebar() {
           const active = match(pathname);
           return (
             <RailTip key={href} label={t(label)} className={primary ? "inline-flex" : "hidden md:inline-flex"}>
-              <Link
+              <IntentLink
                 href={href}
                 aria-label={t(label)}
                 aria-current={active ? "page" : undefined}
@@ -146,7 +103,7 @@ export function Sidebar() {
                 )}
               >
                 <Icon className="size-5" aria-hidden="true" />
-              </Link>
+              </IntentLink>
             </RailTip>
           );
         })}

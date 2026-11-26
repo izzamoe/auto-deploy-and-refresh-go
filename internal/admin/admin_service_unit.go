@@ -2,8 +2,10 @@ package admin
 
 import (
 	"context"
+	"time"
 
 	"github.com/izzamoe/auto-deploy/internal/deploy"
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/store"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -19,6 +21,7 @@ type ServiceUnitAdminHandler struct {
 	store *store.AppStore
 	env   *store.AppEnvStore
 	args  *store.AppArgsStore
+	eventPublisher
 }
 
 func NewServiceUnitAdminHandler(store *store.AppStore, env *store.AppEnvStore, args *store.AppArgsStore) *ServiceUnitAdminHandler {
@@ -93,6 +96,9 @@ func (h *ServiceUnitAdminHandler) ApplyServiceUnitHertz(ctx context.Context, c *
 		return
 	}
 
+	// The unit content is never sent (FR-005); the service state may have changed too.
+	h.publish(c, events.AppConfigChanged(appRecord.ID, events.PartUnit, time.Now()))
+	h.refreshService(appRecord.ID)
 	c.JSON(consts.StatusOK, adminAPIStatusResponse{Status: "ok", Message: "Service unit created and enabled"})
 }
 
@@ -117,6 +123,7 @@ func (h *ServiceUnitAdminHandler) ServiceStatusHertz(ctx context.Context, c *app
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]any{"status": deploy.ServiceStatus(appRecord.ServiceName)})
+	h.refreshService(appRecord.ID) // the watcher's cache follows what this request saw
 }
 
 // ControlServiceHertz runs a whitelisted systemctl action (start, stop,
@@ -132,6 +139,7 @@ func (h *ServiceUnitAdminHandler) ControlServiceHertz(ctx context.Context, c *ap
 		return
 	}
 	out, err := deploy.ControlService(appRecord.ServiceName, action)
+	h.refreshService(appRecord.ID) // service.status at once for every tab, even after a failed action
 	if err != nil {
 		logHandlerError(c, "service control failed", err)
 		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "The service action failed; check the service logs")

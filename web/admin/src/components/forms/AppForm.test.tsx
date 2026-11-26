@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionGate } from "@/components/shell/SessionGate";
-import { FakeWebSocket, Providers, SESSION, errorBody, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
+import { FakeWebSocket, Providers, SESSION, errorBody, goLive, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
 import type { Handler } from "@/components/shell/testUtils";
 import { resetAuthStateForTests } from "@/lib/api/client";
 import { AppForm } from "./AppForm";
@@ -219,13 +219,55 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
     const name = await edit();
     fireEvent.change(name, { target: { value: "typing-in-progress" } });
     fireEvent.change(screen.getByLabelText("Webhook secret"), { target: { value: "x".repeat(33) } });
-    act(() => FakeWebSocket.instances[0].send({ protocol: "2", id: "e1", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j9", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1" } }));
-    act(() => FakeWebSocket.instances[0].send({ protocol: "2", id: "e2", type: "notice", ts: new Date().toISOString(), payload: { level: "info", code: "x", message: "m" } }));
+    act(() => FakeWebSocket.instances[0].emit({ protocol: "3", id: "evt-1", seq: 1, topic: "jobs", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j9", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1" } }));
+    act(() => FakeWebSocket.instances[0].emit({ protocol: "3", id: "evt-2", seq: 2, topic: "summary", type: "notice", ts: new Date().toISOString(), payload: { level: "info", code: "x", message: "m" } }));
     await act(async () => {
       window.dispatchEvent(new Event("focus")); // window refocus refetch must not clobber the form either
     });
     expect(screen.getByLabelText("Nama aplikasi")).toHaveValue("typing-in-progress");
     expect(screen.getByLabelText("Webhook secret")).toHaveValue("x".repeat(33));
+  });
+
+  // ---- 002 T057 (FR-022, Q-10=A): a change made in another session -------------------------
+  const other = (type: string, seq: number, payload: object, origin = "c-99999999") => ({ protocol: "3", id: `evt-${seq}`, seq, topic: "apps", type, ts: new Date().toISOString(), appId: "a1", origin, payload });
+
+  it("another session changing the app: non-blocking notice (role=status) with Reload; typing is kept until Reload", async () => {
+    let saved = { ...APP };
+    const api = installFetch(routes({ [`GET ${U}/apps/a1`]: () => ({ status: 200, body: { app: saved } }) }));
+    const name = await edit();
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(FakeWebSocket.instances[0].subscribedTopics()).toContain("apps");
+    fireEvent.change(name, { target: { value: "my-typing" } });
+    saved = { ...APP, name: "renamed-elsewhere", updatedAt: "2026-11-25T00:00:00Z" };
+    await act(async () => FakeWebSocket.instances[0].emit(other("app.upserted", 5, { app: saved })));
+    const notice = await screen.findByTestId("edit-conflict");
+    expect(notice).toHaveAttribute("role", "status");
+    expect(notice).toHaveTextContent("Aplikasi ini diubah di sesi lain.");
+    expect(screen.getByLabelText("Nama aplikasi")).toHaveValue("my-typing"); // not overwritten
+    expect(screen.getByRole("button", { name: "Simpan perubahan" })).toBeEnabled(); // not blocking
+    const envGets = api.count("GET", `${U}/apps/a1/env`);
+    fireEvent.click(within(notice).getByRole("button", { name: "Muat ulang" }));
+    await waitFor(() => expect(screen.getByLabelText("Nama aplikasi")).toHaveValue("renamed-elsewhere"));
+    expect(screen.queryByTestId("edit-conflict")).toBeNull();
+    await waitFor(() => expect(api.count("GET", `${U}/apps/a1/env`)).toBe(envGets + 1));
+  });
+
+  it("env/args/unit changed elsewhere -> config notice; deleted elsewhere -> deleted notice; another app or our own save -> nothing", async () => {
+    installFetch(routes());
+    const name = await edit();
+    await act(async () => goLive(FakeWebSocket.instances[0], {}));
+    fireEvent.change(name, { target: { value: "typing" } });
+    await act(async () => {
+      FakeWebSocket.instances[0].emit({ ...other("app.upserted", 4, { app: { ...APP, id: "a2" } }), appId: "a2" }); // another app
+      FakeWebSocket.instances[0].emit(other("app.upserted", 5, { app: APP }, "c-0000test")); // our own socket's clientId
+    });
+    expect(screen.queryByTestId("edit-conflict")).toBeNull();
+    await act(async () => FakeWebSocket.instances[0].emit(other("app.config_changed", 6, { part: "env", updatedAt: "2026-11-25T00:00:00Z" })));
+    expect(screen.getByTestId("edit-conflict")).toHaveAttribute("data-conflict", "config");
+    await act(async () => FakeWebSocket.instances[0].emit(other("app.deleted", 7, {})));
+    expect(screen.getByTestId("edit-conflict")).toHaveTextContent("Aplikasi ini dihapus di sesi lain.");
+    expect(within(screen.getByTestId("edit-conflict")).queryByRole("button")).toBeNull();
+    expect(screen.getByLabelText("Nama aplikasi")).toHaveValue("typing");
   });
 
   it("the webhook reference uses a placeholder until a new secret is typed, then that secret", async () => {
