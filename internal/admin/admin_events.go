@@ -87,6 +87,8 @@ type AdminEventHub struct {
 	apps atomic.Pointer[store.AppStore]
 	// summary publishes topic summary when its state changes (SetDeployQueue).
 	summary atomic.Pointer[events.Summary]
+	// statsClock publishes stats.changed{window} while topic stats has subscribers.
+	statsClock atomic.Pointer[events.StatsClock]
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -531,6 +533,12 @@ func (h *AdminEventHub) publishJobsV3(event cancel.CancelEvent) {
 	}
 	_, _ = h.bus.Publish(events.Event{Topic: events.TopicJobs, Type: event.Type, AppID: event.AppID, JobID: event.JobID, Payload: payload})
 	h.refreshSummary() // a cancel or a finished job changes running/queued
+	// One stats.changed per transition: every job_status here is a terminal one (the
+	// coordinator's MarkDone, a cancel); a cancel_requested only when it flagged a running
+	// job (a queued job's cancel_requested{canceled} comes with its job_status).
+	if event.Type == cancel.CancelEventTypeJobStatus || (event.Type == cancel.CancelEventTypeCancelRequested && event.Payload["status"] == cancel.JobStatusCancelRequested) {
+		h.jobStatsChanged()
+	}
 }
 
 func progressStatusForStage(stage string) string {
@@ -645,6 +653,72 @@ type v3Conn struct {
 	progressTimer *time.Timer
 	progressBuf   [][]byte
 	limits        *events.Limiter
+	// held are the shared watchers this socket keeps running (stats clock zone, service
+	// watcher, journal follower), with the option they were acquired with; all are
+	// released when the socket ends, however it ends.
+	held map[events.Topic]string
+}
+
+// watchedTopic reports whether subscribing to t holds a shared watcher, and its key.
+func watchedTopic(s events.TopicSub) (string, bool) {
+	switch s.Topic {
+	case events.TopicStats:
+		return s.Opts.TZ, true
+	}
+	return "", false
+}
+
+// hold acquires the watcher of a newly accepted subscription; a sub that changes the
+// option (stats tz) moves the reference.
+func (vc *v3Conn) hold(s events.TopicSub) {
+	key, ok := watchedTopic(s)
+	if !ok {
+		return
+	}
+	if old, held := vc.held[s.Topic]; held {
+		if old == key {
+			return
+		}
+		vc.h.releaseTopic(s.Topic, old)
+	}
+	if vc.held == nil {
+		vc.held = make(map[events.Topic]string)
+	}
+	vc.held[s.Topic] = key
+	vc.h.acquireTopic(s.Topic, key)
+}
+
+func (vc *v3Conn) unhold(t events.Topic) {
+	if key, held := vc.held[t]; held {
+		delete(vc.held, t)
+		vc.h.releaseTopic(t, key)
+	}
+}
+
+func (vc *v3Conn) unholdAll() {
+	for t := range vc.held {
+		vc.unhold(t)
+	}
+}
+
+// acquireTopic and releaseTopic count the subscribers of the topics backed by a shared
+// watcher (refcount over every socket, subscription.md section 3).
+func (h *AdminEventHub) acquireTopic(t events.Topic, key string) {
+	switch t {
+	case events.TopicStats:
+		if c := h.statsClock.Load(); c != nil {
+			c.Acquire(key)
+		}
+	}
+}
+
+func (h *AdminEventHub) releaseTopic(t events.Topic, key string) {
+	switch t {
+	case events.TopicStats:
+		if c := h.statsClock.Load(); c != nil {
+			c.Release(key)
+		}
+	}
 }
 
 func (vc *v3Conn) write(payload []byte) bool { return writeAdminEventPayload(vc.ctx, vc.c, payload) }
@@ -666,6 +740,7 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal
 	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal), limits: events.NewLimiter(h.now())}
 	h.bus.Register(vc.client)
 	defer h.bus.Unregister(vc.client)
+	defer vc.unholdAll() // runs on every way out: close, error, 4401/4408/4429
 
 	// hello.seq: a later sub with resume{epoch, seq: hello.seq} replays every state event
 	// published after this point (events-ws.v3.md section 5).
@@ -854,6 +929,9 @@ func (vc *v3Conn) handleOp(data []byte) bool {
 			return true
 		}
 		vc.h.bus.Unsubscribe(vc.client, op.Unsubs)
+		for _, t := range op.Unsubs {
+			vc.unhold(t)
+		}
 		return vc.writeFrame(adminEventTypeUnsubscribed, adminEventUnsubscribedPayload{Ref: op.Ref, Topics: op.Unsubs})
 	}
 	return true
@@ -865,6 +943,9 @@ func (vc *v3Conn) handleOp(data []byte) bool {
 // follow on the queue (events-ws.v3.md section 5).
 func (vc *v3Conn) subscribe(op events.Op) bool {
 	res := vc.h.bus.Subscribe(vc.client, op.Subs, op.Resume)
+	for _, s := range res.Accepted {
+		vc.hold(s)
+	}
 	for _, t := range res.Refused {
 		vc.audit(string(events.CodeForbiddenTopic), "topic", string(t))
 		if !vc.writeError(events.OpError{Ref: op.Ref, Code: events.CodeForbiddenTopic, Topic: string(t)}) {
@@ -966,6 +1047,25 @@ func (h *AdminEventHub) SetDeployQueue(q *store.DeployQueue) {
 		s, err := q.Summary()
 		return events.SummaryState{AppsTotal: s.AppsTotal, AppsEnabled: s.AppsEnabled, Running: s.Running, Queued: s.Queued}, err
 	}, func(e events.Event) { _, _ = h.bus.Publish(e) }))
+	h.statsClock.Store(events.NewStatsClock(func(e events.Event) { _, _ = h.bus.Publish(e) }, events.StatsClockOptions{
+		WindowExit: func(now time.Time) (time.Time, bool) {
+			exit, ok, err := q.NextWindowExit(now)
+			if err != nil {
+				slog.Warn("events: stats window boundary failed", "err", err)
+				return time.Time{}, false
+			}
+			return exit, ok
+		},
+	}))
+}
+
+// jobStatsChanged announces that a job transition changed GET /stats (T043, FR-003) and
+// re-arms the StatsClock (the oldest job of the 24-hour window may have changed).
+func (h *AdminEventHub) jobStatsChanged() {
+	_, _ = h.bus.Publish(events.StatsChanged(events.ReasonJob))
+	if c := h.statsClock.Load(); c != nil {
+		c.Reschedule()
+	}
 }
 
 // refreshSummary publishes topic summary when an app mutation or a job transition changed
@@ -1008,17 +1108,23 @@ func (h *AdminEventHub) OnJobTransition(t store.JobTransition) {
 	case store.JobEnqueued:
 		h.PublishEvent(events.Event{Topic: events.TopicJobs, Type: events.TypeJobStatus, AppID: t.AppID, JobID: t.JobID,
 			Payload: jobStatusPayload{Status: t.Status, Tag: t.Tag, Trigger: t.Trigger}})
+		h.jobStatsChanged()
 	case store.JobStarted:
 		h.PublishEvent(events.Event{Topic: events.TopicJobs, Type: events.TypeJobStatus, AppID: t.AppID, JobID: t.JobID,
 			Payload: jobStatusPayload{Status: t.Status, PreviousStatus: t.PreviousStatus, Tag: t.Tag, Trigger: t.Trigger, StartedAt: &now}})
+		h.jobStatsChanged()
 	case store.JobFinished:
-		// job_status itself: the coordinator's, after MarkRolledBack (publishJobsV3).
+		// job_status and stats.changed: after the coordinator's job_status, which follows
+		// MarkRolledBack (publishJobsV3), so the rollback count is already stored.
 		h.publishAppWithLastDeploy(t.AppID)
 		h.RefreshService(t.AppID)
 	case store.JobRecovered:
 		h.PublishEvent(events.Event{Topic: events.TopicJobs, Type: events.TypeJobStatus, AppID: t.AppID, JobID: t.JobID,
 			Payload: jobStatusPayload{Status: t.Status, PreviousStatus: t.PreviousStatus, Tag: t.Tag, Trigger: t.Trigger, ErrorCode: "recovered", FinishedAt: &now}})
 		h.publishAppWithLastDeploy(t.AppID)
+		h.jobStatsChanged()
+	case store.JobsPruned:
+		h.jobStatsChanged()
 	}
 }
 

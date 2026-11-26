@@ -228,6 +228,52 @@ func (q *DeployQueue) Summary() (Summary, error) {
 	return s, nil
 }
 
+// NextWindowExit returns when the next job leaves the rolling 24-hour window of Stats
+// (Deploys24h): the earliest event time in the window plus 24 h, with the event time of
+// Stats (updated_at for a finished job, created_at otherwise). false when the window is
+// empty. The StatsClock of the stats topic arms its timer for it (specs/002 FR-003).
+func (q *DeployQueue) NextWindowExit(now time.Time) (time.Time, bool, error) {
+	now = now.UTC()
+	since := now.Add(-24 * time.Hour)
+	rows, err := q.db.Query(
+		`SELECT status, created_at, updated_at FROM deploy_jobs WHERE created_at >= ? OR updated_at >= ?`,
+		since.Format(statsTimeLayout), since.Format(statsTimeLayout),
+	)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("stats: window exit: %w", err)
+	}
+	defer rows.Close()
+	var oldest time.Time
+	for rows.Next() {
+		var status string
+		var created, updated sql.NullTime
+		if err := rows.Scan(&status, &created, &updated); err != nil {
+			return time.Time{}, false, fmt.Errorf("stats: window exit: %w", err)
+		}
+		if !created.Valid && !updated.Valid {
+			continue
+		}
+		ev := created.Time
+		if (status == "succeeded" || status == "failed" || status == "canceled") && updated.Valid {
+			ev = updated.Time
+		}
+		ev = ev.UTC()
+		if ev.Before(since) || ev.After(now) {
+			continue
+		}
+		if oldest.IsZero() || ev.Before(oldest) {
+			oldest = ev
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return time.Time{}, false, fmt.Errorf("stats: window exit: %w", err)
+	}
+	if oldest.IsZero() {
+		return time.Time{}, false, nil
+	}
+	return oldest.Add(24 * time.Hour), true, nil
+}
+
 func ratio(ok, total int) *float64 {
 	if total == 0 {
 		return nil
