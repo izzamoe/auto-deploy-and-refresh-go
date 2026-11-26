@@ -370,10 +370,10 @@ export function useSubscriptionManager(): SubscriptionManager {
  * cached data is kept current by events (confirmed by the server and the socket is live, or
  * left live less than 5 s ago): queries may then use `liveQueryOptions` (T052).
  */
-export function useTopic(topic: Topic, opts?: TopicOpts): boolean {
+export function useTopic(topic: Topic, opts?: TopicOpts, enabled = true): boolean {
   const { store, manager } = useEvents();
   const key = JSON.stringify(opts ?? {});
-  useEffect(() => manager.acquire(topic, opts ?? {}), [manager, topic, key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => (enabled ? manager.acquire(topic, opts ?? {}) : undefined), [manager, topic, key, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   const subscribe = useCallback(
     (l: () => void) => {
       const a = store.subscribeFresh(l);
