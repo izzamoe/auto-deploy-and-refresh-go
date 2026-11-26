@@ -240,6 +240,7 @@ func main() {
 	tokensHandler := admin.NewTokensHandler(apiTokens)
 	accountHandler := admin.NewAccountHandler(adminUsers, sessionMgr, filepath.Join(filepath.Dir(serviceCfg.QueueDBPath), store.InitialAdminPasswordFile))
 	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
+	releasesHandler.SetDeployQueue(q) // a new job of an app expires its cached releases (T047)
 	githubConfigStore, err := store.NewGitHubConfigStore(db)
 	if err != nil {
 		slog.Error("github config store init failed", "err", err)
