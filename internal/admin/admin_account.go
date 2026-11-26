@@ -151,6 +151,9 @@ func (h *AccountHandler) RevokeAllSessionsHertz(ctx context.Context, c *app.Requ
 		return
 	}
 	auth.AuditRequest(c, auth.EventSessionsRevoked, p.UserID)
+	// T089 CR-10: this user's tabs learn that the sessions changed (published after the
+	// commit and before the revocation signal of reissue, like a password change).
+	h.publish(c, events.AccountChanged(p.UserID, events.SectionSessions))
 	h.reissue(c, p.SessionID, p.UserID)
 	c.JSON(200, map[string]string{"status": "ok", "message": "Other sessions revoked"})
 }
