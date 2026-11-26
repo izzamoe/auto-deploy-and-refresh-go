@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAuthStateForTests } from "@/lib/api/client";
 import { AppShell } from "./AppShell";
 import { SessionGate } from "./SessionGate";
-import { FakeWebSocket, Providers, SESSION, STATS, errorBody, installFakeWebSocket, installFetch } from "./testUtils";
+import { FakeWebSocket, Providers, SESSION, STATS, errorBody, goLive, installFakeWebSocket, installFetch } from "./testUtils";
 
 const nav = vi.hoisted(() => ({ pathname: "/", push: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -31,7 +31,7 @@ const okRoutes = () => ({
   "GET /admin/api/v1/stats": () => ({ status: 200, body: STATS }),
 });
 
-const sendEvent = (frame: object) => act(() => FakeWebSocket.instances[0].send(frame));
+const sendEvent = (frame: object) => act(() => FakeWebSocket.instances[0].emit(frame));
 
 beforeEach(() => {
   resetAuthStateForTests();
@@ -122,7 +122,7 @@ describe("Header", () => {
     mountShell();
     await screen.findByTestId("admin-shell");
     expect(screen.getByText("Terputus")).toBeInTheDocument();
-    await sendEvent({ protocol: "2", id: "evt-1", type: "hello", ts: "2026-11-25T00:00:00Z", payload: { serverVersion: "v1" } });
+    await act(async () => goLive(FakeWebSocket.instances[0]));
     expect(screen.getByText("Terhubung")).toBeInTheDocument();
   });
 });
@@ -218,8 +218,8 @@ describe("notifications", () => {
     const bell = () => screen.getByRole("button", { name: /^Notifikasi/ });
     expect(bell()).toHaveAccessibleName("Notifikasi");
 
-    await sendEvent({ protocol: "2", id: "e1", type: "job_status", ts: "2026-11-25T01:00:00Z", appId: "a1", jobId: "j1", payload: { status: "failed", tag: "v1.2.3" } });
-    await sendEvent({ protocol: "2", id: "e2", type: "job_status", ts: "2026-11-25T01:01:00Z", appId: "a1", jobId: "j2", payload: { status: "succeeded", tag: "v1.2.4" } });
+    await sendEvent({ protocol: "3", id: "evt-1", seq: 1, topic: "jobs", type: "job_status", ts: "2026-11-25T01:00:00Z", appId: "a1", jobId: "j1", payload: { status: "failed", tag: "v1.2.3" } });
+    await sendEvent({ protocol: "3", id: "evt-2", seq: 2, topic: "jobs", type: "job_status", ts: "2026-11-25T01:01:00Z", appId: "a1", jobId: "j2", payload: { status: "succeeded", tag: "v1.2.4" } });
     expect(bell()).toHaveAccessibleName("Notifikasi: 2 notifikasi belum dibaca");
 
     fireEvent.click(bell());
@@ -240,7 +240,7 @@ describe("notifications", () => {
     installFetch(okRoutes());
     mountShell();
     await screen.findByTestId("admin-shell");
-    await sendEvent({ protocol: "2", id: "e3", type: "notice", ts: "2026-11-25T01:00:00Z", payload: { level: "warning", code: "x" } });
+    await sendEvent({ protocol: "3", id: "evt-3", seq: 3, topic: "summary", type: "notice", ts: "2026-11-25T01:00:00Z", payload: { level: "warning", code: "x" } });
     fireEvent.click(screen.getByRole("button", { name: /^Notifikasi/ }));
     expect(await screen.findByText("Pemberitahuan sistem")).toBeInTheDocument();
   });

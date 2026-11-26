@@ -34,7 +34,7 @@ export function Header() {
     router.push(term ? `/apps/?q=${encodeURIComponent(term)}` : "/apps/");
   }
 
-  const online = connection.status === "open";
+  const online = connection.status === "live";
 
   return (
     <header className="flex flex-wrap items-center gap-x-5 gap-y-3 pb-6">

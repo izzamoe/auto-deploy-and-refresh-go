@@ -219,8 +219,8 @@ describe("AppForm edit (B53, B54, FR-074)", () => {
     const name = await edit();
     fireEvent.change(name, { target: { value: "typing-in-progress" } });
     fireEvent.change(screen.getByLabelText("Webhook secret"), { target: { value: "x".repeat(33) } });
-    act(() => FakeWebSocket.instances[0].send({ protocol: "2", id: "e1", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j9", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1" } }));
-    act(() => FakeWebSocket.instances[0].send({ protocol: "2", id: "e2", type: "notice", ts: new Date().toISOString(), payload: { level: "info", code: "x", message: "m" } }));
+    act(() => FakeWebSocket.instances[0].emit({ protocol: "3", id: "evt-1", seq: 1, topic: "jobs", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j9", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1" } }));
+    act(() => FakeWebSocket.instances[0].emit({ protocol: "3", id: "evt-2", seq: 2, topic: "summary", type: "notice", ts: new Date().toISOString(), payload: { level: "info", code: "x", message: "m" } }));
     await act(async () => {
       window.dispatchEvent(new Event("focus")); // window refocus refetch must not clobber the form either
     });

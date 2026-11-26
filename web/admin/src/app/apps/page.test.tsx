@@ -40,7 +40,7 @@ function mount() {
     </Providers>,
   );
 }
-const sendEvent = (frame: object) => act(() => FakeWebSocket.instances[0].send(frame));
+const sendEvent = (frame: object) => act(() => FakeWebSocket.instances[0].emit(frame));
 
 beforeEach(() => {
   resetAuthStateForTests();
@@ -89,7 +89,7 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     await waitFor(() => expect(api.count("GET", "/admin/api/v1/apps/a1/service/status")).toBe(1));
     const appsBefore = api.count("GET", "/admin/api/v1/apps");
 
-    sendEvent({ protocol: "2", id: "e1", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j1", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1.2.0" } });
+    sendEvent({ protocol: "3", id: "evt-1", seq: 1, topic: "jobs", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j1", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1.2.0" } });
     await waitFor(() => expect(api.count("GET", "/admin/api/v1/apps")).toBeGreaterThan(appsBefore));
     await waitFor(() => expect(api.count("GET", "/admin/api/v1/apps/a1/service/status")).toBe(2));
     expect(api.count("GET", "/admin/api/v1/apps/a2/service/status")).toBe(1); // the other app is untouched
@@ -99,7 +99,7 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     installFetch(routes());
     mount();
     await screen.findByTestId("app-card-a1");
-    sendEvent({ protocol: "2", id: "s1", type: "snapshot", ts: new Date().toISOString(), payload: { jobs: [{ appId: "a1", jobId: "j1", tag: "v1.2.0", status: "in_progress", phase: "downloading", percent: 42, downloadedBytes: 1048576, totalBytes: 2490368, speedBps: 524288 }] } });
+    sendEvent({ protocol: "3", id: "evt-s1", topic: "jobs", type: "snapshot", ts: new Date().toISOString(), payload: { jobs: [{ appId: "a1", jobId: "j1", tag: "v1.2.0", status: "in_progress", phase: "downloading", percent: 42, downloadedBytes: 1048576, totalBytes: 2490368, speedBps: 524288 }] } });
     const live = await screen.findByTestId("progress-live");
     expect(live).toHaveTextContent("1.0 MB / 2.4 MB (42%)");
     expect(live).toHaveTextContent("512 KB/s");
