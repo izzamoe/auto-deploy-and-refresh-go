@@ -123,6 +123,7 @@ func (h *ServiceUnitAdminHandler) ServiceStatusHertz(ctx context.Context, c *app
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]any{"status": deploy.ServiceStatus(appRecord.ServiceName)})
+	h.refreshService(appRecord.ID) // the watcher's cache follows what this request saw
 }
 
 // ControlServiceHertz runs a whitelisted systemctl action (start, stop,
@@ -138,6 +139,7 @@ func (h *ServiceUnitAdminHandler) ControlServiceHertz(ctx context.Context, c *ap
 		return
 	}
 	out, err := deploy.ControlService(appRecord.ServiceName, action)
+	h.refreshService(appRecord.ID) // service.status at once for every tab, even after a failed action
 	if err != nil {
 		logHandlerError(c, "service control failed", err)
 		writeAdminAPIErrorHertz(c, consts.StatusBadRequest, "The service action failed; check the service logs")

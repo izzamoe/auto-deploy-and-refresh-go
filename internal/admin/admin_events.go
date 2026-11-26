@@ -13,6 +13,7 @@ import (
 
 	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/deploy"
 	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/llmstxt"
 	"github.com/izzamoe/auto-deploy/internal/progress"
@@ -89,6 +90,11 @@ type AdminEventHub struct {
 	summary atomic.Pointer[events.Summary]
 	// statsClock publishes stats.changed{window} while topic stats has subscribers.
 	statsClock atomic.Pointer[events.StatsClock]
+	// svc is the shared systemd watcher of topic service (Q-3=A), created on first use
+	// from the app store; svcOpts are its interval and debounce.
+	svcMu   sync.Mutex
+	svc     events.ServiceWatcher
+	svcOpts deploy.ServiceWatcherOptions
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -664,6 +670,8 @@ func watchedTopic(s events.TopicSub) (string, bool) {
 	switch s.Topic {
 	case events.TopicStats:
 		return s.Opts.TZ, true
+	case events.TopicService:
+		return "", true
 	}
 	return "", false
 }
@@ -709,6 +717,10 @@ func (h *AdminEventHub) acquireTopic(t events.Topic, key string) {
 		if c := h.statsClock.Load(); c != nil {
 			c.Acquire(key)
 		}
+	case events.TopicService:
+		if w := h.serviceWatcher(); w != nil {
+			w.Acquire() // the first subscriber runs a round before the ack is written
+		}
 	}
 }
 
@@ -717,6 +729,10 @@ func (h *AdminEventHub) releaseTopic(t events.Topic, key string) {
 	case events.TopicStats:
 		if c := h.statsClock.Load(); c != nil {
 			c.Release(key)
+		}
+	case events.TopicService:
+		if w := h.serviceWatcher(); w != nil {
+			w.Release()
 		}
 	}
 }
@@ -1001,6 +1017,12 @@ func (h *AdminEventHub) topicState(t events.Topic) any {
 			return nil
 		}
 		return st
+	case events.TopicService:
+		w := h.serviceWatcher()
+		if w == nil {
+			return events.ServiceAckState(nil, h.now())
+		}
+		return events.ServiceAckState(w.Snapshot(), h.now())
 	}
 	return nil
 }
@@ -1078,7 +1100,59 @@ func (h *AdminEventHub) refreshSummary() {
 
 // RefreshService implements events.Publisher: a systemd action may have changed the state
 // of the app's unit; the service watcher runs a round at once (T045).
-func (h *AdminEventHub) RefreshService(appID string) {}
+func (h *AdminEventHub) RefreshService(appID string) {
+	h.svcMu.Lock()
+	w := h.svc
+	h.svcMu.Unlock()
+	if w != nil {
+		w.Refresh(appID)
+	}
+}
+
+// SetServiceWatchOptions sets the interval (SERVICE_WATCH_INTERVAL) and debounce of the
+// service watcher; call it before the first subscriber.
+func (h *AdminEventHub) SetServiceWatchOptions(opts deploy.ServiceWatcherOptions) {
+	h.svcMu.Lock()
+	h.svcOpts = opts
+	h.svcMu.Unlock()
+}
+
+// SetServiceWatcher replaces the systemd watcher of topic service (tests).
+func (h *AdminEventHub) SetServiceWatcher(w events.ServiceWatcher) {
+	h.svcMu.Lock()
+	h.svc = w
+	h.svcMu.Unlock()
+}
+
+// serviceWatcher returns the shared watcher of topic service, creating it from the app
+// store on first use (nil without an app store). It observes every app's unit and
+// publishes each change as service.status.
+func (h *AdminEventHub) serviceWatcher() events.ServiceWatcher {
+	h.svcMu.Lock()
+	defer h.svcMu.Unlock()
+	if h.svc != nil {
+		return h.svc
+	}
+	apps := h.appStore()
+	if apps == nil {
+		return nil
+	}
+	h.svc = deploy.NewServiceWatcher(func() map[string]string {
+		list, err := apps.List()
+		if err != nil {
+			slog.Warn("events: list apps for the service watcher failed", "err", err)
+			return nil
+		}
+		units := make(map[string]string, len(list))
+		for _, a := range list {
+			units[a.ID] = a.ServiceName
+		}
+		return units
+	}, func(appID, state string) {
+		_, _ = h.bus.Publish(events.ServiceChanged(appID, state))
+	}, h.svcOpts)
+	return h.svc
+}
 
 // SetAppStore gives the hub the apps, for the public App of app.upserted after a deploy
 // (lastDeploy*) and for the summary topic.

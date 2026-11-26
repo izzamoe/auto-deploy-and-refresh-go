@@ -163,6 +163,8 @@ func main() {
 	// Protocol-3 job and app sources (specs/002 T041): every committed job transition.
 	adminEventHub.SetAppStore(appStore)
 	adminEventHub.SetDeployQueue(q) // topic summary = the apps/active fields of GET /stats (T042)
+	// Topic service: one shared `systemctl is-active` round per interval while subscribed (Q-3=A).
+	adminEventHub.SetServiceWatchOptions(deploy.ServiceWatcherOptions{Interval: serviceCfg.ServiceWatchInterval})
 	q.SetJobObserver(adminEventHub)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

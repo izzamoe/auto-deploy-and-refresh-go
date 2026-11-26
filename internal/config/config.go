@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ServiceConfig struct {
@@ -29,7 +30,18 @@ type ServiceConfig struct {
 	// X-Forwarded-For / X-Forwarded-Proto headers are believed (Q-5). Default empty:
 	// forwarding headers are ignored and the socket address is the client IP.
 	TrustedProxyCIDRs []*net.IPNet
+	// ServiceWatchInterval is the round interval of the shared systemd watcher of the
+	// realtime service topic (specs/002 Q-3=A): SERVICE_WATCH_INTERVAL, a Go duration
+	// ("5s") or whole seconds ("5"); default 5 s, kept within 2 s..60 s.
+	ServiceWatchInterval time.Duration
 }
+
+// Bounds of SERVICE_WATCH_INTERVAL (data-model.md "ServiceWatcher").
+const (
+	DefaultServiceWatchInterval = 5 * time.Second
+	MinServiceWatchInterval     = 2 * time.Second
+	MaxServiceWatchInterval     = 60 * time.Second
+)
 
 type LegacyBootstrapConfig struct {
 	Secret       string
@@ -58,6 +70,11 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		return nil, err
 	}
 
+	watchInterval, err := ParseServiceWatchInterval(os.Getenv("SERVICE_WATCH_INTERVAL"))
+	if err != nil {
+		return nil, err
+	}
+
 	return &ServiceConfig{
 		ListenAddr:        envOrDefault("LISTEN_ADDR", ":9000"),
 		QueueDBPath:       queueDBPath,
@@ -68,7 +85,33 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		SelfServiceName:   envOrDefault("SELF_SERVICE_NAME", "auto-deploy.service"),
 		SessionKeyPath:    envOrDefault("SESSION_KEY_PATH", filepath.Join(filepath.Dir(queueDBPath), "session.key")),
 		TrustedProxyCIDRs: trusted,
+
+		ServiceWatchInterval: watchInterval,
 	}, nil
+}
+
+// ParseServiceWatchInterval reads SERVICE_WATCH_INTERVAL: empty is the default, a Go
+// duration ("5s", "1m") or whole seconds ("5"); a value outside 2 s..60 s is clamped.
+func ParseServiceWatchInterval(v string) (time.Duration, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return DefaultServiceWatchInterval, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		n, nerr := strconv.Atoi(v)
+		if nerr != nil {
+			return 0, fmt.Errorf("SERVICE_WATCH_INTERVAL must be a duration such as 5s or a number of seconds, got %q", v)
+		}
+		d = time.Duration(n) * time.Second
+	}
+	switch {
+	case d < MinServiceWatchInterval:
+		d = MinServiceWatchInterval
+	case d > MaxServiceWatchInterval:
+		d = MaxServiceWatchInterval
+	}
+	return d, nil
 }
 
 // ParseCIDRList parses a comma-separated list of CIDRs or bare IPs (the value of
