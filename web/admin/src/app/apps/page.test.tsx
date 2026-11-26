@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionGate } from "@/components/shell/SessionGate";
-import { FakeWebSocket, Providers, SESSION, errorBody, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
+import { FakeWebSocket, Providers, SESSION, errorBody, goLive, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
 import type { Handler } from "@/components/shell/testUtils";
 import { resetAuthStateForTests } from "@/lib/api/client";
 import AppsPage from "./page";
@@ -82,17 +82,19 @@ describe("Apps page (T088, FR-078, B57, B52, FR-073)", () => {
     expect(await screen.findByTestId("apps-empty")).toHaveTextContent("Tidak ada aplikasi yang cocok dengan “zzz”.");
   });
 
-  it("a terminal job_status event invalidates the apps list AND the service status (B57, FR-078)", async () => {
+  it("a terminal job_status event updates the card from the event itself, with no REST request (B57, FR-078, 002 T051)", async () => {
     const api = installFetch(routes());
     mount();
-    await screen.findByTestId("app-card-a1");
-    await waitFor(() => expect(api.count("GET", "/admin/api/v1/apps/a1/service/status")).toBe(1));
-    const appsBefore = api.count("GET", "/admin/api/v1/apps");
+    const card = await screen.findByTestId("app-card-a1");
+    await waitFor(() => expect(within(card).getByTestId("progress-badge")).toHaveTextContent("Berjalan"));
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    const before = api.calls.length;
 
     sendEvent({ protocol: "3", id: "evt-1", seq: 1, topic: "jobs", type: "job_status", ts: new Date().toISOString(), appId: "a1", jobId: "j1", payload: { status: "succeeded", previousStatus: "in_progress", tag: "v1.2.0" } });
-    await waitFor(() => expect(api.count("GET", "/admin/api/v1/apps")).toBeGreaterThan(appsBefore));
-    await waitFor(() => expect(api.count("GET", "/admin/api/v1/apps/a1/service/status")).toBe(2));
-    expect(api.count("GET", "/admin/api/v1/apps/a2/service/status")).toBe(1); // the other app is untouched
+    await waitFor(() => expect(within(screen.getByTestId("app-card-a1")).getByTestId("progress-badge")).toHaveTextContent("Berhasil"));
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)); }); // past the invalidation debounce
+    expect(api.calls.slice(before)).toEqual([]); // neither GET /apps nor any service status
+    expect(within(screen.getByTestId("app-card-a2")).getByTestId("progress-badge")).toHaveTextContent("Berhasil"); // the other app is untouched
   });
 
   it("shows live progress from the socket and offers cancel while the job is active (B52, FR-073)", async () => {

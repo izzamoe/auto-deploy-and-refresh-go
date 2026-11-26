@@ -3,6 +3,8 @@
 // Types come from schema.gen.ts (generated from api/admin-api.v1.openapi.yaml). One
 // `apiFetch` handles, for every call:
 //   - CSRF (FR-011): `X-Admin-Request: true` + a JSON body on every mutation;
+//   - 002 (FR-004, FR-015): `X-Admin-Client: <clientId>` on every mutation, so the events it
+//     causes carry `origin` and this tab skips refetching what it changed itself;
 //   - 401 -> ONE redirect to /admin/login/?next=<current path> (no loop, no popup);
 //   - 403 password_change_required -> an auth event the shell turns into the forced-change screen;
 //   - AbortSignal forwarding (TanStack Query aborts stale requests, B56);
@@ -80,9 +82,37 @@ function emit(event: AuthEvent) {
 
 let redirecting = false;
 
+// ---- X-Admin-Client (002 T051) -------------------------------------------------------
+
+const CLIENT_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
+function tabId(): string {
+  const bytes = new Uint8Array(4);
+  (globalThis.crypto ?? { getRandomValues: (b: Uint8Array) => b.map(() => Math.floor(Math.random() * 256)) }).getRandomValues(bytes);
+  return `t-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+/** Used until the first event hello gives this tab its clientId. */
+const TAB_CLIENT_ID = tabId();
+let adminClientId: string = TAB_CLIENT_ID;
+
+/** The clientId of the tab's event socket (hello.clientId); invalid values are ignored. */
+export function setAdminClientId(id: string | undefined) {
+  if (id && CLIENT_ID_RE.test(id)) adminClientId = id;
+}
+
+/** The value sent in `X-Admin-Client` on mutations. */
+export function getAdminClientId(): string {
+  return adminClientId;
+}
+
+/** The tab-local id used before any hello (also an "own" origin). */
+export function tabClientId(): string {
+  return TAB_CLIENT_ID;
+}
+
 /** Test hook: the redirect guard is module state. */
 export function resetAuthStateForTests() {
   redirecting = false;
+  adminClientId = TAB_CLIENT_ID;
 }
 
 // `next` must stay inside the admin: a same-origin absolute path under /admin/, never a
@@ -147,6 +177,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   let body: string | undefined;
   if (mutating) {
     headers["X-Admin-Request"] = "true";
+    headers["X-Admin-Client"] = adminClientId;
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(options.body ?? {});
   }

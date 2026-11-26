@@ -10,8 +10,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { PropsWithChildren } from "react";
-import { api } from "@/lib/api/client";
-import { invalidateAfterJob } from "@/lib/query";
+import { api, setAdminClientId, tabClientId } from "@/lib/api/client";
+import { createAppliers } from "./appliers";
 import { EventStore, FALLBACK_AFTER_MS } from "./store";
 import type { AppNotification, ConnectionState, ConnectionStatus } from "./store";
 import { HIDDEN_AFTER_MS, SubscriptionManager } from "./subscriptions";
@@ -76,7 +76,7 @@ export function resyncTopic(client: QueryClient, store: EventStore, topic: Topic
   }
 }
 
-/** Topic events whose data lives in TanStack Query: what to do with one (overridden by the appliers, T051). */
+/** Topic events whose data lives in TanStack Query: what to do with one (default: lib/events/appliers, T051). */
 export type FrameApplier = (frame: TopicFrame, ctx: { own: boolean }) => void;
 
 interface EventsContext {
@@ -95,7 +95,7 @@ export function eventsUrl(loc: Pick<Location, "protocol" | "host"> = window.loca
 
 interface ProviderProps {
   socketFactory?: SocketFactory;
-  /** Applies topic events to cached queries (T051); the default only handles finished jobs. */
+  /** Applies topic events to cached queries; default `createAppliers` (T051). */
   applyFrame?: FrameApplier;
 }
 
@@ -146,7 +146,9 @@ export function AdminEventProvider({ children, socketFactory = defaultFactory, a
     let helloSeq: number | undefined;
     const isOffline = () => typeof navigator !== "undefined" && navigator.onLine === false;
 
-    if (!applyRef.current) store.onTerminal = (frame) => invalidateAfterJob(queryClient, frame.appId);
+    const appliers = createAppliers(queryClient);
+    const applyTopicFrame: FrameApplier = (frame, c) => (applyRef.current ?? appliers.apply)(frame, c);
+    store.addOwnOrigin(tabClientId()); // mutations sent before the first hello carry the tab id
 
     // Q-4=A: the cached data is trusted while live, and for FALLBACK_AFTER_MS after leaving live.
     const setStatus = (status: ConnectionStatus) => {
@@ -192,7 +194,10 @@ export function AdminEventProvider({ children, socketFactory = defaultFactory, a
           if (s) s.hello = true;
           helloSeq = frame.seq;
           store.apply(frame, now);
-          if (frame.clientId) store.setClientId(frame.clientId);
+          if (frame.clientId) {
+            store.setClientId(frame.clientId);
+            setAdminClientId(frame.clientId); // X-Admin-Client of every later mutation (T051)
+          }
           manager.attach(frame);
           settledRef.current();
           return;
@@ -226,7 +231,7 @@ export function AdminEventProvider({ children, socketFactory = defaultFactory, a
           if (!manager.accept(frame.topic, frame.seq)) return; // duplicate of a replay (RV3-8)
           if (frame.kind === "logs.lines") manager.noteLogsCursor(frame.cursor);
           store.apply(frame, now);
-          applyRef.current?.(frame, { own: store.isOwnOrigin(frame.origin) });
+          applyTopicFrame(frame, { own: store.isOwnOrigin(frame.origin) });
           store.emitFrame(frame);
         }
       }
@@ -322,7 +327,7 @@ export function AdminEventProvider({ children, socketFactory = defaultFactory, a
 
     return () => {
       disposed = true;
-      store.onTerminal = undefined;
+      appliers.dispose();
       settledRef.current = () => {};
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);

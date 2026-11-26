@@ -390,13 +390,38 @@ describe("AdminEventProvider", () => {
     expect(live).toMatchObject({ status: "in_progress", phase: "downloading", percent: 42 });
   });
 
-  it("a terminal job_status invalidates apps, history, stats, the service status and the releases of that app (FR-078)", () => {
-    const { socket, invalidate } = mount();
-    act(() => { socket().open(); socket().emit(EX.hello); socket().emit(EX.snapshot); });
+  it("a terminal job_status, per topic (T051, FR-078): the app row is updated in the cache with NO request, only the ACTIVE history is refetched once, the releases are only marked stale", async () => {
+    const appsFn = vi.fn(async () => ({ apps: [{ id: "a1", name: "a", lastJobId: "j1", lastJobStatus: "in_progress", updatedAt: "2026-11-24T00:00:00Z" }] }));
+    const historyFn = vi.fn(async () => ({ jobs: [] }));
+    const releasesFn = vi.fn(async () => ({ releases: ["v1"] }));
+    const statsFn = vi.fn(async () => ({ n: 1 }));
+    function Page() {
+      useJobProgress("j1");
+      useQuery({ queryKey: ["apps"], queryFn: appsFn, staleTime: Infinity });
+      useQuery({ queryKey: ["history", { page: 1 }], queryFn: historyFn, staleTime: Infinity });
+      return null;
+    }
+    const { socket, client, invalidate } = mount(createElement(Page));
+    await act(async () => {
+      await client.prefetchQuery({ queryKey: ["releases", "a1"], queryFn: releasesFn });
+      await client.prefetchQuery({ queryKey: ["stats", { range: "7d" }], queryFn: statsFn });
+      socket().open();
+      socket().emit(EX.hello);
+    });
+    await act(async () => { ackAll(socket(), new Set()); socket().emit(EX.snapshot); await vi.advanceTimersByTimeAsync(10); });
     invalidate.mockClear();
-    act(() => socket().emit(EX.jobStatus));
+    const before = [appsFn, historyFn, releasesFn, statsFn].map((f) => f.mock.calls.length);
+
+    await act(async () => { socket().emit(EX.jobStatus.replace('"seq":10', '"seq":50')); }); // after hello.seq 41
+    const row = (client.getQueryData(["apps"]) as { apps: { lastJobStatus: string }[] }).apps[0];
+    expect(row.lastJobStatus).toBe("failed"); // from the event itself
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect([appsFn, historyFn, releasesFn, statsFn].map((f) => f.mock.calls.length)).toEqual([before[0], before[1] + 1, before[2], before[3]]);
+    expect(client.getQueryState(["releases", "a1"])?.isInvalidated).toBe(true);
     const keys = invalidate.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown }).queryKey));
-    expect(keys).toEqual(expect.arrayContaining(['["apps"]', '["history"]', '["stats"]', '["service-status","a1"]', '["releases","a1"]']));
+    expect(keys).not.toContain('["apps"]');
+    expect(keys).not.toContain('["stats"]');
+    expect(keys.some((k) => k.startsWith('["service-status"'))).toBe(false);
   });
 
   it("ignores malformed frames without failing", () => {
