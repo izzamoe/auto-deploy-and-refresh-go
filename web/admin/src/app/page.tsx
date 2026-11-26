@@ -18,8 +18,11 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { useTopic } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
+
+const JOBS_PROGRESS = { progress: true };
 
 // The chart card is loaded on demand so it never weighs on the shared bundle (Q-20).
 const DeployActivityChart = dynamic(() => import("@/components/dashboard/DeployActivityChart").then((m) => m.DeployActivityChart), {
@@ -27,17 +30,27 @@ const DeployActivityChart = dynamic(() => import("@/components/dashboard/DeployA
   loading: () => <Skeleton className="h-80 rounded-card" />,
 });
 
-/** Dashboard (FR-100, FR-026): auto-deploy content in the reference's card style. */
+/**
+ * Dashboard (FR-100, FR-026): auto-deploy content in the reference's card style.
+ * 002 (FR-001, FR-003): no polling. The stats are loaded once and refetched only when topic
+ * `stats` says they changed (a job, an app, or the 24 h window / midnight moving on).
+ */
 export default function DashboardPage() {
   const i18n = useI18n();
   const { t, formatNumber } = i18n;
   const [range, setRange] = useState<StatsRange>("7d");
+  const statsFresh = useTopic("stats");
+  // The other cards of this page (subscription.md §1): live deploys, apps, security signals.
+  useTopic("jobs", JOBS_PROGRESS);
+  useTopic("apps");
+  useTopic("settings");
+  useTopic("account");
 
   const stats = useQuery({
     queryKey: queryKeys.statsRange(range),
     queryFn: ({ signal }) => api.getStats({ range }, { signal }),
     placeholderData: keepPreviousData,
-    refetchInterval: 30_000,
+    ...liveQueryOptions(statsFresh),
   });
 
   if (stats.isPending) {
