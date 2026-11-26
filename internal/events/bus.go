@@ -130,8 +130,9 @@ func (b *Bus) Publish(e Event) (uint64, error) {
 	return seq, nil
 }
 
-// PublishProgress queues a compact progress frame to every client subscribed to jobs with
-// progress on. encode is called at most once, only when such a client exists.
+// PublishProgress puts a compact progress frame in the job's latest-wins slot of every
+// client subscribed to jobs with progress on (no seq, no ring buffer, never the state
+// queue). encode is called at most once, only when such a client exists.
 func (b *Bus) PublishProgress(jobID string, encode func() []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -145,7 +146,7 @@ func (b *Bus) PublishProgress(jobID string, encode func() []byte) {
 				return
 			}
 		}
-		c.enqueue(frame)
+		c.setProgress(jobID, frame)
 	}
 }
 

@@ -27,6 +27,9 @@ type Client struct {
 	mu            sync.Mutex
 	topics        map[Topic]TopicOpts
 	overflowTimes []time.Time // the last OverflowLimit overflows
+
+	pmu      sync.Mutex
+	progress progressSlots
 }
 
 // NewClient creates the state of a new connection with a fresh id "c-<8 hex>".
@@ -87,14 +90,24 @@ func topicRank(t Topic) int {
 func (c *Client) setTopics(subs []TopicSub, unsubs []Topic) (added []Topic) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	dropProgress := false
 	for _, s := range subs {
 		if _, ok := c.topics[s.Topic]; !ok {
 			added = append(added, s.Topic)
 		}
 		c.topics[s.Topic] = s.Opts
+		if s.Topic == TopicJobs && !s.Opts.Progress {
+			dropProgress = true // jobs{progress:false}: a hidden tab stops the stream (FR-018)
+		}
 	}
 	for _, t := range unsubs {
 		delete(c.topics, t)
+		if t == TopicJobs {
+			dropProgress = true
+		}
+	}
+	if dropProgress {
+		c.clearProgress()
 	}
 	return added
 }

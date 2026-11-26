@@ -617,6 +617,9 @@ type v3Conn struct {
 	c      *websocket.Conn
 	ctx    context.Context
 	client *events.Client
+
+	progressTimer *time.Timer
+	progressBuf   [][]byte
 }
 
 func (vc *v3Conn) write(payload []byte) bool { return writeAdminEventPayload(vc.ctx, vc.c, payload) }
@@ -717,6 +720,10 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal
 			if !vc.flush() {
 				return
 			}
+		case <-vc.progressDue():
+			if !vc.flush() {
+				return
+			}
 		case payload := <-vc.client.Queue():
 			if vc.client.Overflowed() {
 				// payload is older than the resync about to be sent: drop it with the rest.
@@ -737,15 +744,41 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal
 // third overflow within 60 s closes the socket with 4408 (the client reconnects and
 // resumes). The client is never dropped without a sign.
 func (vc *v3Conn) flush() bool {
-	overflowed, lagging := vc.client.TakeOverflow(vc.h.now())
-	if !overflowed {
-		return true
+	now := vc.h.now()
+	if overflowed, lagging := vc.client.TakeOverflow(now); overflowed {
+		if lagging {
+			_ = vc.c.Close(closeLagging, "lagging")
+			return false
+		}
+		if !vc.writeFrame(adminEventTypeResync, adminEventResyncPayload{Topics: vc.client.TopicList(), Reason: events.ResyncOverflow}) {
+			return false
+		}
 	}
-	if lagging {
-		_ = vc.c.Close(closeLagging, "lagging")
-		return false
+	// Progress (NFR-003): the newest frame per job, at most one per job per 500 ms; a held
+	// frame is sent when its time comes (progressTimer).
+	frames, wait := vc.client.TakeProgress(now, vc.progressBuf[:0])
+	vc.progressBuf = frames[:0]
+	for _, f := range frames {
+		if !vc.write(f) {
+			return false
+		}
 	}
-	return vc.writeFrame(adminEventTypeResync, adminEventResyncPayload{Topics: vc.client.TopicList(), Reason: events.ResyncOverflow})
+	if wait > 0 {
+		if vc.progressTimer == nil {
+			vc.progressTimer = time.NewTimer(wait)
+		} else {
+			vc.progressTimer.Reset(wait)
+		}
+	}
+	return true
+}
+
+// progressDue is the channel of the pending progress timer (nil when none).
+func (vc *v3Conn) progressDue() <-chan time.Time {
+	if vc.progressTimer == nil {
+		return nil
+	}
+	return vc.progressTimer.C
 }
 
 // handleOp applies one client frame and writes the replies; false ends the connection.
