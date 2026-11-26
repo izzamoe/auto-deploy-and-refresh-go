@@ -6,10 +6,26 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { useI18n } from "@/i18n";
 import { useConnection, useSummary, useTopic } from "@/lib/events/provider";
+import { indicatorOf } from "@/lib/events/store";
+import type { ConnectionIndicator } from "@/lib/events/store";
 import { LOGO_SRC } from "@/lib/paths";
 import { cn } from "@/lib/utils";
 import { NotificationsPanel } from "./NotificationsPanel";
 import { useSession } from "./SessionGate";
+
+const CONNECTION_LABEL = {
+  live: "shell.connection.online",
+  reconnecting: "shell.connection.reconnecting",
+  resyncing: "shell.connection.resyncing",
+  offline: "shell.connection.offline",
+} as const satisfies Record<ConnectionIndicator, string>;
+
+const CONNECTION_DOT: Record<ConnectionIndicator, string> = {
+  live: "bg-primary",
+  reconnecting: "bg-info-soft-foreground motion-safe:animate-pulse",
+  resyncing: "bg-info-soft-foreground",
+  offline: "bg-muted-foreground/60",
+};
 
 /**
  * Greeting with live counts, app search and the notification bell (plan §E). The counts come
@@ -32,7 +48,9 @@ export function Header() {
     router.push(term ? `/apps/?q=${encodeURIComponent(term)}` : "/apps/");
   }
 
-  const online = connection.status === "live";
+  // FR-024: four states, as text (not colour alone) and as `data-connection` (Playwright).
+  const indicator = indicatorOf(connection.status);
+  const label = t(CONNECTION_LABEL[indicator]);
 
   return (
     <header className="flex flex-wrap items-center gap-x-5 gap-y-3 pb-6">
@@ -64,9 +82,9 @@ export function Header() {
         </button>
       </form>
 
-      <span role="status" title={online ? t("shell.connection.online") : t("shell.connection.offline")} className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <span aria-hidden="true" className={cn("inline-flex size-2.5 rounded-full", online ? "bg-primary" : "bg-muted-foreground/60")} />
-        <span className="sr-only xl:not-sr-only">{online ? t("shell.connection.online") : t("shell.connection.offline")}</span>
+      <span role="status" title={label} data-connection={indicator} data-testid="connection-status" className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span aria-hidden="true" className={cn("inline-flex size-2.5 rounded-full", CONNECTION_DOT[indicator])} />
+        <span className="sr-only xl:not-sr-only">{label}</span>
       </span>
       <NotificationsPanel />
     </header>

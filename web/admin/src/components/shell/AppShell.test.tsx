@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
+import { useQuery } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAuthStateForTests } from "@/lib/api/client";
+import { api, resetAuthStateForTests } from "@/lib/api/client";
+import { useTopic } from "@/lib/events/provider";
 import { AppShell } from "./AppShell";
 import { SessionGate } from "./SessionGate";
-import { FakeWebSocket, Providers, SESSION, STATS, errorBody, goLive, installFakeWebSocket, installFetch } from "./testUtils";
+import { FakeWebSocket, Providers, SESSION, STATS, ackSubs, errorBody, goLive, installFakeWebSocket, installFetch } from "./testUtils";
+
+const ackSubsAll = (ws: FakeWebSocket) => ackSubs(ws, { summary: { appsTotal: 1, appsEnabled: 1, running: 0, queued: 0 } });
 
 const nav = vi.hoisted(() => ({ pathname: "/", push: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -125,13 +129,34 @@ describe("Header", () => {
     expect(nav.push).toHaveBeenLastCalledWith("/apps/");
   });
 
-  it("shows the socket state to assistive technology", async () => {
+  it("shows the socket state to assistive technology: four states as text and data-connection (002 T059, FR-024)", async () => {
+    let online = true;
+    vi.stubGlobal("navigator", { ...navigator, get onLine() { return online; } });
     installFetch(okRoutes());
     mountShell();
     await screen.findByTestId("admin-shell");
-    expect(screen.getByText("Terputus")).toBeInTheDocument();
-    await act(async () => goLive(FakeWebSocket.instances[0]));
+    const status = screen.getByTestId("connection-status");
+    expect(status).toHaveAttribute("data-connection", "reconnecting");
+    expect(status).toHaveTextContent("Menyambungkan…");
+    const ws = FakeWebSocket.instances[0];
+    await act(async () => goLive(ws));
+    expect(status).toHaveAttribute("data-connection", "live");
     expect(screen.getByText("Terhubung")).toBeInTheDocument();
+    // an overflow resync of summary: re-subscribed (state in the ack), live again once confirmed
+    await sendEvent({ protocol: "3", id: "evt-r", type: "resync", ts: "2026-11-25T01:00:00Z", payload: { topics: ["summary"], reason: "overflow" } });
+    await act(async () => { await Promise.resolve(); ackSubsAll(ws); });
+    expect(status).toHaveAttribute("data-connection", "live");
+    online = false;
+    await act(async () => { window.dispatchEvent(new Event("offline")); });
+    expect(status).toHaveAttribute("data-connection", "offline");
+    expect(status).toHaveTextContent("Terputus");
+    expect(status).toHaveAttribute("title", "Terputus");
+    online = true;
+    await act(async () => { window.dispatchEvent(new Event("online")); });
+    expect(status).toHaveAttribute("data-connection", "live"); // the socket survived the blip
+    await act(async () => ws.onclose?.({ code: 1006 }));
+    expect(status).toHaveAttribute("data-connection", "reconnecting");
+    expect(status).toHaveTextContent("Menyambungkan…");
   });
 });
 
@@ -177,13 +202,39 @@ describe("icon-only controls (visual review item 8)", () => {
     expect(screen.getByTestId("rail-tip")).toHaveTextContent("Gelap");
   });
 
+  it("\"resyncing\" is shown while a resync refetch of the open page runs, then \"live\" (002 T059)", async () => {
+    let release: () => void = () => {};
+    installFetch({ ...okRoutes(), "GET /admin/api/v1/apps": () => new Promise((r) => { release = () => r({ status: 200, body: { apps: [] } }); }) });
+    function AppsProbe() {
+      useTopic("apps");
+      useQuery({ queryKey: ["apps"], queryFn: () => api.listApps(), staleTime: Infinity });
+      return null;
+    }
+    nav.pathname = "/apps/";
+    render(<Providers><SessionGate><AppShell><AppsProbe /></AppShell></SessionGate></Providers>);
+    await screen.findByTestId("admin-shell");
+    const ws = FakeWebSocket.instances[0];
+    await act(async () => goLive(ws));
+    await act(async () => { release(); await new Promise((r) => setTimeout(r, 10)); });
+    const status = screen.getByTestId("connection-status");
+    expect(status).toHaveAttribute("data-connection", "live");
+    await sendEvent({ protocol: "3", id: "evt-r", type: "resync", ts: "2026-11-25T01:00:00Z", payload: { topics: ["apps"], reason: "overflow" } });
+    expect(status).toHaveAttribute("data-connection", "resyncing");
+    expect(status).toHaveTextContent("Menyelaraskan data…");
+    await act(async () => { release(); await new Promise((r) => setTimeout(r, 10)); });
+    expect(status).toHaveAttribute("data-connection", "live");
+  });
+
   it("the connection dot has a text label (visible on wide screens, always readable by assistive technology)", async () => {
     installFetch(okRoutes());
     mountShell();
     await screen.findByTestId("admin-shell");
     const status = screen.getByRole("status");
-    expect(status).toHaveTextContent("Terputus");
-    expect(status).toHaveAttribute("title", "Terputus");
+    expect(status).toHaveTextContent("Menyambungkan…");
+    expect(status).toHaveAttribute("title", "Menyambungkan…");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(status).toHaveTextContent("Terhubung");
+    expect(status).toHaveAttribute("title", "Terhubung");
   });
 });
 
