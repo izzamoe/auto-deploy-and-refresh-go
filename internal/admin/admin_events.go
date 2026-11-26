@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/izzamoe/auto-deploy/internal/auth"
 	"github.com/izzamoe/auto-deploy/internal/cancel"
+	"github.com/izzamoe/auto-deploy/internal/events"
 	"github.com/izzamoe/auto-deploy/internal/llmstxt"
 	"github.com/izzamoe/auto-deploy/internal/progress"
 
@@ -78,6 +81,7 @@ type AdminEventHub struct {
 	nextID        atomic.Uint64
 	serverVersion string
 	sessions      SessionChecker
+	epoch         string // protocol 3: identity of this process (events-ws.v3.md section 5)
 
 	mu      sync.Mutex
 	clients map[*adminEventClient]struct{}
@@ -93,8 +97,15 @@ func NewAdminEventHub(tracker *progress.ProgressTracker) *AdminEventHub {
 		tracker:       tracker,
 		now:           time.Now,
 		serverVersion: llmstxt.Version,
+		epoch:         newEpoch(),
 		clients:       make(map[*adminEventClient]struct{}),
 	}
+}
+
+func newEpoch() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // SetServerVersion overrides the version reported in the hello event (default:
@@ -121,7 +132,7 @@ func (h *AdminEventHub) SetSessionChecker(sc SessionChecker) { h.sessions = sc }
 // coder/websocket (no OriginPatterns, no InsecureSkipVerify): a browser page on
 // another origin cannot open this socket with the admin's cookie (K4, FR-012).
 func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) {
-	h.serveEvents(w, r, nil, nil)
+	h.serveEvents(w, r, nil, events.Principal{}, nil)
 }
 
 // Close codes of events-ws.md section 5.
@@ -142,7 +153,7 @@ type eventSession struct {
 // serveEvents is EventsWebSocket plus what only the caller knows: when the signed-in
 // session ends (hello.sessionExpiresAt) and any extra response headers for the
 // handshake (the deprecation notice of the pre-v1 path).
-func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess *eventSession, extra http.Header) {
+func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess *eventSession, principal events.Principal, extra http.Header) {
 	var sessionExpiresAt *time.Time
 	if sess != nil && !sess.expiresAt.IsZero() {
 		t := sess.expiresAt.UTC()
@@ -159,10 +170,19 @@ func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess
 	}
 	defer c.CloseNow()
 
-	// FR-025 / RV-14: a client asking for another protocol gets 4409 (reload banner).
-	if q, ok := r.URL.Query()["protocol"]; ok && (len(q) != 1 || q[0] != adminEventProtocolVersion) {
-		_ = c.Close(closeProtocolUnsupported, "unsupported protocol")
-		return
+	// FR-019 / FR-025 / RV-14: ?protocol=3 is the topic protocol of 002; ?protocol=2 and no
+	// parameter keep the 001 protocol for one release (Q-11); anything else gets 4409
+	// (reload banner).
+	if q, ok := r.URL.Query()["protocol"]; ok {
+		switch {
+		case len(q) == 1 && q[0] == adminEventProtocolV3:
+			h.serveV3(c, sess, principal, sessionExpiresAt)
+			return
+		case len(q) == 1 && q[0] == adminEventProtocolVersion:
+		default:
+			_ = c.Close(closeProtocolUnsupported, "unsupported protocol")
+			return
+		}
 	}
 
 	client := h.addClient()
@@ -445,8 +465,12 @@ func writeAdminEventPayload(ctx context.Context, c *websocket.Conn, payload []by
 // the hello event when the session ends; an API-token principal has no session.
 func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.RequestContext) {
 	var sess *eventSession
-	if p, ok := auth.PrincipalFrom(c); ok && p.Kind == auth.KindSession {
-		sess = &eventSession{sessionID: p.SessionID, userID: p.UserID, tokenVersion: p.TokenVersion, expiresAt: p.ExpiresAt}
+	var principal events.Principal
+	if p, ok := auth.PrincipalFrom(c); ok {
+		principal = events.Principal{Kind: p.Kind, UserID: p.UserID, SessionID: p.SessionID}
+		if p.Kind == auth.KindSession {
+			sess = &eventSession{sessionID: p.SessionID, userID: p.UserID, tokenVersion: p.TokenVersion, expiresAt: p.ExpiresAt}
+		}
 	}
 	var extra http.Header
 	if path := string(c.Request.URI().Path()); path == adminEventsLegacyPath {
@@ -456,7 +480,7 @@ func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.Request
 		}
 	}
 	adaptor.HertzHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.serveEvents(w, r, sess, extra)
+		h.serveEvents(w, r, sess, principal, extra)
 	}))(ctx, c)
 }
 
@@ -497,4 +521,220 @@ func progressPercentInt(percent float64) int64 {
 		return 100
 	}
 	return int64(percent)
+}
+
+// ---------------------------------------------------------------------------------------
+// Protocol 3 (specs/002 contracts/events-ws.v3.md): topics, client ops, resume.
+
+const adminEventProtocolV3 = "3"
+
+// Frame types of the protocol-3 control channel (events-ws.v3.md 2.1).
+const (
+	adminEventTypeSubscribed   = "subscribed"
+	adminEventTypeUnsubscribed = "unsubscribed"
+	adminEventTypeError        = "error"
+)
+
+// adminEventV3 is a server frame of protocol 3 that the hub encodes itself (hello, control
+// frames, heartbeat). State events with a seq are encoded by the bus.
+type adminEventV3 struct {
+	Protocol  string    `json:"protocol"`
+	ID        string    `json:"id"`
+	Topic     string    `json:"topic,omitempty"`
+	Type      string    `json:"type"`
+	Timestamp time.Time `json:"ts"`
+	Payload   any       `json:"payload,omitempty"`
+}
+
+type adminEventLimits struct {
+	MaxTopics     int `json:"maxTopics"`
+	MaxOpsPer10s  int `json:"maxOpsPer10s"`
+	MaxFrameBytes int `json:"maxFrameBytes"`
+}
+
+type adminEventHelloV3Payload struct {
+	ServerVersion    string           `json:"serverVersion"`
+	SessionExpiresAt *time.Time       `json:"sessionExpiresAt,omitempty"`
+	HeartbeatSeconds int              `json:"heartbeatSeconds"`
+	Epoch            string           `json:"epoch"`
+	Seq              uint64           `json:"seq"`
+	ClientID         string           `json:"clientId"`
+	Limits           adminEventLimits `json:"limits"`
+}
+
+type adminEventSubscribedTopic struct {
+	Name  events.Topic `json:"name"`
+	State any          `json:"state,omitempty"`
+}
+
+type adminEventSubscribedPayload struct {
+	Ref    string                      `json:"ref"`
+	Topics []adminEventSubscribedTopic `json:"topics"`
+}
+
+type adminEventUnsubscribedPayload struct {
+	Ref    string         `json:"ref"`
+	Topics []events.Topic `json:"topics"`
+}
+
+type adminEventErrorPayload struct {
+	Ref   string           `json:"ref,omitempty"`
+	Code  events.ErrorCode `json:"code"`
+	Topic string           `json:"topic,omitempty"`
+}
+
+func (h *AdminEventHub) encodeV3(typ string, payload any) ([]byte, error) {
+	return json.Marshal(adminEventV3{Protocol: adminEventProtocolV3, ID: h.newEventID(), Type: typ, Timestamp: h.now().UTC(), Payload: payload})
+}
+
+// v3Conn is one protocol-3 socket being served.
+type v3Conn struct {
+	h      *AdminEventHub
+	c      *websocket.Conn
+	ctx    context.Context
+	client *events.Client
+}
+
+func (vc *v3Conn) write(payload []byte) bool { return writeAdminEventPayload(vc.ctx, vc.c, payload) }
+
+func (vc *v3Conn) writeFrame(typ string, payload any) bool {
+	raw, err := vc.h.encodeV3(typ, payload)
+	if err != nil {
+		return false
+	}
+	return vc.write(raw)
+}
+
+// serveV3 runs one protocol-3 socket: hello, then a loop that writes the client's queue,
+// heartbeats and session checks, and handles the client's ops read by a second goroutine.
+func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal events.Principal, sessionExpiresAt *time.Time) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal)}
+
+	if !vc.writeFrame(adminEventTypeHello, adminEventHelloV3Payload{
+		ServerVersion:    h.serverVersion,
+		SessionExpiresAt: sessionExpiresAt,
+		HeartbeatSeconds: int(adminEventHeartbeatInterval / time.Second),
+		Epoch:            h.epoch,
+		Seq:              0,
+		ClientID:         vc.client.ID,
+		Limits:           adminEventLimits{MaxTopics: events.MaxTopics, MaxOpsPer10s: events.MaxOpsPer10s, MaxFrameBytes: events.MaxFrameBytes},
+	}) {
+		return
+	}
+
+	// The read loop: client ops are text frames of at most MaxFrameBytes (events-ws.v3.md
+	// section 4). It hands every frame to the writer loop, which handles it in order.
+	c.SetReadLimit(events.MaxFrameBytes)
+	incoming := make(chan []byte)
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			typ, data, err := c.Read(ctx)
+			if err != nil {
+				return
+			}
+			if typ != websocket.MessageText {
+				data = nil
+			}
+			select {
+			case incoming <- data:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	heartbeat := time.NewTicker(adminEventHeartbeatInterval)
+	defer heartbeat.Stop()
+	var recheck <-chan time.Time
+	var revoked <-chan struct{}
+	if sess != nil && h.sessions != nil {
+		t := time.NewTicker(adminEventSessionCheckInterval)
+		defer t.Stop()
+		recheck = t.C
+		ch, unsubscribe := h.sessions.Subscribe()
+		defer unsubscribe()
+		revoked = ch
+	}
+	sessionOK := func() bool {
+		return h.sessions.Recheck(sess.sessionID, sess.userID, sess.tokenVersion) == nil
+	}
+
+	for {
+		select {
+		case <-readDone:
+			return
+		case <-recheck:
+			if !sessionOK() {
+				_ = c.Close(closeSessionEnded, "session ended")
+				return
+			}
+		case <-revoked:
+			if !sessionOK() {
+				_ = c.Close(closeSessionEnded, "session ended")
+				return
+			}
+		case <-heartbeat.C:
+			if !vc.writeFrame(adminEventTypeHeartbeat, nil) {
+				return
+			}
+		case data := <-incoming:
+			if !vc.handleOp(data) {
+				return
+			}
+		case payload := <-vc.client.Queue():
+			if !vc.write(payload) {
+				return
+			}
+		}
+	}
+}
+
+// handleOp applies one client frame and writes the replies; false ends the connection.
+func (vc *v3Conn) handleOp(data []byte) bool {
+	op, perr := events.ParseOp(data)
+	if perr != nil {
+		return vc.writeError(*perr)
+	}
+	for _, e := range op.Errors {
+		if !vc.writeError(e) {
+			return false
+		}
+	}
+	switch op.Kind {
+	case "sub":
+		var accepted []events.TopicSub
+		for _, s := range op.Subs {
+			if events.Authorize(vc.client.Principal, s.Topic) != nil {
+				if !vc.writeError(events.OpError{Ref: op.Ref, Code: events.CodeForbiddenTopic, Topic: string(s.Topic)}) {
+					return false
+				}
+				continue
+			}
+			accepted = append(accepted, s)
+		}
+		if len(accepted) == 0 {
+			return true
+		}
+		vc.client.Apply(events.Op{Kind: "sub", Subs: accepted})
+		topics := make([]adminEventSubscribedTopic, 0, len(accepted))
+		for _, s := range accepted {
+			topics = append(topics, adminEventSubscribedTopic{Name: s.Topic})
+		}
+		return vc.writeFrame(adminEventTypeSubscribed, adminEventSubscribedPayload{Ref: op.Ref, Topics: topics})
+	case "unsub":
+		if len(op.Unsubs) == 0 {
+			return true
+		}
+		vc.client.Apply(events.Op{Kind: "unsub", Unsubs: op.Unsubs})
+		return vc.writeFrame(adminEventTypeUnsubscribed, adminEventUnsubscribedPayload{Ref: op.Ref, Topics: op.Unsubs})
+	}
+	return true
+}
+
+func (vc *v3Conn) writeError(e events.OpError) bool {
+	return vc.writeFrame(adminEventTypeError, adminEventErrorPayload{Ref: e.Ref, Code: e.Code, Topic: e.Topic})
 }

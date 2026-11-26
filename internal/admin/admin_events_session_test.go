@@ -183,7 +183,7 @@ func TestEvents_StaysOpenWhileSessionIsValid(t *testing.T) {
 // are served normally.
 func TestEvents_UnsupportedProtocolClosesWith4409(t *testing.T) {
 	env := newWSSessionEnv(t, "ws_proto", time.Hour)
-	for _, q := range []string{"?protocol=1", "?protocol=3", "?protocol=", "?protocol=abc"} {
+	for _, q := range []string{"?protocol=1", "?protocol=4", "?protocol=", "?protocol=abc"} {
 		conn, resp, err := dialEvents(t, env.addr, "/admin/events/v1/ws"+q, env.header())
 		closeBody(resp)
 		if err != nil {
