@@ -5,6 +5,7 @@
 //   reconnect (T012, FR-011, SC-003): 30 s offline then online refetches nothing
 //   focus     (T013, FR-014, SC-002): a focus event refetches nothing while live
 //   topics    (T018, FR-015, SC-011): /account/ (no `jobs` topic) receives no progress frame
+//   navigate  (T052, FR-014, RV-8): leave /apps/, change it elsewhere, come back -> shown with <= 1 REST
 import { expect, test } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { STATIC_ROUTES, STORAGE_STATE, adminURL, baseURL, browserHeaders, countApi, firstApp, ready, seedJob, setPrefs } from './helpers';
@@ -135,6 +136,35 @@ test.describe('focus', () => {
       await sleep(3_000);
       expect(t.api.list(), 'REST requests after one focus event on /apps/').toEqual([]);
     } finally {
+      await t.context.close();
+    }
+  });
+});
+
+test.describe('navigate', () => {
+  test('navigate away and back: changes made meanwhile are shown with <= 1 REST', async ({ browser, request }) => {
+    const app = await firstApp(request);
+    const t = await openTab(browser, '/apps/');
+    try {
+      const card = t.page.getByTestId(`app-card-${app.id}`);
+      await expect(card.getByRole('button', { name: 'Disable' })).toBeVisible();
+      await waitLive(t.page);
+      // Client-side navigation: the socket stays; the page leaves topic `apps` (unsub after 1 s).
+      await t.page.getByRole('link', { name: 'Account' }).first().click();
+      await expect(t.page.getByTestId('tokens-card')).toBeVisible();
+      await sleep(2_000);
+      // Another context disables the app while this tab is elsewhere.
+      const off = await request.post(`${baseURL()}/admin/api/v1/apps/${app.id}/toggle`, { data: { enabled: false }, headers: browserHeaders() });
+      expect(off.status()).toBe(200);
+      await sleep(1_000);
+      t.api.reset();
+      await t.page.getByRole('link', { name: 'Apps' }).first().click();
+      await expect(card.getByRole('button', { name: 'Enable' }), 'the change made meanwhile is shown').toBeVisible({ timeout: 5_000 });
+      await sleep(3_000);
+      const rest = t.api.list();
+      expect(rest.length, `REST requests after coming back to /apps/: ${rest.join(', ')}`).toBeLessThanOrEqual(1);
+    } finally {
+      await request.post(`${baseURL()}/admin/api/v1/apps/${app.id}/toggle`, { data: { enabled: true }, headers: browserHeaders() });
       await t.context.close();
     }
   });

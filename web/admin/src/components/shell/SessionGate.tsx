@@ -42,9 +42,13 @@ export function SessionGate({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   const [forced, setForced] = useState(false);
 
+  // 002 (FR-014): the open event socket guards the session (4401 on revocation, account.changed
+  // on profile changes), so it is not refetched on focus; any 401 elsewhere redirects to login.
   const session = useQuery({
     queryKey: queryKeys.session,
     queryFn: ({ signal }) => api.getSession({ signal }),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 
   // A 403 password_change_required from any data call also lands here.

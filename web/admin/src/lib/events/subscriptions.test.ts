@@ -2,12 +2,13 @@
 // 002 T050 (FR-011, FR-012, FR-015, FR-018; subscription.md §2, §6): the SubscriptionManager
 // and the provider's topic life cycle: refcount + 1 s unsub debounce, one batched sub per tick,
 // resume per topic, visibility (hidden > 10 s) and offline/online.
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { createElement } from "react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAuthStateForTests } from "@/lib/api/client";
+import { createQueryClient, liveQueryOptions } from "@/lib/query";
 import { AdminEventProvider, useConnection, useTopic } from "./provider";
 import type { SocketLike } from "./provider";
 import { HIDDEN_AFTER_MS, SubscriptionManager, UNSUB_DELAY_MS } from "./subscriptions";
@@ -207,6 +208,53 @@ describe("provider topic life cycle", () => {
     expect(ops[0]).toMatchObject({ op: "sub" });
     expect((ops[0] as Extract<ClientOp, { op: "sub" }>).topics).toEqual(expect.arrayContaining([{ name: "jobs", progress: true }, { name: "logs:system", after: "s=9" }]));
     delete (document as unknown as Record<string, unknown>).visibilityState;
+  });
+
+  it("navigate away and back: changes made meanwhile are shown with <= 1 REST (RV-8, T052)", async () => {
+    // The server's list; another context changes it while this tab is on another page.
+    let server = [{ id: "a1", name: "web", enabled: true }];
+    const listApps = vi.fn(async () => ({ apps: server.map((a) => ({ ...a })) }));
+    let shown: string[] = [];
+    function AppsPage() {
+      const fresh = useTopic("apps");
+      const q = useQuery({ queryKey: ["apps"], queryFn: listApps, ...liveQueryOptions(fresh) });
+      shown = (q.data?.apps ?? []).map((a) => `${a.id}:${a.enabled ? "on" : "off"}`);
+      return null;
+    }
+    function AccountPage() {
+      useTopic("account");
+      return null;
+    }
+    const client = createQueryClient();
+    const tree = (page: ReactNode) => createElement(QueryClientProvider, { client }, createElement(AdminEventProvider, { socketFactory: (u: string) => new FakeSocket(u) }, createElement(Status), page));
+    const view = render(tree(createElement(AppsPage)));
+    await act(async () => { latest().open(); latest().emit(hello("E", 4)); });
+    await act(async () => { ack(latest()); await vi.advanceTimersByTimeAsync(10); });
+    expect(shown).toEqual(["a1:on"]);
+    expect(listApps).toHaveBeenCalledTimes(1);
+
+    // Leave /apps/: one unsub after 1 s; the cached list is marked stale WITHOUT a fetch.
+    view.rerender(tree(createElement(AccountPage)));
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNSUB_DELAY_MS); });
+    await act(async () => { ack(latest()); });
+    expect(latest().ops().filter((o) => o.op === "unsub")).toEqual([{ op: "unsub", ref: expect.any(String), topics: ["apps"] }]);
+    expect(client.getQueryState(["apps"])?.isInvalidated).toBe(true);
+    expect(listApps).toHaveBeenCalledTimes(1);
+
+    // Meanwhile another context disables the app (this tab no longer receives `apps`).
+    server = [{ id: "a1", name: "web", enabled: false }];
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(listApps).toHaveBeenCalledTimes(1);
+
+    // Back to /apps/: the change is shown, with at most ONE request.
+    latest().send.mockClear();
+    view.rerender(tree(createElement(AppsPage)));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    const op = latest().ops()[0];
+    expect(op).toMatchObject({ op: "sub", topics: [{ name: "apps" }], resume: { epoch: "E", seq: 4 } }); // resume from where it was left
+    await act(async () => { ack(latest()); await vi.advanceTimersByTimeAsync(10); });
+    expect(shown).toEqual(["a1:off"]);
+    expect(listApps.mock.calls.length - 1).toBeLessThanOrEqual(1);
   });
 
   it("offline: no reconnect attempts until the browser is online again, then ONE immediate reconnect", async () => {

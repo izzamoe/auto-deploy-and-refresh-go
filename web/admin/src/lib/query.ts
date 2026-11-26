@@ -1,6 +1,13 @@
 // TanStack Query setup (D13, B56, B57): abortable fetches (the query `signal` goes to
 // apiFetch), calm retries and ONE place that knows which cached data a finished job makes
 // stale.
+//
+// 002 (FR-014, Q-4=A): data kept current by a topic is trusted while that topic is subscribed
+// and the socket is live (`liveQueryOptions(true)`: staleTime Infinity, no refetch on focus or
+// network reconnect). When the socket has not been live for more than 5 s, queries fall back to
+// the defaults below: refetch on focus/action only. There is NO polling fallback and NO refetch
+// on a network reconnect (the socket resumes instead). Leaving a topic marks its queries stale
+// without fetching (RV-8, lib/events/provider.tsx leaveTopic).
 import { QueryClient } from "@tanstack/react-query";
 import { ApiError, isAbortError } from "@/lib/api/client";
 import type { Ok, Schemas } from "@/lib/api/client";
@@ -79,17 +86,35 @@ export function shouldRetry(failureCount: number, error: unknown): boolean {
   return failureCount < 2;
 }
 
+export const FALLBACK_STALE_MS = 5_000;
+
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 5_000,
+        staleTime: FALLBACK_STALE_MS,
         retry: shouldRetry,
         refetchOnWindowFocus: true,
+        refetchOnReconnect: false, // the event socket resumes; a network change is no reason to refetch
       },
       mutations: { retry: false },
     },
   });
+}
+
+export interface LiveOptions {
+  staleTime?: number;
+  refetchOnWindowFocus?: boolean;
+  refetchOnReconnect?: boolean;
+}
+
+/**
+ * Query options for data a topic keeps current. `fresh` comes from `useTopic(topic)`: true while
+ * the topic is confirmed and the socket is live (or left live < 5 s ago). Not fresh -> the
+ * client defaults (Q-4=A fallback).
+ */
+export function liveQueryOptions(fresh: boolean): LiveOptions {
+  return fresh ? { staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false } : {};
 }
 
 /**
@@ -110,7 +135,3 @@ export function invalidateAfterJob(client: QueryClient, appId?: string) {
   }
 }
 
-/** After a reconnect the socket may have missed events: refetch everything visible. */
-export function invalidateAll(client: QueryClient) {
-  void client.invalidateQueries();
-}
