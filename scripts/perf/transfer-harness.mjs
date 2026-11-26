@@ -13,7 +13,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
-const [bin, outPath] = process.argv.slice(2);
+const [binArg, outPath] = process.argv.slice(2);
+const bin = path.resolve(binArg); // the server runs with cwd = runDir: a relative path would not resolve
 const ROUTES = ["/", "/apps/", "/apps/new/", "/apps/edit/?id=x", "/history/", "/settings/github/", "/settings/telegram/", "/logs/", "/account/", "/login/"];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const runParent = process.env.PERF_RUN_DIR ? path.resolve(process.env.PERF_RUN_DIR) : path.join(repoRoot, "reference", "executor");

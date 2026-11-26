@@ -19,7 +19,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
-const [bin, nArg, winArg, outPath] = process.argv.slice(2);
+const [binArg, nArg, winArg, outPath] = process.argv.slice(2);
+const bin = path.resolve(binArg); // the server runs with cwd = runDir: a relative path would not resolve
 const N = Number(nArg);
 const WINDOW_S = Number(winArg);
 const ROUTES = ["/", "/apps/", "/apps/new/", "/history/", "/settings/github/", "/settings/telegram/", "/logs/", "/account/"];

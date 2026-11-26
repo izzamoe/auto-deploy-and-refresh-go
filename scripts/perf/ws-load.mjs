@@ -17,7 +17,8 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const [bin, outPath, proto = "2"] = process.argv.slice(2);
+const [binArg, outPath, proto = "2"] = process.argv.slice(2);
+const bin = path.resolve(binArg); // the server runs with cwd = runDir: a relative path would not resolve
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const runParent = process.env.PERF_RUN_DIR ? path.resolve(process.env.PERF_RUN_DIR) : path.join(repoRoot, "reference", "executor");
 const runDir = path.join(runParent, `run-ws-${Date.now()}`);
