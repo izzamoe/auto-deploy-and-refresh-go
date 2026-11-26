@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ClientQueueSize is the per-connection queue of state events (NFR-004).
@@ -19,11 +20,13 @@ type Client struct {
 
 	queue    chan []byte
 	overflow atomic.Bool
+	wake     chan struct{}
 
 	// topics is written only with both the bus lock and mu held, so the fan-out (bus lock)
 	// and the accessors below (mu) can each read it.
-	mu     sync.Mutex
-	topics map[Topic]TopicOpts
+	mu            sync.Mutex
+	topics        map[Topic]TopicOpts
+	overflowTimes []time.Time // the last OverflowLimit overflows
 }
 
 // NewClient creates the state of a new connection with a fresh id "c-<8 hex>".
@@ -32,6 +35,7 @@ func NewClient(p Principal) *Client {
 		ID:        newClientID(),
 		Principal: p,
 		queue:     make(chan []byte, ClientQueueSize),
+		wake:      make(chan struct{}, 1),
 		topics:    make(map[Topic]TopicOpts),
 	}
 }
@@ -95,12 +99,57 @@ func (c *Client) setTopics(subs []TopicSub, unsubs []Topic) (added []Topic) {
 	return added
 }
 
-// enqueue never blocks: when the queue is full the frame is dropped and the client is
-// flagged for overflow (the writer then resyncs it, FR-013).
+// enqueue never blocks: when the queue is full the frame is dropped, the client is flagged
+// for overflow and its writer is woken (it then resyncs the client, FR-013).
 func (c *Client) enqueue(frame []byte) {
 	select {
 	case c.queue <- frame:
 	default:
 		c.overflow.Store(true)
+		c.signal()
 	}
+}
+
+func (c *Client) signal() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Wake is signalled when the writer has work besides the queue (overflow; progress, T034).
+func (c *Client) Wake() <-chan struct{} { return c.wake }
+
+// Overflowed reports whether frames were dropped since the last TakeOverflow.
+func (c *Client) Overflowed() bool { return c.overflow.Load() }
+
+// Overflow policy of events-ws.v3.md section 6: every overflow empties the queue and sends
+// one resync{overflow}; the OverflowLimit-th overflow within OverflowWindow closes 4408.
+const (
+	OverflowLimit  = 3
+	OverflowWindow = 60 * time.Second
+)
+
+// TakeOverflow is called by the writer. When the client overflowed it clears the flag,
+// empties the queue (the frames there are older than the resync about to be sent) and
+// reports lagging=true on the OverflowLimit-th overflow within OverflowWindow.
+func (c *Client) TakeOverflow(now time.Time) (overflowed, lagging bool) {
+	if !c.overflow.CompareAndSwap(true, false) {
+		return false, false
+	}
+	for drained := false; !drained; {
+		select {
+		case <-c.queue:
+		default:
+			drained = true
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.overflowTimes = append(c.overflowTimes, now)
+	if len(c.overflowTimes) > OverflowLimit {
+		c.overflowTimes = c.overflowTimes[len(c.overflowTimes)-OverflowLimit:]
+	}
+	lagging = len(c.overflowTimes) == OverflowLimit && now.Sub(c.overflowTimes[0]) < OverflowWindow
+	return true, lagging
 }

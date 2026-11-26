@@ -89,6 +89,9 @@ type AdminEventHub struct {
 type adminEventClient struct {
 	send      chan []byte
 	closeOnce sync.Once
+	// overflowed is set by Broadcast when send was full and the client was dropped; the
+	// handler then closes the socket with 4408 instead of ending it silently (FR-013).
+	overflowed atomic.Bool
 }
 
 func NewAdminEventHub(tracker *progress.ProgressTracker) *AdminEventHub {
@@ -131,6 +134,7 @@ func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) 
 // Close codes of events-ws.md section 5.
 const (
 	closeSessionEnded        websocket.StatusCode = 4401
+	closeLagging             websocket.StatusCode = 4408 // 002: the client could not keep up
 	closeProtocolUnsupported websocket.StatusCode = 4409
 )
 
@@ -229,6 +233,9 @@ func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess
 			}
 		case payload, ok := <-client.send:
 			if !ok {
+				if client.overflowed.Load() {
+					_ = c.Close(closeLagging, "lagging")
+				}
 				return
 			}
 			if !writeAdminEventPayload(ctx, c, payload) {
@@ -250,6 +257,7 @@ func (h *AdminEventHub) Broadcast(event AdminEvent) {
 		select {
 		case client.send <- payload:
 		default:
+			client.overflowed.Store(true)
 			delete(h.clients, client)
 			client.close()
 		}
@@ -705,12 +713,39 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal
 			if !vc.handleOp(data) {
 				return
 			}
+		case <-vc.client.Wake():
+			if !vc.flush() {
+				return
+			}
 		case payload := <-vc.client.Queue():
+			if vc.client.Overflowed() {
+				// payload is older than the resync about to be sent: drop it with the rest.
+				if !vc.flush() {
+					return
+				}
+				continue
+			}
 			if !vc.write(payload) {
 				return
 			}
 		}
 	}
+}
+
+// flush handles what the bus flagged besides the queue. Overflow (FR-013, events-ws.v3.md
+// section 6): the queue is emptied and one resync{overflow} names every subscription; the
+// third overflow within 60 s closes the socket with 4408 (the client reconnects and
+// resumes). The client is never dropped without a sign.
+func (vc *v3Conn) flush() bool {
+	overflowed, lagging := vc.client.TakeOverflow(vc.h.now())
+	if !overflowed {
+		return true
+	}
+	if lagging {
+		_ = vc.c.Close(closeLagging, "lagging")
+		return false
+	}
+	return vc.writeFrame(adminEventTypeResync, adminEventResyncPayload{Topics: vc.client.TopicList(), Reason: events.ResyncOverflow})
 }
 
 // handleOp applies one client frame and writes the replies; false ends the connection.

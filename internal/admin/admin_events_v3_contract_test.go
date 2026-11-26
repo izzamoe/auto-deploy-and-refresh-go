@@ -445,3 +445,83 @@ func TestEventsV3_Contract(t *testing.T) {
 		}
 	})
 }
+
+// T033 (FR-013, SC-010, events-ws.v3.md section 6): a protocol-3 client that cannot keep up
+// gets resync{overflow} naming all its subscriptions, and 4408 on the third overflow within
+// 60 s; it is never dropped without a sign. The client below stops reading during each flood.
+func TestEventsV3_SlowClientResyncThen4408(t *testing.T) {
+	sch := compileEventsV3Schema(t)
+	e := newWSSessionEnv(t, "v3c_slow", time.Hour)
+	pub := v3cPublisher(t, e.hub)
+	conn, resp, err := dialEvents(t, e.addr, "/admin/events/v1/ws?protocol=3", e.header())
+	closeBody(resp)
+	if err != nil {
+		t.Fatalf("dial ?protocol=3: %v", err)
+	}
+	defer conn.CloseNow()
+	conn.SetReadLimit(1 << 20)
+	read := func() (map[string]any, []byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, raw, err := conn.Read(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		return m, raw, nil
+	}
+	if m, _, err := read(); err != nil || m["type"] != "hello" {
+		t.Fatalf("no hello: %v %v", m, err)
+	}
+	op, _ := json.Marshal(v3cSub("r1", nil, v3cTopic("apps"), v3cTopic("summary")))
+	if err := conn.Write(context.Background(), websocket.MessageText, op); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		m, _, err := read()
+		if err != nil {
+			t.Fatalf("no subscribed ack: %v", err)
+		}
+		if m["type"] == "subscribed" {
+			break
+		}
+	}
+
+	big := strings.Repeat("x", 8*1024)
+	for round := 1; round <= 3; round++ {
+		// Not reading: 1500 frames of 8 KiB exceed the loopback buffers plus the queue (256).
+		for i := 0; i < 1500; i++ {
+			pub.PublishTopic("summary", "notice", "", "", "", map[string]any{"level": "info", "code": "flood", "message": big})
+		}
+		frames := 0
+		for {
+			m, raw, err := read()
+			if err != nil {
+				code := websocket.CloseStatus(err)
+				if round == 3 && code == 4408 {
+					return // third overflow within 60 s: lagging
+				}
+				t.Fatalf("round %d: socket ended with close status %d after %d frames (want resync{overflow}%s): %v",
+					round, code, frames, map[bool]string{true: " then 4408", false: ""}[round == 3], err)
+			}
+			frames++
+			if m["type"] != "resync" {
+				continue
+			}
+			var v any
+			_ = json.Unmarshal(raw, &v)
+			if err := sch.Validate(v); err != nil {
+				t.Errorf("resync violates the v3 schema: %s\n%v", raw, err)
+			}
+			p := v3cPayload(m)
+			if p["reason"] != "overflow" || fmt.Sprint(p["topics"]) != "[summary apps]" {
+				t.Fatalf("round %d: resync = %s, want reason overflow and every subscription", round, raw)
+			}
+			if round == 3 {
+				t.Fatalf("round 3: got another resync{overflow} instead of close 4408 (%d frames)", frames)
+			}
+			break
+		}
+	}
+}
