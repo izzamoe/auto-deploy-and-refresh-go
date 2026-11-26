@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -716,6 +717,9 @@ type v3Conn struct {
 	// logsJoin is what the journal follower gave this socket's new logs:system
 	// subscription; written after the subscribed ack.
 	logsJoin *events.LogsJoin
+	// logsReplayed are the cursors of the lines the logs:system join replayed: a live batch
+	// queued meanwhile with one of them is a duplicate and is dropped (T089 CR-6).
+	logsReplayed map[string]struct{}
 }
 
 // watchedTopic reports whether subscribing to t holds a shared watcher, and its key.
@@ -759,6 +763,9 @@ func (vc *v3Conn) hold(s events.TopicSub) {
 }
 
 func (vc *v3Conn) unhold(t events.Topic) {
+	if t == events.TopicLogs {
+		vc.logsReplayed = nil
+	}
 	if key, held := vc.held[t]; held {
 		delete(vc.held, t)
 		vc.h.releaseTopic(t, key)
@@ -904,6 +911,9 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, tok *even
 				if !vc.flush() {
 					return
 				}
+				continue
+			}
+			if vc.replayedLogs(payload) {
 				continue
 			}
 			if !vc.write(payload) {
@@ -1067,6 +1077,13 @@ func (vc *v3Conn) subscribe(op events.Op) bool {
 // writeLogsJoin sends this socket what it missed of logs:system before the live stream: the
 // recent lines after its cursor, or logs.gap{cursor_behind} (stream frames: no seq).
 func (vc *v3Conn) writeLogsJoin(join events.LogsJoin) bool {
+	vc.logsReplayed = nil
+	if len(join.ReplayCursors) > 0 {
+		vc.logsReplayed = make(map[string]struct{}, len(join.ReplayCursors))
+		for _, c := range join.ReplayCursors {
+			vc.logsReplayed[c] = struct{}{}
+		}
+	}
 	if join.Behind {
 		ev := events.LogsGap(0, events.GapCursorBehind)
 		return vc.writeTopicFrame(ev.Topic, ev.Type, ev.Payload)
@@ -1090,6 +1107,29 @@ func (vc *v3Conn) writeTopicFrame(topic events.Topic, typ string, payload any) b
 	}
 	events.M().FrameSent(typ, len(raw))
 	return vc.write(raw)
+}
+
+// replayedLogs reports whether a queued frame is a logs.lines batch the join already replayed
+// (T089 CR-6). Batches are queued in journal order, so the first batch that was not replayed
+// ends the check.
+func (vc *v3Conn) replayedLogs(payload []byte) bool {
+	if vc.logsReplayed == nil || !bytes.Contains(payload, []byte(`"`+events.TypeLogsLines+`"`)) {
+		return false
+	}
+	var f struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Cursor string `json:"cursor"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(payload, &f) != nil || f.Type != events.TypeLogsLines {
+		return false
+	}
+	if _, dup := vc.logsReplayed[f.Payload.Cursor]; dup {
+		return true
+	}
+	vc.logsReplayed = nil
+	return false
 }
 
 // topicState is the state a subscribed ack carries for the topic (events-ws.v3.md
@@ -1259,6 +1299,9 @@ type journalAdapter struct{ f *deploy.JournalFollower }
 func (a journalAdapter) Acquire(after string) events.LogsJoin {
 	join := a.f.Acquire(after)
 	out := events.LogsJoin{Behind: join.Behind}
+	for _, l := range join.Replay {
+		out.ReplayCursors = append(out.ReplayCursors, l.Cursor)
+	}
 	for start := 0; start < len(join.Replay); start += events.MaxLogBatch {
 		end := min(start+events.MaxLogBatch, len(join.Replay))
 		part := join.Replay[start:end]

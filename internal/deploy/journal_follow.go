@@ -252,9 +252,14 @@ func (f *JournalFollower) startLocked(after string) {
 	f.startGen++
 	done := make(chan struct{})
 	f.done = done
-	if after != "" {
-		f.head = after
-	}
+	// T089 CR-7: the new process starts after the first subscriber's cursor, or at the end of
+	// the journal when it has none (never at the head of the previous process: hours of old
+	// lines and a false logs.gap{rate}).
+	f.head = after
+	// T089 CR-6: the lines of the previous process are not continuous with the new one (the
+	// lines between the stop and this start were never read): a late joiner whose cursor is
+	// in them gets logs.gap{cursor_behind}, not a replay with a hole.
+	f.recent = nil
 	events.M().LogsFollowActive.Set(1)
 	go func() {
 		defer close(done)

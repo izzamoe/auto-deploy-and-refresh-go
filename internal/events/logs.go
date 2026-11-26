@@ -55,6 +55,10 @@ func LogsGap(dropped int, reason string) Event {
 type LogsJoin struct {
 	Batches []LogsLinesPayload
 	Behind  bool
+	// ReplayCursors are the journal cursors of every replayed line. A live logs.lines batch
+	// whose cursor is one of them was already sent in the replay (it was between the
+	// follower's recent lines and the bus when the socket joined): it is dropped (T089 CR-6).
+	ReplayCursors []string
 }
 
 // JournalFollower is what topic logs:system needs from the shared journal follower
