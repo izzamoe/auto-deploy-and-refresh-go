@@ -19,6 +19,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { renderNothing } from "@/components/common/lazy";
 import { Notice, useNotice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,9 +34,14 @@ import { envVarsToText, argsToText, firstInvalidEnvName, normalizeArgsText, norm
 import { queryKeys, upsertAppInCache } from "@/lib/query";
 import { ArgsEditor } from "./ArgsEditor";
 import { EnvEditor } from "./EnvEditor";
-import { WebhookReference, WebhookSnippet } from "./WebhookSnippet";
 
-const ServiceUnitDialog = dynamic(() => import("@/components/apps/ServiceUnitDialog").then((m) => m.ServiceUnitDialog), { ssr: false });
+// T070 (FR-027): the webhook snippets sit below the form (edit) or appear only after a create:
+// they are not part of the initial JS of the form routes.
+const loadWebhook = () => import("./WebhookSnippet");
+const WebhookSnippet = dynamic(() => loadWebhook().then((m) => m.WebhookSnippet).catch(renderNothing), { ssr: false });
+const WebhookReference = dynamic(() => loadWebhook().then((m) => m.WebhookReference).catch(renderNothing), { ssr: false });
+
+const ServiceUnitDialog = dynamic(() => import("@/components/apps/ServiceUnitDialog").then((m) => m.ServiceUnitDialog).catch(renderNothing), { ssr: false });
 
 type App = Schemas["App"];
 
@@ -263,6 +269,7 @@ function AppFormInner({ appId, initial, onReload }: InnerProps) {
     setBusy(true);
     try {
       if (appId === undefined) {
+        void loadWebhook().catch(() => {}); // fetched in parallel with the create (shown on success)
         const res = await api.createApp({
           ...fieldsBody(),
           ...(v.runAsUser.trim() ? { runAsUser: v.runAsUser.trim() } : {}),

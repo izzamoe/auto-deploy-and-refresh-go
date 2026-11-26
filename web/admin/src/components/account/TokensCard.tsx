@@ -4,7 +4,7 @@ import "@/i18n/id/account";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ConfirmDialog, confirmIntent } from "@/components/common/ConfirmDialog";
 import { CopyableSnippet } from "@/components/common/CopyableSnippet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -140,7 +140,7 @@ export function TokensCard({ onMessage }: { onMessage: (kind: "success" | "error
                   <td className="px-3 py-3">{tok.revokedAt ? t("account.tokens.revokedAt", { time: formatDateTime(tok.revokedAt) }) : t("account.tokens.active")}</td>
                   <td className="px-3 py-3">
                     {!tok.revokedAt && (
-                      <Button type="button" size="sm" variant="outline" aria-label={t("account.tokens.revokeFor", { name: tok.name })} onClick={() => setRevoking(tok)}>
+                      <Button type="button" size="sm" variant="outline" aria-label={t("account.tokens.revokeFor", { name: tok.name })} {...confirmIntent} onClick={() => setRevoking(tok)}>
                         {t("account.tokens.revoke")}
                       </Button>
                     )}

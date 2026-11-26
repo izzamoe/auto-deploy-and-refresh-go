@@ -4,7 +4,7 @@ import "@/i18n/id/settings";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ConfirmDialog, confirmIntent } from "@/components/common/ConfirmDialog";
 import { Notice, useNotice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,7 +52,7 @@ function SecretField({ id, label, masked, value, onChange, error, onClear, clear
           {t("telegram.secret.newHint")}
         </p>
         {stored && (
-          <Button type="button" size="sm" variant="outline" onClick={onClear}>
+          <Button type="button" size="sm" variant="outline" {...confirmIntent} onClick={onClear}>
             {clearLabel}
           </Button>
         )}

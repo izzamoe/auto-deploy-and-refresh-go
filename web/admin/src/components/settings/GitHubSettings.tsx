@@ -4,7 +4,7 @@ import "@/i18n/id/settings";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ConfirmDialog, confirmIntent } from "@/components/common/ConfirmDialog";
 import { Notice, useNotice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -146,7 +146,7 @@ export function GitHubSettings() {
           </div>
 
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-            <Button type="button" variant="destructive" disabled={!cfg?.hasToken || save.isPending} onClick={() => setConfirmOpen(true)}>
+            <Button type="button" variant="destructive" disabled={!cfg?.hasToken || save.isPending} {...confirmIntent} onClick={() => setConfirmOpen(true)}>
               {t("github.clear")}
             </Button>
             <Button type="submit" disabled={save.isPending}>

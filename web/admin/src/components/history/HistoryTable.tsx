@@ -4,13 +4,14 @@ import "@/i18n/id/history";
 import dynamic from "next/dynamic";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { renderNothing } from "@/components/common/lazy";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
 import { invalidateAfterJob } from "@/lib/query";
 import { HistoryRow } from "./HistoryRow";
 
-const LogsDialog = dynamic(() => import("@/components/apps/LogsDialog").then((m) => m.LogsDialog), { ssr: false });
+const LogsDialog = dynamic(() => import("@/components/apps/LogsDialog").then((m) => m.LogsDialog).catch(renderNothing), { ssr: false });
 
 interface Props {
   jobs: Schemas["Job"][];

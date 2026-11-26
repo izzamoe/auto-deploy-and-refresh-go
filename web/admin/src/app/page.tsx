@@ -17,6 +17,7 @@ import { SuccessGauge } from "@/components/dashboard/SuccessGauge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
+import { renderNothing } from "@/components/common/lazy";
 import { api, describeError } from "@/lib/api/client";
 import { useTopic } from "@/lib/events/provider";
 import { liveQueryOptions, queryKeys } from "@/lib/query";
@@ -25,7 +26,7 @@ import { cn } from "@/lib/utils";
 const JOBS_PROGRESS = { progress: true };
 
 // The chart card is loaded on demand so it never weighs on the shared bundle (Q-20).
-const DeployActivityChart = dynamic(() => import("@/components/dashboard/DeployActivityChart").then((m) => m.DeployActivityChart), {
+const DeployActivityChart = dynamic(() => import("@/components/dashboard/DeployActivityChart").then((m) => m.DeployActivityChart).catch(renderNothing), {
   ssr: false,
   loading: () => <Skeleton className="h-80 rounded-card" />,
 });

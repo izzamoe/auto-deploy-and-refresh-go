@@ -6,7 +6,8 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog, confirmIntent } from "@/components/common/ConfirmDialog";
+import { renderNothing } from "@/components/common/lazy";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
@@ -20,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { ProgressBadge } from "./ProgressBadge";
 import { ServiceControls } from "./ServiceControls";
 
-const DeployDialog = dynamic(() => import("./DeployDialog").then((m) => m.DeployDialog), { ssr: false });
+const DeployDialog = dynamic(() => import("./DeployDialog").then((m) => m.DeployDialog).catch(renderNothing), { ssr: false });
 
 const ACTIVE = new Set(["pending", "in_progress", "cancel_requested"]);
 
@@ -166,11 +167,11 @@ export function AppCard({ app, onMessage }: Props) {
           {app.enabled ? t("apps.disable") : t("apps.enable")}
         </Button>
         {active && (
-          <Button type="button" variant="outline" size="sm" onClick={() => setCancelOpen(true)}>
+          <Button type="button" variant="outline" size="sm" {...confirmIntent} onClick={() => setCancelOpen(true)}>
             {t("apps.cancelDeploy")}
           </Button>
         )}
-        <Button type="button" variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+        <Button type="button" variant="destructive" size="sm" {...confirmIntent} onClick={() => setDeleteOpen(true)}>
           {t("common.delete")}
         </Button>
       </div>
@@ -179,47 +180,32 @@ export function AppCard({ app, onMessage }: Props) {
 
       {deployOpen && <DeployDialog appId={app.id} appName={app.name} open onOpenChange={setDeployOpen} onQueued={(tag) => onMessage("success", t("apps.deployDialog.queued", { tag }))} />}
 
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="rounded-card">
-          <DialogHeader>
-            <DialogTitle>{t("apps.delete.title")}</DialogTitle>
-            <DialogDescription>{t("apps.delete.body", { name: app.name })}</DialogDescription>
-          </DialogHeader>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={removeUnit} onChange={(e) => setRemoveUnit(e.target.checked)} className="size-4 accent-primary" />
-            {t("apps.delete.removeUnit")}
-          </label>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                {t("apps.delete.keep")}
-              </Button>
-            </DialogClose>
-            <Button type="button" variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>
-              {t("apps.delete.confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={t("apps.delete.title")}
+        body={t("apps.delete.body", { name: app.name })}
+        cancelLabel={t("apps.delete.keep")}
+        confirmLabel={t("apps.delete.confirm")}
+        busy={remove.isPending}
+        onConfirm={() => remove.mutate()}
+      >
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={removeUnit} onChange={(e) => setRemoveUnit(e.target.checked)} className="size-4 accent-primary" />
+          {t("apps.delete.removeUnit")}
+        </label>
+      </ConfirmDialog>
 
-      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <DialogContent className="rounded-card">
-          <DialogHeader>
-            <DialogTitle>{t("apps.cancel.title")}</DialogTitle>
-            <DialogDescription>{t("apps.cancel.body", { name: app.name })}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                {t("apps.cancel.keep")}
-              </Button>
-            </DialogClose>
-            <Button type="button" variant="destructive" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
-              {t("apps.cancel.confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        title={t("apps.cancel.title")}
+        body={t("apps.cancel.body", { name: app.name })}
+        cancelLabel={t("apps.cancel.keep")}
+        confirmLabel={t("apps.cancel.confirm")}
+        busy={cancel.isPending}
+        onConfirm={() => cancel.mutate()}
+      />
     </article>
   );
 }

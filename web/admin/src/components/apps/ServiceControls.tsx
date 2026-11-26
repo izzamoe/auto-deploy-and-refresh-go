@@ -6,6 +6,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Play, RefreshCw, RotateCw, Square } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
+import { renderNothing } from "@/components/common/lazy";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import type { MessageKey } from "@/i18n";
@@ -16,8 +17,8 @@ import type { ServiceState } from "@/lib/events/types";
 import { cn } from "@/lib/utils";
 
 // Heavy dialogs are fetched only when first opened (Q-20).
-const LogsDialog = dynamic(() => import("./LogsDialog").then((m) => m.LogsDialog), { ssr: false });
-const ServiceUnitDialog = dynamic(() => import("./ServiceUnitDialog").then((m) => m.ServiceUnitDialog), { ssr: false });
+const LogsDialog = dynamic(() => import("./LogsDialog").then((m) => m.LogsDialog).catch(renderNothing), { ssr: false });
+const ServiceUnitDialog = dynamic(() => import("./ServiceUnitDialog").then((m) => m.ServiceUnitDialog).catch(renderNothing), { ssr: false });
 
 const KNOWN_STATES = new Set(["active", "inactive", "failed", "activating", "deactivating", "reloading"]);
 const toState = (raw: string | undefined): ServiceState => ((SERVICE_STATES as readonly string[]).includes(raw ?? "") ? (raw as ServiceState) : "unknown");
