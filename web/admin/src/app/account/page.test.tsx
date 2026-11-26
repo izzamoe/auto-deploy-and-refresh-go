@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionGate } from "@/components/shell/SessionGate";
-import { Providers, SESSION, errorBody, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
+import { FakeWebSocket, Providers, SESSION, errorBody, goLive, installFakeWebSocket, installFetch } from "@/components/shell/testUtils";
 import type { Handler } from "@/components/shell/testUtils";
 import { resetAuthStateForTests } from "@/lib/api/client";
 import AccountPage from "./page";
@@ -183,5 +183,23 @@ describe("Account page (T092, FR-005, FR-014, FR-016)", () => {
     installFetch(routes({ [`GET ${U}/tokens`]: () => ({ status: 500, body: errorBody("internal_error") }) }));
     mount();
     expect(await screen.findByText("Daftar token tidak dapat dimuat.")).toBeInTheDocument();
+  });
+});
+
+describe("account changed in another session (002 T058, FR-017)", () => {
+  it("a token created elsewhere appears after account.changed{tokens} with ONE GET /tokens; nothing on focus", async () => {
+    const api = installFetch(routes());
+    mount();
+    await screen.findByTestId("tokens-card");
+    await waitFor(() => expect(screen.getByTestId("tokens-card")).toHaveTextContent("ci"));
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(FakeWebSocket.instances[0].subscribedTopics()).toContain("account");
+    expect(FakeWebSocket.instances[0].subscribedTopics()).not.toContain("jobs"); // SC-011: no progress on /account/
+    await act(async () => { window.dispatchEvent(new Event("visibilitychange")); await new Promise((r) => setTimeout(r, 50)); });
+    expect(api.count("GET", `${U}/tokens`)).toBe(1);
+    tokens = [...tokens, { id: "t3", name: "made-elsewhere", prefix: "adt_ef56", createdAt: "2026-11-25T00:00:00Z", lastUsedAt: null }];
+    await act(async () => FakeWebSocket.instances[0].emit({ protocol: "3", id: "evt-4", seq: 4, topic: "account", type: "account.changed", ts: new Date().toISOString(), origin: "c-99999999", payload: { section: "tokens" } }));
+    await waitFor(() => expect(screen.getByTestId("tokens-card")).toHaveTextContent("made-elsewhere"));
+    expect(api.count("GET", `${U}/tokens`)).toBe(2);
   });
 });

@@ -13,7 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import type { Schemas } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { useTopic } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
 
 type Token = Schemas["ApiToken"];
 
@@ -30,7 +31,9 @@ export function TokensCard({ onMessage }: { onMessage: (kind: "success" | "error
   const [fresh, setFresh] = useState<{ name: string; token: string } | null>(null);
   const [revoking, setRevoking] = useState<Token | null>(null);
 
-  const list = useQuery({ queryKey: queryKeys.tokens, queryFn: ({ signal }) => api.listTokens({ signal }), refetchOnWindowFocus: false });
+  // 002 T058: kept current by topic account (account.changed{tokens} from other sessions).
+  const accountFresh = useTopic("account");
+  const list = useQuery({ queryKey: queryKeys.tokens, queryFn: ({ signal }) => api.listTokens({ signal }), refetchOnWindowFocus: false, ...liveQueryOptions(accountFresh) });
 
   const create = useMutation({
     mutationFn: (value: string) => api.createToken({ name: value }),

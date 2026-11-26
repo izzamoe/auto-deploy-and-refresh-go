@@ -12,10 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n";
 import { ApiError, api, describeError } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { useTopic } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
 
 export const HISTORY_PAGE_SIZE = 20;
+const JOBS_PROGRESS = { progress: true };
 
 function HistoryRoute() {
   const i18n = useI18n();
@@ -28,7 +30,11 @@ function HistoryRoute() {
   const [pageFor, setPageFor] = useState<{ app: string | undefined; page: number }>({ app: appId, page: 1 });
   const page = pageFor.app === appId ? pageFor.page : 1;
 
+  // 002 T058: refetched only when topic jobs says a job changed (debounced), never polled.
+  const jobsFresh = useTopic("jobs", JOBS_PROGRESS);
+  useTopic("apps");
   const history = useQuery({
+    ...liveQueryOptions(jobsFresh),
     queryKey: queryKeys.historyPage(appId, page, HISTORY_PAGE_SIZE),
     queryFn: ({ signal }) => api.listHistory({ appId, page, pageSize: HISTORY_PAGE_SIZE }, { signal }),
     // Keep the previous page visible while paging, but never another app's rows after a filter change.

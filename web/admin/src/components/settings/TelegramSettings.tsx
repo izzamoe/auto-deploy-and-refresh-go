@@ -2,7 +2,7 @@
 
 import "@/i18n/id/settings";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Notice, useNotice } from "@/components/common/Notice";
@@ -14,7 +14,9 @@ import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
 import { api, describeError } from "@/lib/api/client";
 import type { Body, Schemas } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query";
+import { useTopic } from "@/lib/events/provider";
+import { liveQueryOptions, queryKeys } from "@/lib/query";
+import { SettingsConflict } from "./GitHubSettings";
 
 type Config = Schemas["TelegramConfig"];
 type Update = Body<"saveTelegramConfig">;
@@ -74,9 +76,36 @@ function TelegramForm({ cfg }: { cfg: Config }) {
   const [errors, setErrors] = useState<Partial<Record<"appId" | "appHash" | "botToken" | "chat", string>>>({});
   const [confirm, setConfirm] = useState<Secret | null>(null);
 
+  // 002 T058: the saved config can change in another session (settings.changed -> refetch).
+  // An untouched form follows it; a form with unsaved input keeps it and says so.
+  const base = useRef(cfg);
+  const [conflict, setConflict] = useState(false);
+  const fill = (c: Config) => {
+    base.current = c;
+    setAppId(c.appId ? String(c.appId) : "");
+    setChat(c.chatUsername);
+    setEnabled(c.enabled);
+  };
+  useEffect(() => {
+    const b = base.current;
+    if (cfg === b) return;
+    const dirty = appId !== (b.appId ? String(b.appId) : "") || chat !== b.chatUsername || enabled !== b.enabled || appHash !== "" || botToken !== "";
+    if (dirty) setConflict(true);
+    else fill(cfg);
+  }, [cfg]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reload = () => {
+    fill(cfg);
+    setAppHash("");
+    setBotToken("");
+    setErrors({});
+    setConflict(false);
+  };
+
   const save = useMutation({
     mutationFn: (body: Update) => api.saveTelegram(body),
     onSuccess: (res, body) => {
+      base.current = res.config; // what is saved now is the baseline of the form
+      setConflict(false);
       client.setQueryData(queryKeys.telegram, { config: res.config });
       setAppHash("");
       setBotToken("");
@@ -141,6 +170,7 @@ function TelegramForm({ cfg }: { cfg: Config }) {
       </div>
 
       <Notice notice={notice} onDismiss={clear} />
+      {conflict && <SettingsConflict onReload={reload} />}
 
       <form onSubmit={submit} noValidate className="grid gap-5 rounded-card bg-card p-6 shadow-card">
         <div className="grid gap-5 sm:grid-cols-2">
@@ -205,7 +235,8 @@ function TelegramForm({ cfg }: { cfg: Config }) {
 export function TelegramSettings() {
   const i18n = useI18n();
   const { t } = i18n;
-  const config = useQuery({ queryKey: queryKeys.telegram, queryFn: ({ signal }) => api.getTelegram({ signal }), staleTime: Infinity, refetchOnWindowFocus: false });
+  const fresh = useTopic("settings");
+  const config = useQuery({ queryKey: queryKeys.telegram, queryFn: ({ signal }) => api.getTelegram({ signal }), staleTime: Infinity, refetchOnWindowFocus: false, ...liveQueryOptions(fresh) });
 
   if (config.isPending) return <Skeleton className="h-96 rounded-card" />;
   if (config.isError) {

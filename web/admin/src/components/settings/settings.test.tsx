@@ -245,3 +245,62 @@ describe("Telegram settings (B27, FR-029)", () => {
     expect(screen.getByLabelText("Bot token")).toHaveValue("typed");
   });
 });
+
+describe("settings changed in another session (002 T058, FR-004, FR-017)", () => {
+  const tg = (over: object = {}) => ({ config: { appId: 12345, appHash: "************abcd", botToken: "*****wxyz", chatUsername: "@ops", enabled: true, ...over } });
+  const changed = (section: string, seq: number, origin = "c-99999999") => ({ protocol: "3", id: `evt-${seq}`, seq, topic: "settings", type: "settings.changed", ts: new Date().toISOString(), origin, payload: { section } });
+
+  it("an untouched Telegram form follows a change saved elsewhere: ONE GET /telegram after settings.changed, none on focus", async () => {
+    let config = tg();
+    const api = installFetch(base({ [`GET ${U}/telegram`]: () => ({ status: 200, body: config }) }));
+    mount(<TelegramSettings />);
+    await screen.findByTestId("tg-app-hash-status");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    expect(FakeWebSocket.instances[0].subscribedTopics()).toContain("settings");
+    await act(async () => { window.dispatchEvent(new Event("visibilitychange")); await new Promise((r) => setTimeout(r, 50)); });
+    expect(api.count("GET", `${U}/telegram`)).toBe(1);
+    config = tg({ chatUsername: "@elsewhere" });
+    await act(async () => FakeWebSocket.instances[0].emit(changed("telegram", 5)));
+    await waitFor(() => expect(screen.getByLabelText("Username chat")).toHaveValue("@elsewhere"));
+    expect(api.count("GET", `${U}/telegram`)).toBe(2);
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+  });
+
+  it("while typing, a Telegram change elsewhere keeps the typing and says so; Reload applies the saved values; our own save raises nothing", async () => {
+    let config = tg();
+    installFetch(base({ [`GET ${U}/telegram`]: () => ({ status: 200, body: config }), [`POST ${U}/telegram`]: () => ({ status: 200, body: { status: "updated", ...tg({ chatUsername: "@mine" }) } }) }));
+    mount(<TelegramSettings />);
+    await screen.findByTestId("tg-app-hash-status");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    fireEvent.change(screen.getByLabelText("Username chat"), { target: { value: "@typing" } });
+    config = tg({ chatUsername: "@elsewhere" });
+    await act(async () => FakeWebSocket.instances[0].emit(changed("telegram", 6)));
+    const notice = await screen.findByTestId("settings-conflict");
+    expect(notice).toHaveAttribute("role", "status");
+    expect(screen.getByLabelText("Username chat")).toHaveValue("@typing");
+    fireEvent.click(within(notice).getByRole("button", { name: "Muat ulang" }));
+    expect(screen.getByLabelText("Username chat")).toHaveValue("@elsewhere");
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Username chat"), { target: { value: "@mine" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan pengaturan" }));
+    await screen.findByText("Pengaturan Telegram disimpan.");
+    await act(async () => FakeWebSocket.instances[0].emit(changed("telegram", 7, "c-0000test")));
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+    expect(screen.getByLabelText("Username chat")).toHaveValue("@mine");
+  });
+
+  it("GitHub: a token being typed is kept when the token is changed elsewhere; the status follows", async () => {
+    let config = { config: { token: "****wxyz", hasToken: true, source: "db" } };
+    installFetch(base({ [`GET ${U}/github`]: () => ({ status: 200, body: config }) }));
+    mount(<GitHubSettings />);
+    await screen.findByText("Token tersimpan: ****wxyz");
+    await act(async () => goLive(FakeWebSocket.instances[0]));
+    fireEvent.change(screen.getByLabelText("Token baru"), { target: { value: "ghp_typing" } });
+    config = { config: { token: "****abcd", hasToken: true, source: "db" } };
+    await act(async () => FakeWebSocket.instances[0].emit(changed("github", 8)));
+    await screen.findByText("Token tersimpan: ****abcd");
+    expect(screen.getByTestId("settings-conflict")).toBeInTheDocument();
+    expect(screen.getByLabelText("Token baru")).toHaveValue("ghp_typing");
+  });
+});
