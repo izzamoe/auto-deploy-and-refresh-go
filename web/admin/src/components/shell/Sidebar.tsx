@@ -2,7 +2,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, LogOut } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { usePathname } from "next/navigation";
 import { useRef, useState } from "react";
 import { lazyModule, useLazyModule } from "@/components/common/lazy";
@@ -93,7 +93,7 @@ export function Sidebar() {
           const active = match(pathname);
           return (
             <RailTip key={href} label={t(label)} className={primary ? "inline-flex" : "hidden md:inline-flex"}>
-              <Link
+              <IntentLink
                 href={href}
                 aria-label={t(label)}
                 aria-current={active ? "page" : undefined}
@@ -103,7 +103,7 @@ export function Sidebar() {
                 )}
               >
                 <Icon className="size-5" aria-hidden="true" />
-              </Link>
+              </IntentLink>
             </RailTip>
           );
         })}

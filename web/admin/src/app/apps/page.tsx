@@ -3,7 +3,7 @@
 import "@/i18n/id/apps";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useRef } from "react";
 import { AppCard } from "@/components/apps/AppCard";
@@ -57,10 +57,10 @@ function AppsRoute() {
             {t("common.refresh")}
           </Button>
           <Button asChild>
-            <Link href="/apps/new/">
+            <IntentLink href="/apps/new/">
               <Plus aria-hidden="true" />
               {t("apps.add")}
-            </Link>
+            </IntentLink>
           </Button>
         </div>
       </div>

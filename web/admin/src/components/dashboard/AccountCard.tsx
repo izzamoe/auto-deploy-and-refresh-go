@@ -1,7 +1,7 @@
 "use client";
 
 import "@/i18n/id/dashboard";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useId } from "react";
 import { useSession } from "@/components/shell/SessionGate";
 import { Button } from "@/components/ui/button";
@@ -31,7 +31,7 @@ export function AccountCard() {
         </div>
       </div>
       <Button asChild variant="outline" className="mt-4 w-full">
-        <Link href="/account/">{t("dashboard.account.manage")}</Link>
+        <IntentLink href="/account/">{t("dashboard.account.manage")}</IntentLink>
       </Button>
     </section>
   );

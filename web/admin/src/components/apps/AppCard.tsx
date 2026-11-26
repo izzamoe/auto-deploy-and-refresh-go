@@ -3,7 +3,7 @@
 import "@/i18n/id/apps";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, confirmIntent } from "@/components/common/ConfirmDialog";
@@ -158,10 +158,10 @@ export function AppCard({ app, onMessage }: Props) {
           </Button>
         )}
         <Button asChild variant="outline" size="sm">
-          <Link href={`/apps/edit/?id=${encodeURIComponent(app.id)}`}>{t("apps.edit")}</Link>
+          <IntentLink href={`/apps/edit/?id=${encodeURIComponent(app.id)}`}>{t("apps.edit")}</IntentLink>
         </Button>
         <Button asChild variant="outline" size="sm">
-          <Link href={`/history/?appId=${encodeURIComponent(app.id)}`}>{t("apps.history")}</Link>
+          <IntentLink href={`/history/?appId=${encodeURIComponent(app.id)}`}>{t("apps.history")}</IntentLink>
         </Button>
         <Button type="button" variant="secondary" size="sm" disabled={toggle.isPending} onClick={() => toggle.mutate(!app.enabled)}>
           {app.enabled ? t("apps.disable") : t("apps.enable")}

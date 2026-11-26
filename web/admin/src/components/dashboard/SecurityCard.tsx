@@ -3,7 +3,7 @@
 import "@/i18n/id/dashboard";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, HelpCircle } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useId } from "react";
 import { useSession } from "@/components/shell/SessionGate";
 import { Button } from "@/components/ui/button";
@@ -61,7 +61,7 @@ export function SecurityCard() {
         <Row state={https ? "ok" : "warn"} text={https ? t("dashboard.security.cookie") : t("dashboard.security.cookieNo")} />
       </ul>
       <Button asChild variant="outline" className="mt-auto w-full">
-        <Link href="/account/">{t("dashboard.security.manage")}</Link>
+        <IntentLink href="/account/">{t("dashboard.security.manage")}</IntentLink>
       </Button>
     </section>
   );

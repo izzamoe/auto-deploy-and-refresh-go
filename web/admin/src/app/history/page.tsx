@@ -3,7 +3,7 @@
 import "@/i18n/id/history";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Notice, useNotice } from "@/components/common/Notice";
@@ -63,9 +63,9 @@ function HistoryRoute() {
       {appId && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-accent px-4 py-3 text-sm text-accent-foreground" data-testid="history-filter">
           <span>{t("history.filteredBy", { app: data?.app?.name ?? appId })}</span>
-          <Link href="/history/" className="rounded-pill px-3 py-1 font-medium underline underline-offset-4">
+          <IntentLink href="/history/" className="rounded-pill px-3 py-1 font-medium underline underline-offset-4">
             {t("history.showAll")}
-          </Link>
+          </IntentLink>
         </div>
       )}
 

@@ -15,7 +15,7 @@ import "@/i18n/id/form";
 import "@/i18n/id/unit";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
@@ -331,7 +331,7 @@ function AppFormInner({ appId, initial, onReload }: InnerProps) {
   const title = editing ? t("form.title.edit") : t("form.title.new");
   const back = (
     <Button asChild variant="outline">
-      <Link href="/apps/">{t("form.back")}</Link>
+      <IntentLink href="/apps/">{t("form.back")}</IntentLink>
     </Button>
   );
 
@@ -420,7 +420,7 @@ function AppFormInner({ appId, initial, onReload }: InnerProps) {
 
             <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <Button asChild variant="outline">
-                <Link href="/apps/">{t("common.cancel")}</Link>
+                <IntentLink href="/apps/">{t("common.cancel")}</IntentLink>
               </Button>
               <Button type="submit" disabled={busy}>
                 {busy ? t("form.submitting") : editing ? t("form.submit.update") : t("form.submit.create")}
@@ -499,7 +499,7 @@ export function AppForm({ appId }: { appId?: string }) {
             </Button>
           )}
           <Button asChild variant="outline">
-            <Link href="/apps/">{t("form.back")}</Link>
+            <IntentLink href="/apps/">{t("form.back")}</IntentLink>
           </Button>
         </div>
       </div>

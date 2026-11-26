@@ -1,7 +1,7 @@
 "use client";
 
 import "@/i18n/id/dashboard";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useId } from "react";
 import { StatusPill } from "@/components/common/StatusPill";
 import { useI18n } from "@/i18n";
@@ -28,9 +28,9 @@ export function RecentDeploys({ jobs }: { jobs: Schemas["Job"][] }) {
         <h2 id={id} className={CARD_TITLE}>
           {t("dashboard.recent.title")}
         </h2>
-        <Link href="/history/" className="rounded-pill px-3 py-1 text-sm font-medium text-primary-text underline-offset-4 hover:underline">
+        <IntentLink href="/history/" className="rounded-pill px-3 py-1 text-sm font-medium text-primary-text underline-offset-4 hover:underline">
           {t("dashboard.recent.all")}
-        </Link>
+        </IntentLink>
       </div>
       {jobs.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">{t("dashboard.recent.empty")}</p>
@@ -40,7 +40,7 @@ export function RecentDeploys({ jobs }: { jobs: Schemas["Job"][] }) {
             const app = job.appName ?? t("common.unknownApp");
             return (
               <li key={job.id}>
-                <Link
+                <IntentLink
                   href={`/history/?appId=${encodeURIComponent(job.appId)}`}
                   className="flex items-center gap-3 rounded-2xl bg-secondary px-4 py-3 transition-colors hover:bg-accent"
                 >
@@ -57,7 +57,7 @@ export function RecentDeploys({ jobs }: { jobs: Schemas["Job"][] }) {
                   </span>
                   {/* No aria-label: the name must contain the visible text (WCAG 2.5.3); the purpose is appended. */}
                   <span className="sr-only">{t("dashboard.recent.open")}</span>
-                </Link>
+                </IntentLink>
               </li>
             );
           })}

@@ -2,7 +2,7 @@
 
 // Below 768 px: the "More" dialog of the bottom bar, loaded on demand (T070, FR-027).
 import { LogOut, Moon, Sun } from "lucide-react";
-import Link from "next/link";
+import { IntentLink } from "@/components/common/IntentLink";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
@@ -48,7 +48,7 @@ export function MoreMenuDialog({ open, onOpenChange, pathname, onLogout, logoutP
         </DialogHeader>
         <div className="flex flex-col gap-1 rounded-3xl bg-rail p-2" data-testid="more-menu">
           {secondary.map(({ href, label, icon: Icon, match }) => (
-            <Link
+            <IntentLink
               key={href}
               href={href}
               onClick={() => onOpenChange(false)}
@@ -57,7 +57,7 @@ export function MoreMenuDialog({ open, onOpenChange, pathname, onLogout, logoutP
             >
               <Icon className="size-5" aria-hidden="true" />
               {t(label)}
-            </Link>
+            </IntentLink>
           ))}
           <button type="button" onClick={() => setTheme(dark ? "light" : "dark")} className={ROW}>
             {dark ? <Sun className="size-5" aria-hidden="true" /> : <Moon className="size-5" aria-hidden="true" />}
