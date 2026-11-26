@@ -32,6 +32,7 @@ type Principal struct {
 	Username           string
 	MustChangePassword bool
 	SessionID          string
+	TokenID            string // token principals: the id of the API token (T089 CR-4)
 	ExpiresAt          time.Time
 	AbsoluteExpiresAt  time.Time
 	TokenVersion       int // session principals: token_version of the verified cookie
@@ -217,7 +218,7 @@ func (m *middleware) authenticateToken(token string) (Principal, bool) {
 		return Principal{}, false
 	}
 	m.markTokenUsed(tok.ID)
-	return Principal{Kind: KindToken, UserID: user.ID, Username: user.Username, MustChangePassword: user.MustChangePassword}, true
+	return Principal{Kind: KindToken, UserID: user.ID, Username: user.Username, MustChangePassword: user.MustChangePassword, TokenID: tok.ID}, true
 }
 
 // markTokenUsed records last_used_at at most once a minute per token.

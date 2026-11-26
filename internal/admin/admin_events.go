@@ -82,6 +82,7 @@ type AdminEventHub struct {
 	nextID        atomic.Uint64
 	serverVersion string
 	sessions      SessionChecker
+	tokens        TokenChecker
 	// bus carries protocol 3 (topics, seq/epoch, resume); protocol 2 keeps clients below.
 	bus *events.Bus
 	// apps is the app store of the protocol-3 sources (SetAppStore).
@@ -128,6 +129,13 @@ func (h *AdminEventHub) SetServerVersion(v string) { h.serverVersion = v }
 
 const adminEventHeartbeatInterval = 30 * time.Second
 
+// adminEventHeartbeatTick is the period of the protocol-3 heartbeat (and of its ping, CR-8);
+// adminEventPingTimeout is how long a ping may wait for its pong. Tests shorten both.
+var (
+	adminEventHeartbeatTick = adminEventHeartbeatInterval
+	adminEventPingTimeout   = 10 * time.Second
+)
+
 // adminEventSessionCheckInterval is how often an open socket re-checks its session row
 // (events-ws.md close codes: every 60 s plus the in-process revocation signal).
 var adminEventSessionCheckInterval = 60 * time.Second
@@ -142,11 +150,55 @@ type SessionChecker interface {
 // SetSessionChecker enables 4401 closes for session-authenticated sockets (B12).
 func (h *AdminEventHub) SetSessionChecker(sc SessionChecker) { h.sessions = sc }
 
+// TokenChecker is what a socket opened with an API token needs to notice that the token
+// was revoked or removed (T089 CR-4): a re-check of the token row and a revocation signal.
+type TokenChecker interface {
+	RecheckToken(userID, tokenID string) error
+	SubscribeTokens() (<-chan struct{}, func())
+}
+
+// SetTokenChecker enables 4401 closes for API-token sockets (T089 CR-4).
+func (h *AdminEventHub) SetTokenChecker(tc TokenChecker) { h.tokens = tc }
+
+// eventToken identifies the API token a socket was opened with.
+type eventToken struct {
+	userID  string
+	tokenID string
+}
+
+// credentialWatch re-checks the credential of an open socket every
+// adminEventSessionCheckInterval and on the in-process revocation signal: the session row
+// (B12, FR-025) or the API-token row (T089 CR-4). Zero channels when nothing is checked.
+type credentialWatch struct {
+	tick   <-chan time.Time
+	signal <-chan struct{}
+	ok     func() bool
+	stop   func()
+}
+
+func (h *AdminEventHub) watchCredential(sess *eventSession, tok *eventToken) credentialWatch {
+	switch {
+	case sess != nil && h.sessions != nil:
+		t := time.NewTicker(adminEventSessionCheckInterval)
+		ch, unsubscribe := h.sessions.Subscribe()
+		return credentialWatch{tick: t.C, signal: ch, stop: func() { t.Stop(); unsubscribe() }, ok: func() bool {
+			return h.sessions.Recheck(sess.sessionID, sess.userID, sess.tokenVersion) == nil
+		}}
+	case tok != nil && h.tokens != nil:
+		t := time.NewTicker(adminEventSessionCheckInterval)
+		ch, unsubscribe := h.tokens.SubscribeTokens()
+		return credentialWatch{tick: t.C, signal: ch, stop: func() { t.Stop(); unsubscribe() }, ok: func() bool {
+			return h.tokens.RecheckToken(tok.userID, tok.tokenID) == nil
+		}}
+	}
+	return credentialWatch{ok: func() bool { return true }, stop: func() {}}
+}
+
 // EventsWebSocket upgrades the request. The origin is verified by the default of
 // coder/websocket (no OriginPatterns, no InsecureSkipVerify): a browser page on
 // another origin cannot open this socket with the admin's cookie (K4, FR-012).
 func (h *AdminEventHub) EventsWebSocket(w http.ResponseWriter, r *http.Request) {
-	h.serveEvents(w, r, nil, events.Principal{}, nil)
+	h.serveEvents(w, r, nil, nil, events.Principal{}, nil)
 }
 
 // Close codes of events-ws.md section 5.
@@ -169,7 +221,7 @@ type eventSession struct {
 // serveEvents is EventsWebSocket plus what only the caller knows: when the signed-in
 // session ends (hello.sessionExpiresAt) and any extra response headers for the
 // handshake (the deprecation notice of the pre-v1 path).
-func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess *eventSession, principal events.Principal, extra http.Header) {
+func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess *eventSession, tok *eventToken, principal events.Principal, extra http.Header) {
 	var sessionExpiresAt *time.Time
 	if sess != nil && !sess.expiresAt.IsZero() {
 		t := sess.expiresAt.UTC()
@@ -192,7 +244,7 @@ func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess
 	if q, ok := r.URL.Query()["protocol"]; ok {
 		switch {
 		case len(q) == 1 && q[0] == adminEventProtocolV3:
-			h.serveV3(c, sess, principal, sessionExpiresAt)
+			h.serveV3(c, sess, tok, principal, sessionExpiresAt)
 			return
 		case len(q) == 1 && q[0] == adminEventProtocolVersion:
 		default:
@@ -212,21 +264,11 @@ func (h *AdminEventHub) serveEvents(w http.ResponseWriter, r *http.Request, sess
 	heartbeat := time.NewTicker(adminEventHeartbeatInterval)
 	defer heartbeat.Stop()
 
-	// B12 / FR-025: a socket must not outlive its session. Re-check the session row
-	// periodically and on the in-process revocation signal.
-	var recheck <-chan time.Time
-	var revoked <-chan struct{}
-	if sess != nil && h.sessions != nil {
-		t := time.NewTicker(adminEventSessionCheckInterval)
-		defer t.Stop()
-		recheck = t.C
-		ch, unsubscribe := h.sessions.Subscribe()
-		defer unsubscribe()
-		revoked = ch
-	}
-	sessionOK := func() bool {
-		return h.sessions.Recheck(sess.sessionID, sess.userID, sess.tokenVersion) == nil
-	}
+	// B12 / FR-025: a socket must not outlive its session (or, T089 CR-4, its API token).
+	// Re-check the credential periodically and on the in-process revocation signal.
+	cred := h.watchCredential(sess, tok)
+	defer cred.stop()
+	recheck, revoked, sessionOK := cred.tick, cred.signal, cred.ok
 
 	for {
 		select {
@@ -493,11 +535,15 @@ func writeAdminEventPayload(ctx context.Context, c *websocket.Conn, payload []by
 // the hello event when the session ends; an API-token principal has no session.
 func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.RequestContext) {
 	var sess *eventSession
+	var tok *eventToken
 	var principal events.Principal
 	if p, ok := auth.PrincipalFrom(c); ok {
 		principal = events.Principal{Kind: p.Kind, UserID: p.UserID, SessionID: p.SessionID}
-		if p.Kind == auth.KindSession {
+		switch p.Kind {
+		case auth.KindSession:
 			sess = &eventSession{sessionID: p.SessionID, userID: p.UserID, tokenVersion: p.TokenVersion, expiresAt: p.ExpiresAt}
+		case auth.KindToken:
+			tok = &eventToken{userID: p.UserID, tokenID: p.TokenID}
 		}
 	}
 	var extra http.Header
@@ -508,7 +554,7 @@ func (h *AdminEventHub) EventsWebSocketHertz(ctx context.Context, c *app.Request
 		}
 	}
 	adaptor.HertzHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.serveEvents(w, r, sess, principal, extra)
+		h.serveEvents(w, r, sess, tok, principal, extra)
 	}))(ctx, c)
 }
 
@@ -770,7 +816,7 @@ func (vc *v3Conn) writeFrame(typ string, payload any) bool {
 
 // serveV3 runs one protocol-3 socket: hello, then a loop that writes the client's queue,
 // heartbeats and session checks, and handles the client's ops read by a second goroutine.
-func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal events.Principal, sessionExpiresAt *time.Time) {
+func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, tok *eventToken, principal events.Principal, sessionExpiresAt *time.Time) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	vc := &v3Conn{h: h, c: c, ctx: ctx, client: events.NewClient(principal), limits: events.NewLimiter(h.now())}
@@ -815,21 +861,12 @@ func (h *AdminEventHub) serveV3(c *websocket.Conn, sess *eventSession, principal
 		}
 	}()
 
-	heartbeat := time.NewTicker(adminEventHeartbeatInterval)
+	heartbeat := time.NewTicker(adminEventHeartbeatTick)
 	defer heartbeat.Stop()
-	var recheck <-chan time.Time
-	var revoked <-chan struct{}
-	if sess != nil && h.sessions != nil {
-		t := time.NewTicker(adminEventSessionCheckInterval)
-		defer t.Stop()
-		recheck = t.C
-		ch, unsubscribe := h.sessions.Subscribe()
-		defer unsubscribe()
-		revoked = ch
-	}
-	sessionOK := func() bool {
-		return h.sessions.Recheck(sess.sessionID, sess.userID, sess.tokenVersion) == nil
-	}
+	// The session (B12) or the API token (T089 CR-4) is re-checked like on protocol 2.
+	cred := h.watchCredential(sess, tok)
+	defer cred.stop()
+	recheck, revoked, sessionOK := cred.tick, cred.signal, cred.ok
 
 	for {
 		select {

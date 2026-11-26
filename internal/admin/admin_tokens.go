@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -23,6 +24,58 @@ const maxTokenNameLen = 64
 type TokensHandler struct {
 	tokens *store.APITokenStore
 	eventPublisher
+
+	// subs receive a signal when a token is revoked: the event sockets opened with a token
+	// re-check it at once and close 4401 (T089 CR-4).
+	subMu sync.Mutex
+	subs  map[chan struct{}]struct{}
+}
+
+// errTokenGone is the outcome of RecheckToken for a token that was revoked or removed.
+var errTokenGone = errors.New("api token revoked or removed")
+
+// RecheckToken re-checks the API token of an open event socket (T089 CR-4): the user's
+// token must still exist and not be revoked. A store error fails closed.
+func (h *TokensHandler) RecheckToken(userID, tokenID string) error {
+	list, err := h.tokens.List(userID)
+	if err != nil {
+		slog.Error("events: api token recheck failed; closing", "err", err)
+		return err
+	}
+	for _, t := range list {
+		if t.ID == tokenID && t.RevokedAt == nil {
+			return nil
+		}
+	}
+	return errTokenGone
+}
+
+// SubscribeTokens returns a channel that receives a (coalesced) signal whenever a token
+// was revoked in this process; the returned func must be called when the holder is done.
+func (h *TokensHandler) SubscribeTokens() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	h.subMu.Lock()
+	if h.subs == nil {
+		h.subs = make(map[chan struct{}]struct{})
+	}
+	h.subs[ch] = struct{}{}
+	h.subMu.Unlock()
+	return ch, func() {
+		h.subMu.Lock()
+		delete(h.subs, ch)
+		h.subMu.Unlock()
+	}
+}
+
+func (h *TokensHandler) notifyRevoked() {
+	h.subMu.Lock()
+	defer h.subMu.Unlock()
+	for ch := range h.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // NewTokensHandler builds the handler.
@@ -127,6 +180,7 @@ func (h *TokensHandler) RevokeHertz(ctx context.Context, c *app.RequestContext) 
 		return
 	}
 	auth.AuditRequest(c, auth.EventTokenRevoked, p.UserID, "tokenId", id)
+	h.notifyRevoked() // the token's event sockets close 4401 now (T089 CR-4)
 	h.publish(c, events.AccountChanged(p.UserID, events.SectionTokens))
 	c.Status(204)
 }

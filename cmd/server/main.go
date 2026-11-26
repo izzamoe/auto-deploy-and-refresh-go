@@ -238,6 +238,7 @@ func main() {
 		ClientIP: clientIPs,
 	})
 	tokensHandler := admin.NewTokensHandler(apiTokens)
+	adminEventHub.SetTokenChecker(tokensHandler) // 4401 when a socket's API token is revoked (T089 CR-4)
 	accountHandler := admin.NewAccountHandler(adminUsers, sessionMgr, filepath.Join(filepath.Dir(serviceCfg.QueueDBPath), store.InitialAdminPasswordFile))
 	releasesHandler := admin.NewReleasesHandler(appStore, githubClient)
 	releasesHandler.SetDeployQueue(q) // a new job of an app expires its cached releases (T047)
